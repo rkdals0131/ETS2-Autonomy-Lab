@@ -1,8 +1,29 @@
-# ot 0.8.1 — 상주 로더·네 미러 영상·CPU/GPU 카메라 상수
+# ot 0.8.2 — 네 미러 영상·CPU/GPU 상수·실제 깊이 버퍼
 
 > **확정:** SDK/IPC·내부 자차 pose 대조. mirror5 10 Hz 기록·네 미러 같은 Present 구간 수집. 0.8.0은 명령 구간을 통해 영상과 pass 기본 카메라 상태를 연결. 콘솔 없는 기능 DLL 교체, hook 시간 계측·내부 읽기 비용 감소도 실측.
 > **미확정:** DLL 영상과 최종 카메라 상수 연결·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
 > **다음:** draw별 변경 범위·월드 정합·AI 박스 대조, 주행 및 연속 데이터 전달.
+
+### 0.8.2 — 실제 DSV 깊이와 attributes Z 비교
+
+G-buffer 종료 시 현재 바인딩된 depth-stencil Texture2D도 복사합니다. 실제 게임의 형식은 `D32_FLOAT_S8X24_UINT`였으며 호환되는 typeless staging 텍스처로 전체를 복사하고 기존 query 뒤에 회수했습니다. `<camera>_geometry_depth.bin`은 픽셀당 8 bytes의 원본입니다. 앞 32 bits는 float depth, 다음 8 bits는 stencil이며 나머지는 해석하지 않습니다. `geometry_gpu.depth_texture`에 형식·크기·행 길이·원본 리소스를 기록합니다. 기존 attributes Z를 이 값으로 자동 대체하지 않습니다.
+
+Present 구간 60에서 네 미러의 원본 DSV를 확보했습니다. 카메라 0·2는 같은 원본 depth 텍스처를 재사용하므로 각 geometry 종료 시점에 따로 복사했습니다. 묶음당 원시 이미지가 33 MiB에서 44 MiB로 늘고 VS/PS 상수 2 KiB가 추가됩니다. 지원 코드는 D32 및 D24 계열을 구별하지만 이번 실제 시험은 D32+stencil 경로입니다.
+
+같은 묶음의 GPU 투영행렬과 실제 viewport로 DSV를 카메라 Z로 역투영한 뒤, 유효한 attributes Z와 픽셀별로 비교했습니다. 0·비유한 Z와 material bit 16은 제외했습니다. 표의 값은 **두 렌더 경로의 차이**이며 실제 물체까지의 미터 오차가 아닙니다.
+
+| 미러 | 유효 픽셀 | 절대 Z 차이 중앙값 | p95 | 최댓값 |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 512,770 | 0.001807 | 0.007455 | 1.3814 |
+| 1 | 256,530 | 0.001794 | 0.006992 | 1.3471 |
+| 2 | 513,614 | 0.001702 | 0.007279 | 1.4046 |
+| 5 | 131,072 | 0.000687 | 0.002490 | 0.003906 |
+
+DSV에서 얻은 Z를 CPU 기본 반올림으로 FP16 변환하면 일치율이 약 50%였습니다. Direct3D의 높은 정밀도→낮은 정밀도 float 변환은 0 방향 절삭을 사용합니다([공식 규격 §3.2.2](https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm)). 이 규칙으로 비교하면 0–30 게임 길이 단위 영역의 일치율은 뷰별 약 99.98% 이상입니다. 일반적인 FP16 양자화와 일관되는 결과입니다.
+
+원거리 일부 픽셀의 차이는 이것만으로 설명되지 않습니다. 최대 차이는 mirror2의 `(y=592,x=142)`에서 attributes Z `-162.5`, DSV 복원 Z 약 `-163.9046`이었습니다. 해당 영역의 draw별 투영·깊이 bias·shader 깊이 쓰기와 재질을 아직 분리하지 않았으며 둘 중 하나를 정답으로 선언하지 않습니다. 다음 분석에서 이 차이를 좁힙니다.
+
+[깊이·차이 영상](../research/live/2026-10-08-render-probe/0.8.2-depth-comparison/comparison.png)을 확인했고 DSV 복원 Z·절대 차이 NPY를 보존했습니다. 수집 원본은 `0.8.2-depth-gpu.json`, 수치는 `0.8.2-depth-comparison/summary.json`과 `rounding-and-range.json`입니다. 수집 후 패닉·로더 재로딩으로 새 depth staging 자원까지 정리했습니다.
 
 ### 0.8.1 — 같은 영상의 GPU geometry 상수 대조
 

@@ -34,6 +34,7 @@ void check(HRESULT result,const char* operation) {
 
 void GpuCapture::release_gpu() {
     for(auto& image:images_) {image.source.Reset();image.staging.Reset();}
+    geometry_depth_.source.Reset();geometry_depth_.staging.Reset();
     for(auto& constants:geometry_constants_) constants.staging.Reset();
     completion_.Reset();context_.Reset();
 }
@@ -60,6 +61,7 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame) {
             throw std::runtime_error("A camera capture is already pending");
         release_gpu();
         for(auto& image:images_) image.pixels.clear();
+        geometry_depth_.pixels.clear();
         for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
         metadata_=json::object();error_.clear();last_label_.clear();saved_.clear();
         geometry_binding_=geometry_sdk_=gpu_polls_=bindings_seen_=0;
@@ -118,7 +120,7 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
             if(!next || !flags) return;
             images_[0].source=std::move(next);images_[1].source=std::move(flags);
             context_=context;geometry_binding_=binding_sequence;geometry_sdk_=sdk_frame;geometry_frame_=render_frame;
-            geometry_pass_=*pass;geometry_gpu_=nullptr;
+            geometry_pass_=*pass;geometry_gpu_=nullptr;geometry_depth_.pixels.clear();
             for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
         } else if(count==1 && images_[0].source && context==context_.Get() && label==camera_+"/composition_raw") {
             images_[2].source=std::move(next);color_pass_=*pass;
@@ -144,6 +146,35 @@ void GpuCapture::geometry_constants(ID3D11DeviceContext* context,uint64_t bindin
     geometry_gpu_={{"phase","before_leaving_gbuffer_binding"},{"qpc",qpc_now()},
         {"binding_sequence",binding_sequence},{"viewports",viewport_json},
         {"vertex_shader",reinterpret_cast<uintptr_t>(vs.Get())},{"pixel_shader",reinterpret_cast<uintptr_t>(ps.Get())}};
+    Com<ID3D11DepthStencilView> dsv;context->OMGetRenderTargets(0,nullptr,&dsv);
+    if(dsv) {
+        Com<ID3D11Resource> resource;dsv->GetResource(&resource);
+        check(resource.As(&geometry_depth_.source),"Depth resource Texture2D");
+        auto& depth=geometry_depth_;depth.source->GetDesc(&depth.desc);
+        const auto& desc=depth.desc;
+        D3D11_TEXTURE2D_DESC attributes{};images_[0].source->GetDesc(&attributes);
+        auto staging=desc;
+        const char* layout{};
+        if(desc.Format==DXGI_FORMAT_D32_FLOAT_S8X24_UINT || desc.Format==DXGI_FORMAT_R32G8X24_TYPELESS) {
+            staging.Format=DXGI_FORMAT_R32G8X24_TYPELESS;depth_pixel_bytes_=8;layout="D32_FLOAT_S8X24_UINT";
+        } else if(desc.Format==DXGI_FORMAT_D24_UNORM_S8_UINT || desc.Format==DXGI_FORMAT_R24G8_TYPELESS) {
+            staging.Format=DXGI_FORMAT_R24G8_TYPELESS;depth_pixel_bytes_=4;layout="D24_UNORM_S8_UINT";
+        } else if(desc.Format==DXGI_FORMAT_D32_FLOAT || desc.Format==DXGI_FORMAT_R32_TYPELESS) {
+            staging.Format=DXGI_FORMAT_R32_TYPELESS;depth_pixel_bytes_=4;layout="D32_FLOAT";
+        } else throw std::runtime_error("Unsupported geometry depth texture format");
+        if(desc.SampleDesc.Count!=1 || desc.MipLevels!=1 || desc.ArraySize!=1 ||
+           desc.Width!=attributes.Width || desc.Height!=attributes.Height)
+            throw std::runtime_error("Unsupported or unaligned geometry depth texture");
+        staging.Usage=D3D11_USAGE_STAGING;staging.BindFlags=0;
+        staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;staging.MiscFlags=0;
+        check(device->CreateTexture2D(&staging,nullptr,&depth.staging),"CreateTexture2D(depth staging)");
+        depth.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*depth_pixel_bytes_);
+        context->CopyResource(depth.staging.Get(),depth.source.Get());
+        geometry_gpu_["depth_texture"]={{"file",camera_+"_geometry_depth.bin"},
+            {"width",desc.Width},{"height",desc.Height},{"row_bytes",desc.Width*depth_pixel_bytes_},
+            {"format",layout},{"source_dxgi_format",static_cast<unsigned>(desc.Format)},
+            {"resource",reinterpret_cast<uintptr_t>(depth.source.Get())}};
+    }
     for(size_t stage=0;stage<geometry_constants_.size();++stage) {
         auto& sample=geometry_constants_[stage];
         Com<ID3D11Buffer> source;UINT first{},count{};
@@ -233,6 +264,18 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
             std::memcpy(image.pixels.data()+y*row,static_cast<uint8_t*>(mapped[i].pData)+y*mapped[i].RowPitch,row);
         context->Unmap(image.staging.Get(),0);
     }
+    if(geometry_depth_.staging) {
+        D3D11_MAPPED_SUBRESOURCE mapped_depth{};
+        const auto result=context->Map(geometry_depth_.staging.Get(),0,D3D11_MAP_READ,
+            D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped_depth);
+        if(result==DXGI_ERROR_WAS_STILL_DRAWING) return;
+        check(result,"Map(depth staging)");
+        const auto row=static_cast<size_t>(geometry_depth_.desc.Width)*depth_pixel_bytes_;
+        for(UINT y=0;y<geometry_depth_.desc.Height;++y)
+            std::memcpy(geometry_depth_.pixels.data()+y*row,
+                static_cast<const uint8_t*>(mapped_depth.pData)+y*mapped_depth.RowPitch,row);
+        context->Unmap(geometry_depth_.staging.Get(),0);
+    }
     json constants_json=json::array();
     for(auto& sample:geometry_constants_) {
         if(sample.staging) {
@@ -267,6 +310,12 @@ json GpuCapture::save() {
         std::ofstream output(directory/sample.description.at("file").get<std::string>(),std::ios::binary);
         output.exceptions(std::ios::badbit|std::ios::failbit);
         output.write(reinterpret_cast<const char*>(sample.bytes.data()),sample.bytes.size());
+        output.close();
+    }
+    if(!geometry_depth_.pixels.empty()) {
+        std::ofstream output(directory/metadata_.at("geometry_gpu").at("depth_texture").at("file").get<std::string>(),std::ios::binary);
+        output.exceptions(std::ios::badbit|std::ios::failbit);
+        output.write(reinterpret_cast<const char*>(geometry_depth_.pixels.data()),geometry_depth_.pixels.size());
         output.close();
     }
     // Publish metadata last; incomplete files are not presented as a saved capture.

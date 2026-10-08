@@ -40,6 +40,8 @@ private:
     json metadata_=json::object(),geometry_pass_,color_pass_,geometry_gpu_;
     Phase phase_=Phase::idle;
     std::array<Image,3> images_; // attributes0, attributes3, color
+    Image geometry_depth_;
+    uint32_t depth_pixel_bytes_=0;
     std::array<Constants,2> geometry_constants_; // VS/PS slot 0 at G-buffer exit
     Com<ID3D11Query> completion_;
     Com<ID3D11DeviceContext> context_;
