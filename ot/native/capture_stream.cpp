@@ -94,6 +94,7 @@ void CaptureStream::run() noexcept {
                         uint32_t mask=0;
                         for(size_t i=0;i<available->cameras.size();++i) {
                             auto options=options_;options.products=options.outputs[camera_indices_[i]];
+                            options.lidar_pattern=options.lidar()?options.lidar_patterns[camera_indices_[i]]:nullptr;
                             if(options.selective && !options.products) continue;
                             available->cameras[i]->command("arm",frame,false,options);mask|=1u<<camera_indices_[i];
                         }

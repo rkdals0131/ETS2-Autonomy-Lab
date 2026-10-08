@@ -95,11 +95,26 @@ public:
         const size_t size=64+(bundles?ot::bundle_slots:ot::ring_slots)*(size_t{64}+capacity_);
         base_=MapViewOfFile(file_.h,FILE_MAP_ALL_ACCESS,0,0,size);
         if(!base_) throw std::runtime_error("Cannot map IPC slots");
+        // The caller owns OT_Bundles_Reader for this mapping's whole lifetime.
+        // No other live consumer can own state 3; recover an interrupted copy.
+        if(bundles_) for(uint32_t i=0;i<ot::bundle_slots;++i)
+            InterlockedCompareExchange(&ot::bundle_slot(base_,capacity_,i)->state,0,3);
     }
     ~Mapping(){if(base_) UnmapViewOfFile(base_);}
     bool available() const {return base_!=nullptr;}
     Bytes read() {
         Bytes bytes;
+        if(bundles_) {
+            ot::BundleSlot* oldest=nullptr;
+            for(uint32_t i=0;i<ot::bundle_slots;++i) {
+                auto* slot=ot::bundle_slot(base_,capacity_,i);
+                if(InterlockedCompareExchange(&slot->state,2,2)==2 && (!oldest || slot->sequence<oldest->sequence)) oldest=slot;
+            }
+            if(!oldest || InterlockedCompareExchange(&oldest->state,3,2)!=2) return bytes;
+            struct Return {ot::BundleSlot* s;~Return(){InterlockedExchange(&s->state,0);}} release{oldest};
+            if(oldest->length>capacity_) throw std::runtime_error("Invalid shared-memory slot length");
+            bytes.resize(oldest->length);std::memcpy(bytes.data(),oldest+1,bytes.size());return bytes;
+        }
         for(uint32_t i=0;i<(bundles_?ot::bundle_slots:ot::ring_slots);++i) {
             auto* slot=ot::bundle_slot(base_,capacity_,i);
             if(InterlockedCompareExchange(&slot->state,3,2)!=2) continue;
@@ -156,6 +171,8 @@ int main(int argc,char** argv) {
         std::ifstream preset(path.parent_path()/config.at("rig").get<std::string>());json rig;preset>>rig;
         rig=resolve_rig(rig,command({{"cmd","truck_config"}}),config.value("slots",json::array({0})));
         const auto base=rig.at("base_origin").get<std::array<double,3>>();
+        std::ifstream lidar_file(path.parent_path()/config.value("lidar",std::string("../../ot/presets/phase1-lidar.json")));json lidar_profile;lidar_file>>lidar_profile;
+        const auto patterns=lidar_patterns(rig,lidar_profile);
         const auto duration=config.value("duration_s",60.0);
         if(!std::isfinite(duration) || duration<=0) throw std::runtime_error("duration_s must be positive");
         GUID uuid{};CoCreateGuid(&uuid);wchar_t wide[40];StringFromGUID2(uuid,wide,40);std::wstring w(wide);const std::string session(w.begin(),w.end());
@@ -164,13 +181,15 @@ int main(int argc,char** argv) {
         send_packet(state,{{"token",token},{"session",session},{"channel","state"}});
         const auto welcome=receive_packet(state);if(!welcome.meta.value("ready",false) || welcome.meta.at("session")!=session) throw std::runtime_error("WSL pairing failed");
         send_packet(bulk,{{"token",token},{"session",session},{"channel","bulk"}});
-        Handle reader(CreateMutexW(nullptr,TRUE,L"Local\\OT_Bundles_Reader"));
-        if(!reader.h || GetLastError()==ERROR_ALREADY_EXISTS) throw std::runtime_error("Another bundle reader is active");
+        Handle reader(CreateMutexW(nullptr,FALSE,L"Local\\OT_Bundles_Reader"));
+        const auto acquired=reader.h?WaitForSingleObject(reader.h,0):WAIT_FAILED;
+        if(acquired!=WAIT_OBJECT_0 && acquired!=WAIT_ABANDONED) throw std::runtime_error("Another bundle reader is active");
+        struct ReaderEnd {HANDLE h;~ReaderEnd(){ReleaseMutex(h);}} reader_end{reader.h};
         command({{"cmd","lease"},{"action","claim"},{"owner",session}});
         struct Lease {std::string owner;~Lease(){try{command({{"cmd","lease"},{"action","release"},{"owner",owner}});}catch(const std::exception& e){std::cerr<<"Lease cleanup: "<<e.what()<<std::endl;}}} lease{session};
         command({{"cmd","tier"},{"value",1}});
         command({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true}});command(rig);
-        command({{"cmd","stream"},{"action","start"},{"format","ros"},{"hz",10},{"duration",duration},{"color_gain",config.value("color_gain",1.0)},{"outputs",json::object()}});
+        const auto stream_id=command({{"cmd","stream"},{"action","start"},{"format","ros"},{"hz",10},{"duration",duration},{"color_gain",config.value("color_gain",1.0)},{"outputs",json::object()},{"lidars",patterns}}).at("stream_id").get<uint64_t>();
         std::atomic<std::shared_ptr<const Demand>> demand{std::make_shared<const Demand>()};
         std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0},echo_ms{0};
         LatestQueue<Bytes> read_queue;LatestQueue<Packet> send_queue;
@@ -192,7 +211,7 @@ int main(int argc,char** argv) {
         }});
         workers.start([&]{const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if(FAILED(hr)) throw std::runtime_error("COM worker initialization failed");
             struct ComEnd{~ComEnd(){CoUninitialize();}} com;
-            while(workers.alive) {Bytes bytes;if(read_queue.pop(bytes)) {auto packet=sensor_messages(bytes,session,*demand.load(),dropped);if(send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
+            while(workers.alive) {Bytes bytes;if(read_queue.pop(bytes)) {auto packet=sensor_messages(bytes,session,*demand.load(),dropped,stream_id);if(!packet.data.empty() && send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
         });
         workers.start([&]{uint64_t heartbeat=0;while(workers.alive) {
             Packet packet;if(send_queue.pop(packet)) {send_packet(bulk,packet.meta,packet.data);++sent;bytes_sent+=packet.data.size();heartbeat=ticks();}
@@ -212,9 +231,11 @@ int main(int argc,char** argv) {
                     if(requested->contains(base_topic+"/preview/image/compressed")) selected.push_back("preview");
                     if(requested->contains(base_topic+"/camera_info") || requested->contains(base_topic+"/preview/camera_info") ||
                        requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/objects") || requested->contains("/tf") || requested->contains("/ets2/frame_info")) selected.push_back("metadata");
-                    if(!selected.empty()) outputs["mirror"+std::to_string(slot)]=selected;
+                    const auto mirror="mirror"+std::to_string(slot);
+                    if(patterns.contains(mirror) && requested->contains("/ets2/lidar/"+patterns.at(mirror).at("name").get<std::string>()+"/points")) selected.push_back("lidar");
+                    if(!selected.empty()) outputs[mirror]=selected;
                 }
-                command({{"cmd","stream"},{"action","update"},{"format","ros"},{"color_gain",config.value("color_gain",1.0)},{"outputs",outputs}});
+                command({{"cmd","stream"},{"action","update"},{"format","ros"},{"color_gain",config.value("color_gain",1.0)},{"outputs",outputs},{"lidars",patterns}});
                 previous_demand=*requested;
             }
             if(ticks()-heartbeat>=500) {command({{"cmd","lease"},{"action","heartbeat"},{"owner",session}});heartbeat=ticks();}

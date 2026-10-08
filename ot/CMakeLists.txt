@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(ot_core VERSION 0.19.0 LANGUAGES C CXX)
+project(ot_core VERSION 0.20.0 LANGUAGES C CXX)
 if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "ot_core requires MSVC x64 on Windows")
 endif()
@@ -38,8 +38,12 @@ foreach(kind IN ITEMS depth color)
       "${CMAKE_CURRENT_SOURCE_DIR}/native/pack_rgbd.hlsl"
     DEPENDS native/pack_rgbd.hlsl VERBATIM)
 endforeach()
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/gather_lidar.hpp"
+  COMMAND "${OT_FXC}" /nologo /Ges /O3 /T cs_5_0 /E main /Vn ot_gather_lidar
+    /Fh "${CMAKE_CURRENT_BINARY_DIR}/generated/gather_lidar.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/native/gather_lidar.hlsl"
+  DEPENDS native/gather_lidar.hlsl VERBATIM)
 add_library(ot_core SHARED native/core.cpp native/platform.cpp native/transport.cpp native/vehicle.cpp native/render_probe.cpp native/camera_rig.cpp native/gpu_capture.cpp native/gpu_pack.cpp native/capture_stream.cpp native/pass_commands.cpp native/ot_core.def
-  "${CMAKE_CURRENT_BINARY_DIR}/generated/pack_depth.hpp" "${CMAKE_CURRENT_BINARY_DIR}/generated/pack_color.hpp")
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/pack_depth.hpp" "${CMAKE_CURRENT_BINARY_DIR}/generated/pack_color.hpp" "${CMAKE_CURRENT_BINARY_DIR}/generated/gather_lidar.hpp")
 target_include_directories(ot_core PRIVATE "${SCS_SDK}" vendor "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(ot_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 target_compile_options(ot_core PRIVATE /W4 /EHsc /utf-8 /permissive- /guard:cf)

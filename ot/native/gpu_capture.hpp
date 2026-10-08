@@ -12,6 +12,8 @@ struct CaptureOptions {
     bool selective=false;
     std::array<uint8_t,6> outputs{3,3,3,3,3,3}; // color=1, depth=2, preview=4, lidar=8, metadata=16
     uint8_t products=3;
+    std::array<std::shared_ptr<const LidarPattern>,6> lidar_patterns;
+    std::shared_ptr<const LidarPattern> lidar_pattern;
     bool color() const {return products&1;}
     bool depth() const {return products&2;}
     bool preview() const {return products&4;}

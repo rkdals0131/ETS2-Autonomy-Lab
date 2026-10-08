@@ -58,5 +58,29 @@ depth-only → no subscriptions sequence completed without capture errors; the a
 counter stayed at 82 and later 122 during the unsubscribed intervals. Killing only
 the owned relay let the five-second lease expire and restored Tier 0 / zero hooks.
 
-GPU LiDAR, vehicle GT publication, complete cabin/base TF, MCAP replay/pause,
-reconnection, full-sensor performance and ego-render correction remain open.
+Core 0.20 gathers ideal LiDAR returns on the GPU. LiDAR-only demand does not copy
+the full depth image back. The relay combines co-located front sources by geometric
+coverage priority, preserves unknown depth, and publishes organized PointCloud2.
+Vehicle Detection3DArray boxes use the actual pass's prepared body models. An actor
+can be occluded in the final image; submission is not a visibility guarantee.
+
+The first full ROS run delivered 161 messages on every four-camera RGB, depth,
+preview, CameraInfo and GT topic, plus all three LiDAR topics and frame metadata.
+Actual Jazzy deserialization succeeded; all sensor stamps matched frame_info and
+the relay reported zero queue drops. Total payload was about 24.2 MB per bundle.
+This was a functional run in the background, not the foreground performance result.
+
+The 106,799 GPU beams were compared with Python reconstruction of the same raw DSV.
+For identical chosen pixels, maximum range error was 0.0000763 m (front) and
+0.0000305 m (each side). FP32 projection selected different pixels for 79 / 100 /
+100 beams, including 67 / 36 / 36 coverage-boundary differences; the largest range
+difference where both returned a value was 0.046 m. Boundary beams are not bit-exact
+with the double-precision CPU path. Source pixel and angular error remain in the
+message so this sampling limitation is inspectable.
+
+An interrupted bundle reader is recovered under its exclusive mutex, and ready
+slots from an earlier native stream are discarded before attaching a new session.
+Runtime cleanup returned to Tier 0 with zero hooks and both owned processes exited.
+
+Complete cabin/base TF, MCAP replay/pause, reconnection, full-sensor foreground
+performance and ego-render correction remain open.

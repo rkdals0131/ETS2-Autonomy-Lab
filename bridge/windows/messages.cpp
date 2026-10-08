@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <numbers>
 
 namespace bridge {
 using eprosima::fastcdr::Cdr;
@@ -42,6 +43,28 @@ static Q quaternion(M a) { // ROS x,y,z,w, matrix maps child vectors into parent
 }
 static void pose(Cdr& c,V p,Q q) {c.serialize_array(p.data(),3);c.serialize_array(q.data(),4);}
 static const M enu{1,0,0,0,0,-1,0,1,0},optical{1,0,0,0,-1,0,0,0,-1},base_to_model{0,-1,0,0,0,1,-1,0,0};
+json lidar_patterns(const json& rig,const json& profile) {
+    std::map<std::string,json> views;
+    for(const auto& view:rig.at("views")) views["mirror"+std::to_string(view.at("slot").get<int>())]=view;
+    json patterns=json::object();
+    for(const auto& sensor:profile.at("sensors")) {
+        const auto axis=sensor.at("axis_camera").get<std::string>();
+        bool complete=views.contains(axis);
+        for(const auto& name:sensor.at("sources")) complete&=views.contains(name.get<std::string>());
+        if(!complete) continue;
+        const auto& a=views.at(axis);const auto axis_rotation=from_quat(a.at("quaternion_wxyz").get<Q>());
+        for(const auto& name:sensor.at("sources")) {
+            const auto& source=views.at(name.get<std::string>());
+            const auto delta=sub(source.at("position").get<V>(),a.at("position").get<V>());
+            if(source.at("basis")!=a.at("basis") || std::hypot(delta[0],delta[1],delta[2])>1e-4)
+                throw std::runtime_error("LiDAR source mounts must share an optical origin and parent");
+            auto spec=sensor;
+            spec["camera_from_sensor"]=mul(mul(transpose(from_quat(source.at("quaternion_wxyz").get<Q>())),axis_rotation),base_to_model);
+            patterns[name.get<std::string>()]=std::move(spec);
+        }
+    }
+    return patterns;
+}
 static double channel(const json& state,const char* name) {
     const auto& sdk=state.at("sdk");
     if(!sdk.contains(name) || !sdk.at(name).value("available",false)) return std::numeric_limits<double>::quiet_NaN();
@@ -105,10 +128,11 @@ static Bytes camera_info(uint64_t us,const std::string& frame,uint32_t width,uin
         c<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<false;
     });
 }
-Packet sensor_messages(std::span<const uint8_t> input,const std::string& session,const Demand& demand,uint64_t dropped) {
+Packet sensor_messages(std::span<const uint8_t> input,const std::string& session,const Demand& demand,uint64_t dropped,uint64_t stream_id) {
     uint64_t length{};if(input.size()<8) throw std::runtime_error("Truncated bundle");std::memcpy(&length,input.data(),8);
     if(length>input.size()-8) throw std::runtime_error("Invalid bundle manifest length");
     const auto manifest=json::parse(input.begin()+8,input.begin()+8+length);const auto blobs=input.subspan(8+length);
+    if(manifest.at("stream_id")!=stream_id) return {}; // Ready slots can survive an earlier stream.
     std::map<std::string,std::span<const uint8_t>> files;
     for(const auto& f:manifest.at("files")) {
         const auto offset=f.at("offset").get<size_t>(),n=f.at("length").get<size_t>();
@@ -120,6 +144,11 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
     const auto us=first.at("paused_simulation_time_us").get<uint64_t>();
     json cameras=json::array();
     struct Transform {std::string frame;V position;Q rotation;};std::vector<Transform> transforms;
+    struct LidarSource {
+        std::string camera;json description;const json* meta;std::span<const uint8_t> data;
+        uint32_t width{};M world_from_eye{};std::array<double,16> projection{};std::array<double,4> viewport{};
+    };
+    std::map<std::string,std::vector<LidarSource>> lidars;
     for(const auto& view:manifest.at("views")) {
         const std::string mirror=view.at("camera");
         static const std::map<std::string,std::string> names{{"mirror0","C_FN"},{"mirror1","C_FW"},{"mirror2","C_RL"},{"mirror5","C_RR"}};
@@ -131,9 +160,31 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
         const auto& vp=meta.at("geometry_gpu").at("viewports").at(0);
         const auto rotation=matrix(camera.at("camera_rotation_row_major"));const auto origin=camera.at("camera_world_xyz").get<V>();
         transforms.push_back({frame,mul(enu,origin),quaternion(mul(mul(enu,transpose(rotation)),optical))});
+        const auto gt_topic="/ets2/ground_truth/"+name+"/objects";
+        if(demand.contains(gt_topic) && pass.contains("vehicles_at_compile") && pass.at("vehicles_at_compile").value("available",false)) {
+            const auto& vehicles=pass.at("vehicles_at_compile").at("vehicles");
+            add_message(packet,gt_topic,cdr(1024+vehicles.size()*512,[&](Cdr& c){
+                header(c,us,frame);c<<uint32_t(vehicles.size());
+                for(const auto& v:vehicles) {
+                    const auto bounds=v.at("actor_observation").at("aabb_raw").get<std::array<double,6>>();
+                    V center{},size{};for(size_t i=0;i<3;++i) {center[i]=(bounds[i]+bounds[i+3])*.5;size[i]=bounds[i+3]-bounds[i];}
+                    const auto model=matrix(v.at("model_rotation_row_major"));
+                    const auto world=add(v.at("model_world_xyz").get<V>(),mul(model,sub(center,v.at("model_reference_offset_raw").get<V>())));
+                    header(c,us,frame);c<<uint32_t{0}; // No invented semantic class/confidence.
+                    pose(c,mul(optical,mul(rotation,sub(world,origin))),quaternion(mul(mul(optical,rotation),model)));
+                    c.serialize_array(size.data(),3);c<<session+":"+std::to_string(v.at("actor_address").get<uint64_t>());
+                }
+            }));
+        }
         uint32_t width=meta.at("sensor_dimensions").at(0),height=meta.at("sensor_dimensions").at(1);
         for(const auto& desc:meta.at("images")) {
             const std::string file=desc.at("file");
+            if(file==mirror+"_lidar.bin") {
+                const auto bytes=files.at(file);const size_t count=desc.at("beam_count");
+                if(desc.at("encoding")!="range_f32_status_u32_pixel_u32_depth_f32" || bytes.size()!=count*16)
+                    throw std::runtime_error("Invalid GPU LiDAR return layout");
+                lidars[desc.at("name").get<std::string>()].push_back({mirror,desc,&meta,bytes});continue;
+            }
             const bool color=file==mirror+"_color_ldr.bin",depth=file==mirror+"_depth_f32.bin",preview=file==mirror+"_preview_ldr.bin";
             if(!color && !depth && !preview) continue;
             const uint32_t width=desc.at("width"),height=desc.at("height");const auto data=files.at(file);
@@ -156,6 +207,64 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
             add_message(packet,base+"/preview/camera_info",camera_info(us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5));
         if(width && (demand.contains(base+"/camera_info") || demand.contains(base+"/image_raw") || demand.contains(base+"/depth/image_raw")))
             add_message(packet,base+"/camera_info",camera_info(us,frame,width,height,camera.at("projection_row_major"),vp,1));
+    }
+    for(auto& [name,sources]:lidars) {
+        const auto topic="/ets2/lidar/"+name+"/points";if(!demand.contains(topic)) continue;
+        const auto& desc=sources.front().description;const auto order=desc.at("sources").get<std::vector<std::string>>();
+        if(sources.size()!=order.size()) continue; // A source was not captured; never publish a partial LiDAR as complete.
+        std::sort(sources.begin(),sources.end(),[&](const auto& a,const auto& b){return std::find(order.begin(),order.end(),a.camera)<std::find(order.begin(),order.end(),b.camera);});
+        const auto axis=desc.at("axis_camera").get<std::string>();
+        const auto a=std::find_if(sources.begin(),sources.end(),[&](const auto& s){return s.camera==axis;});
+        if(a==sources.end()) throw std::runtime_error("LiDAR axis camera missing");
+        const auto& axis_camera=a->meta->at("geometry_pass").at("camera_at_compile");
+        const auto origin=axis_camera.at("camera_world_xyz").get<V>();
+        const M world_from_sensor=mul(transpose(matrix(axis_camera.at("camera_rotation_row_major"))),base_to_model);
+        for(auto& source:sources) {
+            const auto& camera=source.meta->at("geometry_pass").at("camera_at_compile");
+            const auto p=camera.at("camera_world_xyz").get<V>();
+            source.width=source.description.at("source_width");source.world_from_eye=transpose(matrix(camera.at("camera_rotation_row_major")));
+            source.projection=camera.at("projection_row_major").get<std::array<double,16>>();
+            const auto& vp=source.meta->at("geometry_gpu").at("viewports").at(0);
+            source.viewport={vp.at("x"),vp.at("y"),vp.at("width"),vp.at("height")};
+            const auto delta=sub(p,origin);
+            if(std::hypot(delta[0],delta[1],delta[2])>1e-4 || source.description.at("beam_count")!=desc.at("beam_count"))
+                throw std::runtime_error("Captured LiDAR sources are not co-located/aligned");
+        }
+        transforms.push_back({name,mul(enu,origin),quaternion(mul(enu,world_from_sensor))});
+        const uint32_t columns=desc.at("columns");const auto elevations=desc.at("elevations_deg").get<std::vector<double>>();
+        const auto az=desc.at("azimuth_deg").get<std::array<double,3>>();const uint32_t count=desc.at("beam_count"),step=36;
+        if(size_t(columns)*elevations.size()!=count) throw std::runtime_error("LiDAR beam grid does not match returns");
+        Bytes cloud(size_t(count)*step);const float nan=std::numeric_limits<float>::quiet_NaN();
+        struct Sample {float range;uint32_t status,pixel;float depth;};static_assert(sizeof(Sample)==16);
+        for(uint32_t beam=0;beam<count;++beam) {
+            const LidarSource* source=nullptr;Sample sample{nan,1,UINT32_MAX,nan};
+            for(const auto& candidate:sources) {std::memcpy(&sample,candidate.data.data()+beam*16,16);if(sample.status!=1) {source=&candidate;break;}}
+            const double angle=(az[0]+(beam%columns)*az[2])*std::numbers::pi/180,elevation=elevations[beam/columns]*std::numbers::pi/180;
+            const V direction{std::cos(elevation)*std::cos(angle),std::cos(elevation)*std::sin(angle),std::sin(elevation)};
+            std::array<float,4> xyzr{float(direction[0]*sample.range),float(direction[1]*sample.range),float(direction[2]*sample.range),sample.range};
+            auto* point=cloud.data()+size_t(beam)*step;std::memcpy(point,xyzr.data(),16);std::memcpy(point+16,&beam,4);
+            point[20]=static_cast<uint8_t>(sample.status);point[21]=source?static_cast<uint8_t>(source->camera.back()-'0'):255;
+            uint32_t x=UINT32_MAX,y=UINT32_MAX;float error=nan;
+            if(source) {
+                const auto width=source->width;x=sample.pixel%width;y=sample.pixel/width;
+                if(std::isfinite(sample.depth)) {
+                    const auto& p=source->projection;const auto& vp=source->viewport;
+                    const double nx=2*(x+.5-vp[0])/vp[2]-1,ny=1-2*(y+.5-vp[1])/vp[3];
+                    auto actual=mul(source->world_from_eye,V{(p[2]-nx*p[14])/p[0],(p[6]-ny*p[14])/p[5],-1});
+                    const auto requested=mul(world_from_sensor,direction);const auto norm=std::hypot(actual[0],actual[1],actual[2]);
+                    double dot=0;for(size_t i=0;i<3;++i) dot+=actual[i]*requested[i]/norm;
+                    error=static_cast<float>(std::acos(std::clamp(dot,-1.0,1.0))*180/std::numbers::pi);
+                }
+            }
+            std::memcpy(point+24,&x,4);std::memcpy(point+28,&y,4);std::memcpy(point+32,&error,4);
+        }
+        add_message(packet,topic,cdr(cloud.size()+2048,[&](Cdr& c){
+            header(c,us,name);c<<uint32_t(elevations.size())<<columns<<uint32_t{10};
+            auto field=[&](const char* label,uint32_t offset,uint8_t datatype){c<<std::string(label)<<offset<<datatype<<uint32_t{1};};
+            field("x",0,7);field("y",4,7);field("z",8,7);field("range",12,7);field("beam_index",16,6);field("status",20,2);
+            field("source_camera",21,2);field("source_pixel_x",24,6);field("source_pixel_y",28,6);field("source_ray_error_deg",32,7);
+            c<<false<<step<<uint32_t(columns*step)<<uint32_t(cloud.size());c.serialize_array(cloud.data(),cloud.size());c<<false;
+        }));
     }
     add_message(packet,"/tf",cdr(512+transforms.size()*256,[&](Cdr& c){c<<uint32_t(transforms.size());for(const auto& t:transforms) {header(c,us,"world");c<<t.frame;pose(c,t.position,t.rotation);}}));
     add_message(packet,"/ets2/frame_info",cdr(8192,[&](Cdr& c){

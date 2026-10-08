@@ -303,6 +303,12 @@ json Runtime::command(const json& request) {
         if(action=="arm" || action=="start" || action=="update") {
             options.format=request.value("format",std::string(cmd=="stream"?"rgbd8":"raw"));
             options.color_gain=request.value("color_gain",1.0f);
+            if(request.contains("lidars")) for(const auto& item:request.at("lidars").items()) {
+                const auto& name=item.key();
+                if(name.size()!=7 || !name.starts_with("mirror") || name.back()<'0' || name.back()>'5')
+                    throw std::runtime_error("Invalid LiDAR source camera");
+                options.lidar_patterns[name.back()-'0']=make_lidar_pattern(item.value());
+            }
             if(request.contains("outputs")) {
                 if(!options.metric()) throw std::runtime_error("Output selection requires ROS capture format");
                 options.selective=true;options.outputs.fill(0);
@@ -317,6 +323,8 @@ json Runtime::command(const json& request) {
                     }
                 }
             }
+            for(size_t i=0;i<6;++i) if((options.outputs[i]&8) && !options.lidar_patterns[i])
+                throw std::runtime_error("LiDAR demand requires a beam pattern");
             if(options.format!="raw" && options.format!="rgbd8" && options.format!="raw+rgbd8" && options.format!="ros" && options.format!="raw+ros")
                 throw std::runtime_error("Capture format must be raw, rgbd8, raw+rgbd8 ros or raw+ros");
             if(!std::isfinite(options.color_gain) || options.color_gain<=0)

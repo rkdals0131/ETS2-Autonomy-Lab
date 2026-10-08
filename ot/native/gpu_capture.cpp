@@ -213,7 +213,7 @@ void GpuCapture::geometry_constants(ID3D11DeviceContext* context,uint64_t bindin
         if(options_.packed() && (options_.depth() || options_.lidar())) {
             if(viewport_count!=1 || !(viewports[0].Width>0 && viewports[0].Height>0 && viewports[0].MaxDepth>viewports[0].MinDepth))
                 throw std::runtime_error("RGB-D packing requires one valid geometry viewport");
-            packed_.depth(context1.Get(),depth.source.Get(),images_[0].source.Get(),images_[1].source.Get(),viewports[0],camera_,options_.metric()?&geometry_pass_.at("camera_at_compile").at("projection_row_major"):nullptr,options_.depth());
+            packed_.depth(context1.Get(),depth.source.Get(),images_[0].source.Get(),images_[1].source.Get(),viewports[0],camera_,options_.metric()?&geometry_pass_.at("camera_at_compile").at("projection_row_major"):nullptr,options_.depth(),options_.lidar_pattern);
             geometry_gpu_["packed_depth_texture"]=packed_.images[0].description;
         }
     }
@@ -318,6 +318,7 @@ void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t 
         if(options_.color()) packed_.color(context1.Get(),images_[2].source.Get(),options_.color_gain,camera_);
         if(options_.preview()) packed_.color(context1.Get(),images_[2].source.Get(),options_.color_gain,camera_,true);
         for(const auto& image:packed_.images) if(!image.description.is_null()) descriptions.push_back(image.description);
+        if(!packed_.lidar_description.is_null()) descriptions.push_back(packed_.lidar_description);
     }
     D3D11_QUERY_DESC query{D3D11_QUERY_EVENT,0};
     if(!completion_) {check(device->CreateQuery(&query,&completion_),"CreateQuery(EVENT)");++allocations_;}
@@ -414,6 +415,7 @@ void GpuCapture::append_bundle(json& views,std::vector<BundleBlob>& blobs) {
         blobs.push_back({camera_,metadata_.at("images")[i].at("file").get<std::string>(),images_[i].pixels.data(),images_[i].pixels.size()});
     for(const auto& image:packed_.images) if(!image.pixels.empty())
         blobs.push_back({camera_,image.description.at("file").get<std::string>(),image.pixels.data(),image.pixels.size()});
+    if(!packed_.lidar_pixels.empty()) blobs.push_back({camera_,packed_.lidar_description.at("file").get<std::string>(),packed_.lidar_pixels.data(),packed_.lidar_pixels.size()});
     if(!geometry_depth_.pixels.empty())
         blobs.push_back({camera_,metadata_.at("geometry_gpu").at("depth_texture").at("file").get<std::string>(),
             geometry_depth_.pixels.data(),geometry_depth_.pixels.size()});
@@ -439,6 +441,11 @@ json GpuCapture::save() {
         std::ofstream output(directory/image.description.at("file").get<std::string>(),std::ios::binary);
         output.exceptions(std::ios::badbit|std::ios::failbit);
         output.write(reinterpret_cast<const char*>(image.pixels.data()),image.pixels.size());output.close();
+    }
+    if(!packed_.lidar_pixels.empty()) {
+        std::ofstream output(directory/packed_.lidar_description.at("file").get<std::string>(),std::ios::binary);
+        output.exceptions(std::ios::badbit|std::ios::failbit);
+        output.write(reinterpret_cast<const char*>(packed_.lidar_pixels.data()),packed_.lidar_pixels.size());output.close();
     }
     for(const auto& sample:geometry_constants_) if(!sample.bytes.empty()) {
         std::ofstream output(directory/sample.description.at("file").get<std::string>(),std::ios::binary);

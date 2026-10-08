@@ -4,7 +4,7 @@ The first connection publishes captured RGB8, metric optical-depth 32FC1,
 CameraInfo, JPEG previews, render-camera TF, frame correspondence, `/clock`, SDK
 state and observed ego pose. Windows uses Fast-CDR 2.2.5 with explicit XCDRv1;
 Linux uses Jazzy GenericPublisher and the XML SHM transport profile. This is an
-incremental implementation: LiDAR, vehicle GT,
+incremental implementation: GPU LiDAR and per-pass vehicle GT are connected;
 full base_link/cabin TF and automatic reconnection are still being added.
 
 ## Build
@@ -68,5 +68,12 @@ the only clock source. Playback consumers use `use_sim_time=true`.
 The first live MCAP contained 249 matched image/depth/preview/info/frame/TF samples
 in 24.98 s. Actual Jazzy deserialization confirmed RGB8 1280×720, 32FC1 1280×720,
 JPEG 640×360 and matching sensor stamps. The depth's invalid samples were NaN.
-Pause/replay, foreground performance and the remaining sensors need separate
+The subsequent four-camera run delivered 161 of every RGB/depth/preview/info/GT
+message and each of three PointCloud2 topics, with matching frame stamps and no
+relay queue drops. Point clouds contain XYZ, range, beam index, status (0 return,
+1 outside sources, 2 invalid depth, 3 beyond range), source camera slot/pixel and
+angular sampling error. Invalid beams have NaN range/XYZ. These are ideal samples
+of rendered depth, not ray casts; engine visibility omissions still apply.
+
+Pause/replay, full-sensor foreground performance and ego rendering still need
 verification before the bridge is considered complete.
