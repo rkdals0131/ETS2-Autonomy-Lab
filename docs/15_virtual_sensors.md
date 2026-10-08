@@ -6,7 +6,28 @@
 .\ot\ot.cmd lidar '<frame.tar.zst>' --config .\ot\presets\phase1-lidar.json --output lidar.npz
 ```
 
-출력 파일은 덮어쓰지 않습니다. Python에서는 `load_lidar_profile()`로 설정을 한 번 읽고, 메모리의 기존 `OT_Bundles`와 `sample_lidars(bundle, profile)`을 사용합니다. 게임에 새 hook이나 DLL 변경은 필요 없습니다. 현재 기록 CLI에 자동 결합하거나 MCAP 토픽으로 발행하는 기능은 아직 없습니다.
+출력 파일은 덮어쓰지 않습니다. Python에서는 `load_lidar_profile()`로 설정을 한 번 읽고, 메모리의 기존 `OT_Bundles`와 `sample_lidars(bundle, profile)`을 사용합니다. 게임에 새 hook이나 DLL 변경은 필요 없습니다.
+
+## RGB-D·차량 메타데이터와 함께 기록
+
+```powershell
+.\ot\ot.cmd record_bundles --config .\ot\presets\phase1-highway.json --lidar-config .\ot\presets\phase1-lidar.json --vehicles --hz 10 --duration 5 --output .\research\live\my-lidar-run
+```
+
+각 프레임의 TAR.ZST 또는 ZIP 안에 같은 프레임의 `lidar.npz`가 추가됩니다. 라이다 생성과 저장은 기존의 제한된 frame worker에서 처리하며, 기본 worker 수는 라이다 사용 시 4개·미사용 시 기존 2개입니다. `--workers`로 직접 바꿀 수 있습니다. `--vehicles`가 같은 pass의 차량 모델 자세·actor bounds·draw 상수 기록을 켭니다. 기록 중 카메라 배치는 고정되며 종료·오류·Ctrl+C에서 writer를 합류시키고 Tier 0으로 돌아갑니다.
+
+```python
+from otpy.bundles import load_bundle
+from otpy.lidar import read_lidar
+
+bundle = load_bundle("frame-00000042.tar.zst")
+arrays, metadata = read_lidar(bundle)
+points = arrays["xyz_world"][arrays["status"] == 0]
+```
+
+내부 NPZ에는 **range·결측 상태·소스 카메라/픽셀·각도 오차**와 빔 패턴·센서 자세를 저장합니다. 반복되는 XYZ와 각도 배열은 `read_lidar()`가 복원하여 아래의 전체 배열 인터페이스를 반환합니다. XYZ까지 저장한 초기 묶음도 읽습니다. 독립 `lidar --output` 명령의 NPZ는 기존처럼 모든 배열을 담습니다. 원시 카메라 파일·`images.json` 형식은 유지하며 이전 기록에도 라이다 필드는 필수가 아닙니다. `bundle.json`의 `lidar_file`이 동봉 파일을 가리킵니다.
+
+내부 NPZ를 다시 압축한 뒤 TAR.ZST에 넣지 않습니다. 외부 Zstandard가 한 번만 무손실 압축합니다. `index.jsonl`에는 프레임별 `lidar_seconds`, `archive_seconds`, `lidar_bytes`를 남기고, `run.json`에는 실제 worker 수·빔 설정·누락·종료 결과를 저장합니다. MCAP 발행, 레이더·IMU·GNSS 결합은 아직 없습니다.
 
 ## 배치와 빔
 
@@ -32,7 +53,7 @@
 
 전방 소스는 같은 원점을 가져야 합니다. 서로 다른 프레임·관측 세션의 소스를 섞거나 다른 장착점의 영상을 합치는 입력은 거절합니다. 원점 비교의 1e−4 게임 단위 허용치는 FP32 셀 내부 좌표 반올림용이며 다른 포드를 허용하는 기준이 아닙니다.
 
-NPZ는 모든 요청 빔을 센서별로 이어 저장합니다. `metadata_json`의 각 센서에 시작 index·개수·채널×열 shape·실제 각도 배열·월드 원점과 회전·소스별 카메라/복사 QPC가 있습니다.
+독립 NPZ와 `read_lidar()` 결과는 모든 요청 빔을 센서별로 이어 표현합니다. `metadata_json` 또는 반환 metadata의 각 센서에 시작 index·개수·채널×열 shape·실제 각도 배열·월드 원점과 회전·소스별 카메라/복사 QPC가 있습니다.
 
 | 배열 | 의미 |
 | --- | --- |
@@ -59,3 +80,9 @@ NPZ는 모든 요청 빔을 센서별로 이어 저장합니다. `metadata_json`
 실제 네 카메라에서 골라 읽은 9,652개 픽셀의 역투영은 기존 전체 이미지 복원과 같았습니다. 반환 점을 원본 영상으로 다시 투영하면 선택 픽셀 중심에서 축별 최대 약 0.5픽셀 이내였고, 카메라 Z 차이는 최대 7.3e−6 게임 단위였습니다. 원시 DSV 디렉터리·ZIP·TAR.ZST 입력을 실행했고, 원시 material/color의 선택 픽셀 복원도 기존 경로와 대조했습니다. 다른 원점·다른 프레임을 섞는 입력은 실제로 거절됐습니다.
 
 저장된 서로 다른 10개 프레임에서 순수 빔 생성은 중앙값 **69ms**였습니다(NumPy, BLAS 1스레드). TAR.ZST 읽기·해제·JSON 해석은 별도로 0.58–0.81초였고, 출력 압축 저장은 이 수치에 포함하지 않았습니다. 따라서 저장 파일 재생 전체가 10Hz라는 의미는 아닙니다. frame 42의 압축 NPZ는 약 3.80MB입니다. 원본은 로컬 `research/live/2026-10-08-camera-rig/lidar/`입니다.
+
+후속 라이브 결합 기록에서는 **5초·50수집·50저장·누락/수집 오류 0회**, 총 압축 크기 **718,268,275B**를 기록했습니다. 4뷰 RGB-D·차량 메타데이터와 세 라이다를 같은 파일에 저장했습니다. 기본 옵션을 쓰는 CLI도 1초·10묶음·누락 0회였습니다. 정차·짧은 기록이며 장시간 주행이나 전경 FPS 측정을 대신하지 않습니다.
+
+50개 파일을 모두 다시 읽어 200뷰·라이다의 프레임/세션 연결과 유효·결측 좌표를 확인했습니다. 첫·중간·마지막 묶음의 네 카메라에서 반환점을 원본 깊이와 대조했으며 카메라 Z 차이는 최대 6.04e−6 게임 단위였습니다. 복사 시각 기준 처리율은 **9.960Hz**, 간격 중앙값은 102.25ms였습니다. 네 worker의 프레임별 처리 시간 중앙값은 라이다 생성·NPZ 구성 126.6ms, 압축·저장 250.9ms로 겹쳐 실행됩니다. 이는 제어 입력까지의 종단 지연 측정이 아닙니다.
+
+초기 방식은 XYZ를 중복 저장해 worker 2개에서 18/50개, 4개에서 3/50개가 누락됐고 6개로 늘려도 해결되지 않았습니다. 같은 표본의 라이다 NPZ를 7,098,515B → 2,184,491B로 줄였으며, 읽어 복원한 모든 배열이 이전 전체 XYZ 출력과 일치했습니다. 프레임 파일의 원본 RGB-D와 라이다는 디렉터리·ZIP·TAR.ZST 모두 저장 후 다시 읽어 대조했고, 다른 프레임의 라이다를 붙인 묶음은 거절했습니다. 결과는 로컬 `lidar-recording-offline/`, `stream-lidar-compact/`, `stream-lidar-cli/`에 있습니다. 세 경로 모두 `research/live/2026-10-08-camera-rig/` 아래입니다.

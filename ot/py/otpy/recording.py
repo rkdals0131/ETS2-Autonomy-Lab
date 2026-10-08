@@ -41,7 +41,9 @@ def calibrate_gain(client):
 
 
 def record_bundles(client, config_file, hz, duration, output, capture_format="rgbd8", color_gain=None, vehicles=False,
-                   archive_format="zstd", workers=2):
+                   archive_format="zstd", workers=None, lidar_config=None):
+    if workers is None:
+        workers = 4 if lidar_config is not None else 2
     save, suffix = {"zip": (save_bundle_archive, ".zip"), "zstd": (save_bundle_zstd, ".tar.zst")}[archive_format]
     if archive_format == "zstd":
         try:
@@ -49,11 +51,29 @@ def record_bundles(client, config_file, hz, duration, output, capture_format="rg
         except ImportError as error:
             raise ImportError("Zstandard recording requires ot/requirements-recording.txt; use --archive zip without it") from error
     config = resolve_layout(json.loads(Path(config_file).read_text(encoding="utf-8")), client)
+    lidar_profile = None
+    if lidar_config is not None:
+        from .lidar import attach_lidar, load_lidar_profile
+        lidar_profile = load_lidar_profile(lidar_config)
     directory = Path(output).resolve()
     directory.mkdir()  # Never append to or overwrite an earlier recording.
     report = {"config": config, "requested_hz": hz, "duration_s": duration,
               "format": capture_format, "vehicle_metadata": vehicles, "saved": 0, "binary_bytes": 0,
               "archive": archive_format, "writer_workers": workers, "archive_bytes": 0}
+    if lidar_profile is not None:
+        report["lidar_config"] = {"sensors": [s["settings"] for s in lidar_profile]}
+        report["lidar_bytes"] = 0
+
+    def write_frame(bundle, path):
+        details = {}
+        if lidar_profile is not None:
+            before = time.monotonic()
+            bundle = attach_lidar(bundle, lidar_profile)
+            details = {"lidar_seconds": time.monotonic()-before, "lidar_bytes": len(bundle["lidar"])}
+        before = time.monotonic()
+        path = save(bundle, path)
+        details["archive_seconds"] = time.monotonic()-before
+        return path, details
     reader = None
     started = False
     failure = None
@@ -78,11 +98,14 @@ def record_bundles(client, config_file, hz, duration, output, capture_format="rg
 
             def finish():
                 future, entry = pending.popleft()
-                path = future.result()
+                path, details = future.result()
+                entry.update(details)
                 entry["archive_bytes"] = path.stat().st_size
                 report["saved"] += 1
                 report["binary_bytes"] += entry["binary_bytes"]
                 report["archive_bytes"] += entry["archive_bytes"]
+                if lidar_profile is not None:
+                    report["lidar_bytes"] += entry["lidar_bytes"]
                 index.write(json.dumps(entry)+"\n")
                 index.flush()
 
@@ -109,7 +132,7 @@ def record_bundles(client, config_file, hz, duration, output, capture_format="rg
                             entry = {"bundle": name, "sequence": bundle["sequence"],
                                      "render_frame_id": manifest["render_frame_id"],
                                      "binary_bytes": sum(len(item["data"]) for item in bundle["files"])}
-                            pending.append((writers.submit(save, bundle, directory / name), entry))
+                            pending.append((writers.submit(write_frame, bundle, directory / name), entry))
                         elif not status["running"]:
                             break
                         else:
@@ -153,4 +176,5 @@ def record_bundles(client, config_file, hz, duration, output, capture_format="rg
             raise RuntimeError("Recording cleanup failed: " + "; ".join(cleanup_errors))
     return {"directory": str(directory), "saved": report["saved"], "binary_bytes": report["binary_bytes"],
             "archive_bytes": report["archive_bytes"], "archive": archive_format,
+            "lidar_bytes": report.get("lidar_bytes", 0),
             "color_gain": color_gain, "stream": report["stream"], "cleanup": report["cleanup"]}

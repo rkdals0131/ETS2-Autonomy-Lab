@@ -135,6 +135,9 @@ def save_bundle(bundle, directory):
     for view in manifest["views"]:
         with open(directory / view["camera"] / "images.json", "x", encoding="utf-8") as stream:
             json.dump(view["metadata"], stream, ensure_ascii=False, indent=2)
+    if "lidar_file" in manifest:
+        with open(directory / manifest["lidar_file"], "xb") as stream:
+            stream.write(bundle["lidar"])
     with open(directory / "bundle.json", "x", encoding="utf-8") as stream:
         json.dump({"sequence": bundle["sequence"], **manifest}, stream, ensure_ascii=False, indent=2)
     return directory
@@ -145,6 +148,8 @@ def _archive_entries(bundle):
         yield item["camera"] + "/" + item["file"], item["data"]
     for view in bundle["manifest"]["views"]:
         yield view["camera"] + "/images.json", json.dumps(view["metadata"], ensure_ascii=False).encode("utf-8")
+    if "lidar_file" in bundle["manifest"]:
+        yield bundle["manifest"]["lidar_file"], bundle["lidar"]
     yield "bundle.json", json.dumps({"sequence": bundle["sequence"], **bundle["manifest"]}, ensure_ascii=False).encode("utf-8")
 
 
@@ -207,4 +212,7 @@ def load_bundle(directory):
             if camera not in names:
                 raise ValueError("Bundle image is outside its camera directory")
             files.append({"camera": camera, "file": name, "data": read(camera + "/" + name)})
-        return {"sequence": manifest["sequence"], "manifest": manifest, "files": files}
+        bundle = {"sequence": manifest["sequence"], "manifest": manifest, "files": files}
+        if "lidar_file" in manifest:
+            bundle["lidar"] = read(_component(manifest["lidar_file"]))
+        return bundle

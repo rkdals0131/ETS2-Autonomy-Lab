@@ -61,7 +61,8 @@ def main():
     bundles.add_argument("--color-gain", type=float, help="Omit to calibrate a fixed exposure from one raw sample")
     bundles.add_argument("--vehicles", action="store_true", help="Include same-pass vehicle model metadata for box projection")
     bundles.add_argument("--archive", choices=("zstd", "zip"), default="zstd", help="Lossless TAR.ZST (optional codec) or uncompressed ZIP")
-    bundles.add_argument("--workers", type=int, default=2, help="Bounded number of parallel file writers")
+    bundles.add_argument("--workers", type=int, help="Bounded frame workers; default 2, or 4 with --lidar-config")
+    bundles.add_argument("--lidar-config", help="Optional beam profile; store same-frame lidar.npz inside each archive")
     reconstruct = sub.add_parser("reconstruct", help="Offline pass-camera point cloud from a saved DLL capture (NumPy)")
     reconstruct.add_argument("directory", help="Capture directory containing images.json")
     reconstruct.add_argument("--output", required=True, help="New NPZ file; existing files are not overwritten")
@@ -128,7 +129,7 @@ def main():
             options = dict(hz=args.hz, duration=args.duration, format=args.format, color_gain=args.color_gain) if args.action == "start" else {}
             result = client.request("stream", action=args.action, **options)
         elif args.command == "record_bundles":
-            if args.workers < 1:
+            if args.workers is not None and args.workers < 1:
                 parser.error("--workers must be positive")
             if not (math.isfinite(args.hz) and args.hz > 0 and math.isfinite(args.duration) and args.duration > 0):
                 parser.error("--hz and --duration must be finite and positive")
@@ -136,7 +137,7 @@ def main():
                 parser.error("--color-gain must be finite and positive")
             from .recording import record_bundles
             result = record_bundles(client, args.config, args.hz, args.duration, args.output,
-                                    args.format, args.color_gain, args.vehicles, args.archive, args.workers)
+                                    args.format, args.color_gain, args.vehicles, args.archive, args.workers, args.lidar_config)
         elif args.command == "watch":
             if not 0 < args.hz <= 240:
                 parser.error("--hz must be in (0, 240]")

@@ -3,6 +3,7 @@
 No ray casting, surface interpolation, intensity, noise or rolling scan model.
 Missing depth is unknown, never evidence of an empty beam.
 """
+import io
 import json
 from pathlib import Path
 
@@ -43,12 +44,13 @@ def load_lidar_profile(path):
     return sensors
 
 
-def sample_lidars(bundle, profile):
+def sample_lidars(bundle, profile, *, include_points=True):
     """Return all beams, including misses, from a decoded same-frame bundle.
 
     profile is the canonical result of load_lidar_profile(). Source priority is
     geometric coverage, not depth validity: a missing narrow-view pixel is not
     replaced with a potentially different broad-view surface.
+    include_points=False omits derivable XYZ/angle arrays for compact recording.
     """
     views = {v["camera"]: v["metadata"] for v in bundle["manifest"]["views"]}
     names = list(dict.fromkeys(name for s in profile for name in s["settings"]["sources"]))
@@ -57,7 +59,9 @@ def sample_lidars(bundle, profile):
         raise ValueError("Missing LiDAR source cameras: " + ", ".join(sorted(missing)))
     keys = {(views[n]["observation_session_qpc"], views[n]["render_frame_id"]) for n in names}
     units = {views[n]["geometry_pass"]["camera_at_compile"]["world_units"] for n in names}
-    if len(keys) != 1 or len(units) != 1:
+    manifest = bundle["manifest"]
+    if (keys != {(manifest["observation_session_qpc"], manifest["render_frame_id"])}
+            or len(units) != 1):
         raise ValueError("LiDAR sources must share one observation session, Present interval and unit system")
     files = {(f["camera"], f["file"]): f["data"] for f in bundle["files"]}
     pieces, descriptions = [], []
@@ -131,14 +135,15 @@ def sample_lidars(bundle, profile):
                                 "origin_offset_world_xyz": delta.tolist(),
                                 "camera_qpc": camera["qpc"], "copy_qpc": meta["copy_submission_qpc"],
                                 "width": width, "height": height})
-        points_world = origin + world_direction*ranges[:, None]
         pieces.append({"range": ranges, "status": status,
-                       "sensor_index": np.full(count, sensor_index, dtype=np.int16),
-                       "azimuth_deg": sensor["azimuth"].astype(np.float32),
-                       "elevation_deg": sensor["elevation"].astype(np.float32),
-                       "xyz_sensor": (direction*ranges[:, None]).astype(np.float32),
-                       "xyz_world": points_world, "source_camera_index": source_index,
+                       "source_camera_index": source_index,
                        "source_pixel_xy": pixels, "source_ray_error_deg": angular_error})
+        if include_points:
+            pieces[-1].update({"sensor_index": np.full(count, sensor_index, dtype=np.int16),
+                               "azimuth_deg": sensor["azimuth"].astype(np.float32),
+                               "elevation_deg": sensor["elevation"].astype(np.float32),
+                               "xyz_sensor": (direction*ranges[:, None]).astype(np.float32),
+                               "xyz_world": origin + world_direction*ranges[:, None]})
         descriptions.append({"name": settings["name"], "settings": settings,
                              "first_beam": first_beam, "beam_count": count,
                              "shape_channels_columns": [len(sensor["elevations"]), len(sensor["azimuths"])],
@@ -160,6 +165,67 @@ def sample_lidars(bundle, profile):
                 "status_codes": {"0": "return", "1": "outside_source_views", "2": "invalid_depth", "3": "beyond_max_range"},
                 "depth_source": "geometry DSV; nearest pixel, constant-Z footprint on requested beam",
                 "scope": "Ideal instantaneous rendered-depth samples; no noise, intensity, rolling scan or ray casting. Missing beams are unknown. Engine visibility omissions remain."}
+    return arrays, metadata
+
+
+def attach_lidar(bundle, profile):
+    """Add a same-frame LiDAR NPZ without changing the input bundle.
+
+    Store the inner NPZ without compression: the existing outer Zstandard
+    writer compresses it together with RGB-D, avoiding two codec passes.
+    """
+    arrays, metadata = sample_lidars(bundle, profile, include_points=False)
+    with io.BytesIO() as stream:
+        np.savez(stream, **arrays, metadata_json=json.dumps(metadata, ensure_ascii=False))
+        data = stream.getvalue()
+    return {**bundle, "manifest": {**bundle["manifest"], "lidar_file": "lidar.npz"}, "lidar": data}
+
+
+def read_lidar(bundle):
+    """Decode the optional recorded LiDAR, bound to its containing frame."""
+    with np.load(io.BytesIO(bundle["lidar"]), allow_pickle=False) as recorded:
+        metadata = json.loads(str(recorded["metadata_json"]))
+        arrays = {key: recorded[key] for key in recorded.files if key != "metadata_json"}
+    manifest = bundle["manifest"]
+    if ((metadata["observation_session_qpc"], metadata["render_frame_id"])
+            != (manifest["observation_session_qpc"], manifest["render_frame_id"])):
+        raise ValueError("Recorded LiDAR belongs to a different camera bundle")
+    count = len(arrays["range"])
+    for key, shape in (("range", (count,)), ("status", (count,)),
+                       ("source_camera_index", (count,)), ("source_pixel_xy", (count, 2)),
+                       ("source_ray_error_deg", (count,))):
+        if arrays[key].shape != shape:
+            raise ValueError("Recorded LiDAR arrays do not align: " + key)
+    if "xyz_world" not in arrays:
+        # Range plus full-precision beam angles and captured pose define XYZ.
+        # Expand only on consumption; do not persist/compress duplicate points.
+        parts = []
+        offset = 0
+        for index, sensor in enumerate(metadata["sensors"]):
+            az, el = np.meshgrid(sensor["azimuth_deg"], sensor["elevation_deg"])
+            radians_az, radians_el = np.deg2rad(az.ravel()), np.deg2rad(el.ravel())
+            direction = np.column_stack((np.cos(radians_el)*np.cos(radians_az),
+                                         np.cos(radians_el)*np.sin(radians_az), np.sin(radians_el)))
+            start, length = sensor["first_beam"], sensor["beam_count"]
+            if start != offset or length != len(direction) or start+length > count:
+                raise ValueError("Recorded LiDAR beam pattern does not align with ranges")
+            offset += length
+            ranges = arrays["range"][start:start+length, None]
+            world_direction = direction @ np.asarray(sensor["world_from_sensor_rotation"]).T
+            world_direction /= np.linalg.norm(world_direction, axis=1, keepdims=True)
+            parts.append({"sensor_index": np.full(length, index, dtype=np.int16),
+                          "azimuth_deg": az.ravel().astype(np.float32),
+                          "elevation_deg": el.ravel().astype(np.float32),
+                          "xyz_sensor": (direction*ranges).astype(np.float32),
+                          "xyz_world": np.asarray(sensor["origin_world_xyz"])+world_direction*ranges})
+        if not parts or offset != count:
+            raise ValueError("Recorded LiDAR beam pattern does not cover its ranges")
+        arrays.update({key: np.concatenate([p[key] for p in parts]) for key in parts[0]})
+    else:
+        for key, shape in (("sensor_index", (count,)), ("azimuth_deg", (count,)), ("elevation_deg", (count,)),
+                           ("xyz_sensor", (count, 3)), ("xyz_world", (count, 3))):
+            if arrays[key].shape != shape:
+                raise ValueError("Recorded LiDAR arrays do not align: " + key)
     return arrays, metadata
 
 

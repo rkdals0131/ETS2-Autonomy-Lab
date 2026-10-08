@@ -11,8 +11,8 @@
 > **0.17.0:** 3슬롯 GPU ring과 native 수집 worker를 추가했습니다. 차량 메타데이터를 포함한 4뷰 RGB-D를 5초·50묶음·실측 10.006 Hz로 Python에 저장했고 누락은 0개였습니다. 수집 중 패닉·payload unload도 확인했습니다.
 > **무손실 기록:** Python에 Zstandard 압축·2개 저장 worker를 추가했습니다. 후속 실제 5초·50묶음을 누락 없이 629MB에 저장했습니다(원시 바이너리 대비 약 45.5% 절감). 기존 core 0.17.0을 그대로 사용합니다.
 > **움직이는 AI:** 저장한 연속 기록의 AI 2대·6시점에서 모델 박스와 RGB/DSV의 정합을 확인했습니다. 약 ±0.5초 다른 자세보다 같은 프레임 자세의 깊이 겹침 비율이 높았고, 해당 GPU draw 상수 29개의 투영 차이는 최대 0.000206px였습니다. 아래 명령으로 압축 묶음을 직접 분석합니다.
-> **가상 라이다:** 저장된 4뷰의 geometry depth로 전방·좌우 포드의 빔을 만드는 `lidar` 명령을 구현했습니다. 원점·프레임을 보존하고 협각/광각을 결합하며, 결측을 구분합니다. [배치·사용법·실제 점군](../docs/15_virtual_sensors.md).
-> **다음:** 전경 성능 비교, 트레일러 가림·주행 중 가시성 누락과 장시간 저장량 절감. 가상 라이다의 기록 결합·센서 노이즈, 레이더와 주행보조 모델은 후속 구현입니다.
+> **가상 라이다:** 전방·좌우 포드 빔을 생성하고, `record_bundles --lidar-config`로 RGB-D·차량 메타데이터와 함께 저장합니다. 후속 실측은 5초·50묶음·누락 0회였습니다. [배치·명령·실제 점군과 기록](../docs/15_virtual_sensors.md).
+> **다음:** 전경 성능 비교, 트레일러 가림·주행 중 가시성 누락과 장시간 저장량 절감. 가상 센서 노이즈, 레이더와 주행보조 모델은 후속 구현입니다.
 
 ### Phase 1 고속도로 4뷰
 
@@ -68,13 +68,15 @@ py -3.13 -m venv --system-site-packages .\ot\.venv
 
 ```powershell
 .\ot\ot.cmd record_bundles --config .\ot\presets\phase1-highway.json --hz 10 --duration 5 --vehicles --output .\research\live\my-road-run
+# 같은 프레임의 전방·좌우 가상 라이다도 동봉
+.\ot\ot.cmd record_bundles --config .\ot\presets\phase1-highway.json --lidar-config .\ot\presets\phase1-lidar.json --hz 10 --duration 5 --vehicles --output .\research\live\my-lidar-run
 ```
 
 한 번의 `stream start`로 DLL이 촬영을 예약하고, Python은 `OT_Bundles`를 읽어 저장합니다. 묶음마다 arm/poll/publish 명령을 보내지 않습니다. 3개 GPU 슬롯은 필요한 자원을 첫 사용에 준비한 뒤 순환 재사용하며, immediate-context 복사와 readback은 기존 렌더 callback에서만 수행합니다. native worker는 완성된 CPU 데이터의 공유 메모리 발행을 담당합니다. 차량 상수도 기존 staging을 재사용하고 실제 크기가 바뀔 때만 다시 만듭니다.
 
 기본 출력은 `frame-<Present 구간>.tar.zst`, `index.jsonl`, `run.json`입니다. Zstandard level 1의 **무손실 압축**이며 내부의 카메라별 `images.json`·RGB·깊이·상수 파일은 기존 디렉터리 형식과 같습니다. `--archive zip`은 추가 코덱 없이 기존 비압축 ZIP으로 저장합니다. `otpy.bundles.load_bundle()`과 `birdseye`는 디렉터리·ZIP·TAR.ZST를 읽습니다. 카메라별 기존 분석 명령에는 해당 형식을 지원하는 압축 도구로 푼 디렉터리를 넘길 수 있습니다. 파일 덮어쓰기는 하지 않습니다.
 
-기본 `--workers 2`는 독립된 프레임을 두 스레드에서 압축·저장합니다. 대기 중인 묶음 수도 worker 수로 제한해 느린 디스크에서 메모리가 계속 쌓이지 않게 했습니다. 각 압축기는 스레드 안에서 소유하고, index는 수신 순서대로 하나의 스레드가 씁니다. 종료 시 모든 writer를 합류시킨 뒤 결과를 저장합니다. 압축 해제는 색상 바이트·float32 깊이의 비트 표현을 복원하며 Zstandard checksum과 프레임 완료 여부를 확인합니다.
+기본 worker 수는 일반 RGB-D 기록 2개, `--lidar-config` 사용 시 4개입니다. `--workers`로 직접 지정할 수 있습니다. 독립된 프레임의 파생 센서 생성·압축·저장을 병렬로 처리합니다. 대기 중인 묶음 수도 worker 수로 제한해 느린 디스크에서 메모리가 계속 쌓이지 않게 했습니다. 각 압축기는 스레드 안에서 소유하고, index는 수신 순서대로 하나의 스레드가 씁니다. 종료 시 모든 writer를 합류시킨 뒤 결과를 저장합니다. 압축 해제는 색상 바이트·float32 깊이의 비트 표현을 복원하며 Zstandard checksum과 프레임 완료 여부를 확인합니다.
 
 기본 `rgbd8`은 첫 raw 표본으로 공통 노출을 계산해 실행 내내 고정합니다. `--color-gain`을 주면 이 준비 표본을 생략합니다. `--vehicles`는 같은 pass의 차량 모델 자세·draw 상수 수집을 켜며 생략하면 카메라 데이터만 기록합니다. `raw`·`raw+rgbd8`도 선택할 수 있습니다. 색상 gain은 물리적 카메라 노출 모델이 아닙니다.
 
