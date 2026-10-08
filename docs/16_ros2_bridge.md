@@ -241,8 +241,99 @@ The new perception-only stream was decoded as RGB8 320×180, step 960, with
 matching 320×180 CameraInfo and stamp. This is half the current front resolution;
 it is not a claim that every graphical scaling setting produces 640×360 previews.
 
-The optimized 60-second foreground comparisons at current and doubled sensor
-resolution are prepared and await the user's foreground-readiness reply. Short
-functional-run frame rates are not used as the final performance result.
-Native mirror slot preservation, attached-trailer rendering, day/night driving
-and actual WSL-IP changes remain outside the evidence from these stationary runs.
+The subsequent foreground comparisons and native mirror separation are recorded
+below. Attached-trailer rendering, day/night driving and actual WSL-IP changes
+remain outside the evidence from these stationary runs.
+
+## Native mirror separation and one selection — core 0.22.0
+
+The old stream borrowed native slots 0/1/2/5. Suppressing those slots between
+capture windows left the HUD/material outputs without their usual mirror image;
+the user saw the engine's `far/close` fallback texture. The new preset uses
+3/4/6/7, with camera templates 0/1/2/5 and independent `ot/sensorN` outputs.
+Invalid texture aliases (`0xffff`) keep these outputs out of native mirror aliases.
+Slots 6/7 need both camera and drawable entries: graph construction at `0x4D46E4`
+dereferences the matching camera without a NULL check.
+
+Submission selection now runs at `0x538A4E`, after normal camera updates. It
+redirects registers to DLL-owned camera/drawable arrays; it never writes the
+engine-owned arrays. Graph lookup hooks use the same private descriptors only
+for render-camera requests submitted by this rig. Descriptors remain immutable
+until the previous graph finishes. Panic/unload stops new selection first and
+keeps graph lookup/end hooks until queued private requests drain. The unwind
+range list now grows with the actual hook set, replacing an undersized fixed array.
+
+Native mirror5 was captured before and during the private rig: its 256×128 image
+remained the original view, without the fallback texture. This is a direct native
+mirror5 image check; preservation of the other native aliases follows the same
+separation, but their four HUD panels were not independently captured as a UI test.
+Three active-stream payload unload/reload cycles completed in 84–98 ms. The core
+DLL mapping disappeared on each unload; each reload returned to Tier 0/hooks 0.
+
+For continuous capture, the next eligible selection claims one armed bundle.
+Pass execution supplies its real Present ID; mixed-frame results are discarded.
+There is no predicted two-frame window. A functional run selected and completed
+266 bundles, with exactly 266 submissions on each of 3/4/6/7 and zero capture
+failures. Two relay queue drops occurred at startup. The ROS names stay
+C_FN/C_FW/C_RL/C_RR via explicit preset `camera_id`, independently of render slots.
+
+## Front mount correction
+
+The front-wide dark band was real near-field geometry: raw G-buffer camera Z and
+metric DSV agreed. Ray intersections with the installed `sunshield_01` mesh match
+the band (for example, optical depths 0.11207/0.12674/0.14064 m at center-column
+rows 600/650/700). The previous windshield-header mount was behind the sunshield.
+Turning off full ego submission hid it, but also reinstated the body omissions.
+
+The new front pair attaches to the sunshield's outer face at model/chassis
+`[0, 3.0, -3.110749]`, with outward normal `[0.009463, 0.354941, -0.934841]`.
+A 35 mm standoff places its shared optical center at
+`[0.000331, 3.012423, -3.143469]`, preserving the narrow/wide camera angles.
+Actual RGB and depth show the band removed; neither front image has depth below
+0.2 m in this stationary sample. The side mounts are unchanged. Their full-size
+images show cabin and fender surfaces; the small seam reported in the user's
+side screenshot has not been separately demonstrated and closed as a distinct bug.
+Attached-trailer coverage still requires a trailer.
+
+![Four private sensor images after the front mount correction](images/phase1-private-0.22.0.png)
+
+## Foreground comparison — 2026-10-09
+
+Same parked FH5 garage view, unchanged game graphics, each condition 60 s.
+All reported Presents were foreground: 4670/3840/3703/2787/3855 respectively.
+Low sensor sizes are front 640×360 and side 480×272; high sizes are
+1280×720 and 960×544. The engine aligns side height; base heights are 270/540.
+The normal mirrors remain enabled in every condition. FPS is derived from the
+Present intervals; CPU/GPU busy is from PresentMon 2.6.0.
+
+| Condition | FPS | Frame p50 / p95 / p99 ms | CPU-busy median ms | GPU-busy median ms | Game / relay CPU |
+| --- | ---: | --- | ---: | ---: | --- |
+| Rig off | 77.69 | 12.68 / 15.43 / 17.67 | 12.54 | 4.99 | 153.1% / — |
+| High-resolution rig, continuous submission | 63.88 | 15.31 / 18.93 / 22.10 | 15.18 | 4.93 | 153.6% / — |
+| Low-resolution full bridge, 10 Hz | 61.58 | 14.85 / 22.83 / 26.91 | 14.68 | 5.07 | 153.2% / 35.9% |
+| High-resolution full bridge, 10 Hz | 46.35 | 20.81 / 32.01 / 38.15 | 20.59 | 5.71 | 153.5% / 74.7% |
+| High-resolution sensors, JPEG + LiDAR + GT + TF | 64.12 | 14.18 / 23.15 / 26.08 | 14.03 | 4.94 | 155.2% / 28.5% |
+
+CPU percentages use 100% per logical processor. Full bridge subscribers request
+all four raw RGB/depth/preview/CameraInfo/GT outputs and all three point clouds.
+The last condition consumes the Foxglove-style topic set through ROS, without a
+Foxglove desktop window or WebSocket rendering load. It omits full RGB/depth
+readback. GPU-busy remains below CPU-busy, but larger buffers still materially
+increase total frame time; GPU headroom alone does not make resolution free.
+
+Low/full/preview runs received 675/665/677 aligned topic sets including warmup.
+The capture snapshots had 675/667/677 completions, zero failures, one startup
+ring-busy skip each, and no DLL publication drops. The full relay dropped two
+bundles in its first 1.015 s; the others dropped none. One capture was still in
+flight at the low/full stop snapshots. These are not zero-loss claims for startup.
+State publication acknowledgement RTT p99 was 2.17/1.71/1.19 ms respectively;
+RTT includes Windows send, ROS publication and acknowledgement, not one-way delay.
+
+The default private preset retains high resolution for image quality. Preview
+remains GPU-scaled (640×360 front, 480×272 side), and consumers opt into expensive
+raw channels. Game graphics, affinity and WSL CPU allocation were not changed.
+Earlier 0.21.1 borrowed-slot runs measured 76.68/52.36 FPS at low/high resolution;
+they did not preserve the native mirrors and are not equivalent workloads.
+Raw logs and representative ROS CDR samples are local under
+`research/live/2026-10-09-optimization/` (`final-*`, `visor-functional-*`,
+`private-front-and-native.json`, `private-active-reload.json`).

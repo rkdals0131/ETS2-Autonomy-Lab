@@ -6,7 +6,8 @@ state and observed ego pose. Windows uses Fast-CDR 2.2.5 with explicit XCDRv1;
 Linux uses Jazzy GenericPublisher and the XML SHM transport profile. The
 implementation connects GPU LiDAR and per-pass vehicle GT, a cabin/base TF tree,
 subscription control and reconnection. The sensor views now submit the full ego
-body. Foreground frame times and attached-trailer validation still limit driving use.
+body. The private preset preserves native mirrors and corrects the front sunshield
+occlusion. Attached-trailer and prolonged-driving validation remain outstanding.
 
 ## Build
 
@@ -140,13 +141,28 @@ the run instead of silently changing its transport. Stop the relay before a DLL
 reload as before. Do not attach a generic OT_Bundles reader to a shared-GPU stream;
 the relay owns its GPU acknowledgement protocol.
 
-Continuous capture selects sensor views in a two-Present submission window for
-each requested frame. This accommodates the observed engine submission/execution
-overlap: one-window selection lost frames. At 10 Hz, sensors render about 20 Hz
-instead of every display frame. Compilation metadata is limited to those windows;
-GPU completion is polled at most once per Present. Non-stream rig use retains
-continuous rendering. This still borrows slots 0/1/2/5; private slots 6–8 and native
-HUD mirror preservation are not implemented by this optimization.
+Core 0.22.0 claims each capture request at the next camera-selection call, once.
+It captures the resulting passes and checks their actual Present IDs, rather than
+predicting a two-Present window. Four views are still published as one same-frame
+bundle. Uncaptured frames skip sensor submission and compile metadata observation.
+Non-stream rig use requests continuous rendering; private descriptors are not
+rewritten until the preceding graph has consumed them.
+
+New settings use `phase1-highway-private.json` and `phase1-lidar-private.json`,
+with slots `[3,4,6,7]`. The engine's native mirrors 0/1/2/5 keep their cameras and
+output textures. The sensor-only slots use private camera/drawable lookup arrays,
+without editing engine-owned arrays. ROS topic names remain C_FN/C_FW/C_RL/C_RR;
+`camera_id` in the preset separates those names from physical render slots.
+Existing settings are never overwritten by `configure.py`: change `rig`, `lidar`
+and `slots` together when migrating an existing local JSON file.
+
+The high-resolution preset uses 1280×720 front and 960×544 side outputs at the
+current 100% mirror scale (base sizes 1280×720 and 960×540 before engine alignment).
+The front pair is mounted 35 mm outside the actual sunshield_01 face. The previous
+windshield-header mount was behind that accessory, causing the dark near-field
+band once complete ego geometry was restored. The new preset is calibrated for
+FH5 4x2/l2h1/LHD/mirror_01/sunshield_01; other body/accessory configurations need
+their own mount fit. The original presets remain available for old experiments.
 
 `auto_exposure: true` is the default. Each camera samples log luminance on the GPU
 and adapts gain in log space (0.7 s brightening, 0.3 s darkening); its three capture
@@ -158,6 +174,11 @@ NaN when that camera produced no color output. The original `FrameInfo` message
 is unchanged, preserving previously recorded bag schemas. Rebuild `ets2_msgs`
 and `ets2_bridge` before starting the new relay.
 
+For an unsaturated channel, first decode its stored byte from sRGB to linear
+`s` in [0,1), then use the approximate inverse `linear = s / ((1-s) * gain)`.
+Quantization and clipped/saturated channels prevent exact HDR recovery; retained
+gain is not a replacement for recording raw linear pixels when that is required.
+
 For an uncompressed smaller input, subscribe to each camera's
 `/perception/image_raw` and `/perception/camera_info`. They use half the full
 image width/height and the corresponding scaled calibration. The GPU output is
@@ -168,7 +189,11 @@ The ROS receiver reads directly into reusable SerializedMessage buffers. CPU
 RGB conversion uses SSSE3 when available (with a scalar fallback), and LiDAR beam
 directions are reused until their angular configuration changes.
 
-Buffer reuse and direct packet serialization improved full-resolution foreground
-performance from **9.73 to 23.26 FPS**, with zero relay queue drops in the repeat.
-Frame p95 was still 61.50 ms; driving performance needs further improvement.
-See [measurements](../docs/16_ros2_bridge.md) for the current limits.
+With core 0.22.0, 60-second foreground runs in the same garage measured **77.69
+FPS** with the rig off, **63.88 FPS** with continuous high-resolution sensor
+submission, and **46.35 FPS** with all high-resolution RGB-D/LiDAR/GT outputs.
+Keeping those sensor resolutions but requesting JPEG/LiDAR/GT/TF only measured
+**64.12 FPS** through a ROS consumer (Foxglove UI load not included). Full bridge
+frame p99 was 38.15 ms; the preview topic set was 26.08 ms. Capture failures were
+zero; full-output relay startup dropped two bundles. No game graphics settings
+were raised. See [measurements](../docs/16_ros2_bridge.md) for conditions and limits.
