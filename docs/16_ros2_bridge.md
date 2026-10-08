@@ -164,8 +164,8 @@ This is a render submission fix, not a mask. Attached/articulated trailers remai
 untested. Local outputs are under `ego-parts/` in the ROS run directory.
 
 The earlier fixed night gain (841.55) overexposed the current daylight scene.
-The body comparison was also captured with gain 1 for inspection. Automatic
-exposure is not implemented; local gain must still match the lighting conditions.
+The body comparison was also captured with gain 1 for inspection. Core 0.20.4
+used manual gain; 0.21.1 adds GPU automatic exposure as described below.
 
 ## Pause transition and replay
 
@@ -192,5 +192,57 @@ The consumer's final ROS clock equalled the last recorded clock. Local results a
 
 Actual trailer attachment is deferred because the user cannot connect one now.
 The tested body submission fix covers the current FH5 without a trailer. Actual
-WSL eth0 address changes and a foreground measurement with core 0.20.4 also remain
-unmeasured; the 23.26 FPS result above was obtained with core 0.20.3.
+WSL eth0 address changes remain unmeasured. The 23.26 FPS result above was
+obtained with core 0.20.3 at the earlier larger sensor resolution.
+
+## Optimization pass — core 0.21.1
+
+Current-setting baseline: 0.20.4, 60.124 s, 3,098/3,098 foreground Presents,
+51.53 FPS, frame p50/p95/p99 18.15/27.17/33.76 ms. Game/relay/system CPU was
+151%/33%/30.9%. PresentMon 2.6.0 measured CPU-busy median 17.99 ms and GPU-busy
+median 6.79 ms (p99 33.10/9.67 ms). This is CPU-limited in the observed garage
+scene, rather than evidence that sensor shaders occupy the entire frame.
+The actual sensor sizes are now 640×360 front and 480×272 sides, so this baseline
+must not be compared directly with the earlier 1280×720/960×544 experiment.
+
+Shared output textures and producer/consumer fence values move image Map/row-copy
+work to the relay's independent D3D11 context. The producer never waits for that
+consumer; occupied slots skip capture opportunities. LiDAR keeps its small CPU
+readback. Full color and preview reuse the same private HDR input copy. WSL
+receives CDR bodies directly into reusable ROS buffers without a bulk-to-message
+copy. Relay copy timing now includes GPU readback and manifest decoding, unlike
+the earlier IPC-only copy timing.
+
+The first single-Present selection attempt delivered no frames; accounting for
+one preceding interval delivered 196/277. A two-interval submission window with
+earlier scheduling delivered 273/273 completed bundles, no capture failures or
+queue drops, and 546 submissions per sensor. Three opportunities were skipped
+while first-use GPU resources occupied the ring. Thus the tested optimization
+renders two sensor frames per 10 Hz capture, not one. Compile observation uses
+that same window; stale pass names are not cached across unknown graph lifetimes.
+
+The subsequent automatic-exposure run completed 269 bundles, with one pending at
+the stop snapshot, no failures or queue drops and one startup ring-busy skip.
+Actual Jazzy deserialization confirmed RGB8 and metric depth dimensions, matching
+RGB/depth/LiDAR/frame/exposure stamps, and exposure/render-frame correspondence.
+The three clouds contain 42,671/32,064/32,064 beams. Their valid XYZ norms differ
+from the recorded ranges by at most 0.00000763 m. Representative RGB was inspected.
+The four measured gains were 5.785/18.162/7.780/9.848 in this garage scene. This
+verifies the current scene, not a driven day-to-night transition.
+
+The shared-GPU stream also passed ROS capture stop/resume, full-output recovery,
+perception-only, three-LiDAR-only, and side depth+JPEG subscription changes. Each
+selective phase delivered at least 30 samples; no relay queue drops occurred.
+The scalar gain and existing FrameInfo schema remain available for compatibility;
+the new exposure message is a companion topic. Local captures and PresentMon CSVs
+are under `research/live/2026-10-09-optimization/`.
+
+The new perception-only stream was decoded as RGB8 320×180, step 960, with
+matching 320×180 CameraInfo and stamp. This is half the current front resolution;
+it is not a claim that every graphical scaling setting produces 640×360 previews.
+
+The optimized 60-second foreground comparisons at current and doubled sensor
+resolution are prepared and await the user's foreground-readiness reply. Short
+functional-run frame rates are not used as the final performance result.
+Native mirror slot preservation, attached-trailer rendering, day/night driving
+and actual WSL-IP changes remain outside the evidence from these stationary runs.

@@ -124,6 +124,47 @@ Both side views show the body and its actual metric depth. This changes submissi
 not the truck model or camera memory, and does not synthesize an occlusion mask.
 Other research callers can opt in with `camera_rig.ego_full_model=true`.
 
+## Capture and relay optimizations (core 0.21.1)
+
+The relay defaults to `shared_gpu: true`. Packed images stay in shared D3D11
+textures; the game signals a fence without waiting. A relay-owned device on the
+same adapter copies them into its staging buffers and reads them on its own
+worker. The fence releases a ring slot only after those GPU copies finish. The
+game still reads the small LiDAR buffers and 16-byte exposure samples. Setting
+`shared_gpu: false` retains the CPU image transport for comparison and diagnosis.
+The relay requires D3D11 Device5/Context4 and shared-fence support; failures end
+the run instead of silently changing its transport. Stop the relay before a DLL
+reload as before. Do not attach a generic OT_Bundles reader to a shared-GPU stream;
+the relay owns its GPU acknowledgement protocol.
+
+Continuous capture selects sensor views in a two-Present submission window for
+each requested frame. This accommodates the observed engine submission/execution
+overlap: one-window selection lost frames. At 10 Hz, sensors render about 20 Hz
+instead of every display frame. Compilation metadata is limited to those windows;
+GPU completion is polled at most once per Present. Non-stream rig use retains
+continuous rendering. This still borrows slots 0/1/2/5; private slots 6–8 and native
+HUD mirror preservation are not implemented by this optimization.
+
+`auto_exposure: true` is the default. Each camera samples log luminance on the GPU
+and adapts gain in log space (0.7 s brightening, 0.3 s darkening); its three capture
+slots share exposure history. Raw RGB and JPEG use the same gain. Set
+`auto_exposure: false` to use `color_gain` directly. The companion topic
+`/ets2/frame_info/exposure` (`ets2_msgs/FrameExposure`) carries camera names, gain
+and automatic/manual flags with the same stamp and render-frame number. Gain is
+NaN when that camera produced no color output. The original `FrameInfo` message
+is unchanged, preserving previously recorded bag schemas. Rebuild `ets2_msgs`
+and `ets2_bridge` before starting the new relay.
+
+For an uncompressed smaller input, subscribe to each camera's
+`/perception/image_raw` and `/perception/camera_info`. They use half the full
+image width/height and the corresponding scaled calibration. The GPU output is
+shared with JPEG preview, and a perception-only subscriber does not request full
+RGB/depth readback. These raw topics remain outside Foxglove's whitelist.
+
+The ROS receiver reads directly into reusable SerializedMessage buffers. CPU
+RGB conversion uses SSSE3 when available (with a scalar fallback), and LiDAR beam
+directions are reused until their angular configuration changes.
+
 Buffer reuse and direct packet serialization improved full-resolution foreground
 performance from **9.73 to 23.26 FPS**, with zero relay queue drops in the repeat.
 Frame p95 was still 61.50 ms; driving performance needs further improvement.

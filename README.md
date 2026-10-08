@@ -6,7 +6,7 @@ RenderDoc 실행 설정은 `research/ets2-mirrors.cap.example`을 `research/ets2
 
 게임 파일·추출 자산, 공식 SDK 원본, 다운로드한 도구·참고 저장소, 원시 메모리 기록·RenderDoc 캡처·GPU 배열, 빌드 결과와 로컬 백업은 Git에서 제외합니다. 문서의 `research/live/`·`research/findings/` 자료 링크 일부는 로컬 실험 자료를 가리키며 공개 저장소에는 없습니다. 빌드에는 별도 ETS2 설치와 [공식 SDK](https://modding.scssoft.com/wiki/Documentation/Engine/SDK)가 필요합니다. 의존 코드의 라이선스와 고정 revision은 [THIRD_PARTY](ot/THIRD_PARTY.md), 빌드 방법은 [ot 사용법](ot/README.md)에 있습니다. 문서·스크립트의 Windows 경로는 원래 연구 PC 기준이므로 자신의 설치 경로에 맞춰야 합니다.
 
-**2026-10-09 / core 0.20.4:** Phase 1은 FH5 외판에 배치한 전방 협각·광각과 좌우 포드의 측후방 4뷰입니다. 전방 1280×720 두 장, 측후방 960×544 두 장의 RGB·미터 깊이, GPU 가상 LiDAR 3개, 같은 pass의 차량 GT를 ROS 2 Jazzy로 전달합니다. Windows 공유메모리 → 두 TCP 연결 → WSL NAT 직접 연결을 사용하며, 구독에 따라 GPU readback을 선택합니다. Foxglove에는 축소 JPEG·점군·GT·상태를 제공하고, 실제 MCAP 기록과 ROS 재생도 확인했습니다.
+**2026-10-09 / core 0.21.1:** Phase 1은 FH5 외판에 배치한 전방 협각·광각과 좌우 포드의 측후방 4뷰입니다. 전방 1280×720 두 장, 측후방 960×544 두 장의 RGB·미터 깊이, GPU 가상 LiDAR 3개, 같은 pass의 차량 GT를 ROS 2 Jazzy로 전달합니다. 공유 GPU 텍스처·펜스로 영상 readback을 Windows 중계기로 옮겼고, 두 TCP 연결로 WSL NAT 주소에 직접 전달합니다. 구독에 따라 원본·축소 RGB·depth·라이다를 선택하며 GPU 자동 노출을 사용합니다. Foxglove에는 축소 JPEG·점군·GT·상태를 제공하고, 실제 MCAP 기록과 ROS 재생도 확인했습니다.
 
 전체 센서의 60초 전경 측정은 버퍼 재사용과 복사 감소 후 **9.73 → 23.26 FPS**로 개선됐지만, 프레임 시간 p95는 61.50 ms여서 주행 성능 개선이 필요합니다. 이 수치는 **0.20.3** 측정이며, 0.20.4에서는 원본 미러용 차체 부품 목록 때문에 생겼던 포드의 자차 외판 누락을 수정하고 양쪽 RGB·depth 복원을 확인했습니다. 실제 연결·굴절한 트레일러와 장시간 주행은 아직 검증하지 않았습니다. [브리지 사용법과 현재 제한](bridge/README.md), [실측 기록](docs/16_ros2_bridge.md), [센서 배치](docs/14_phase1_highway_sensors.md)를 참고하세요.
 
