@@ -1,0 +1,59 @@
+# Local research inputs and proprietary game extracts (keep on disk)
+/research/downloads/
+/research/tools/
+/research/sdk/
+/research/sources/
+/research/extracted/
+/research/findings/
+/research/ets2-mirrors.cap
+
+# Keep analysis programs, not their captures, process data or generated outputs.
+/research/live/**
+!/research/live/**/
+!/research/live/**/*.py
+
+# Machine-specific handoff notes; public documentation lives in docs/.
+/ETS2-Autonomy-Lab-STATIC-ANALYSIS.md
+/START_HERE.txt
+/WINDOWS_HANDOFF.md
+
+# Local build tools, outputs and installed-plugin backups
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.vs/
+/ot/.tools/
+/ot/build/
+/ot/dist/
+/ot/backup/
+*.dll
+*.exe
+*.pdb
+*.obj
+*.ilk
+*.lib
+
+# Captures, game assets and large data should not enter Git history.
+*.scs
+*.rdc
+*.dmp
+*.bin
+*.npy
+*.npz
+*.ply
+*.mcap
+*.zip
+*.7z
+*.log
+*.bak
+
+# Credentials and private local overrides
+.env
+.env.*
+!.env.example
+*.local.json
+*.local.toml
+*.pem
+*.key
+*.pfx

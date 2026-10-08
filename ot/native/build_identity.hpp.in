@@ -1,0 +1,4 @@
+#pragma once
+inline constexpr char OT_GAME_SHA256[] = "@OT_GAME_SHA256@";
+inline constexpr char OT_VERSION[] = "@PROJECT_VERSION@";
+inline constexpr char OT_SCHEMA[] = R"otschema(@OT_SCHEMA@)otschema";

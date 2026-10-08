@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "game_version": "1.61.1.1",
+  "sampling_phase": "sdk_frame_end",
+  "render_coherence": false,
+  "controller_pointer_rva": 57337560,
+  "player_offset": 12720,
+  "interior_offset": 32,
+  "mirror_array_offset": 5032,
+  "mirror_limit": 9,
+  "render_graph": {
+    "renderer_pointer_rva": 57153632,
+    "image_pool_offset": 56884824,
+    "manager_rva": 50658384,
+    "buffer_stride": 680,
+    "image_stride": 2032,
+    "image_id_offset": 1856,
+    "pool_stride": 168,
+    "resource_offset": 88,
+    "name_offset": 8,
+    "namespace_offset": 168,
+    "evidence": "docs/12_dx11_mirror_render_path.md"
+  },
+  "vehicle_physics": {
+    "actor_vehicle_offset": 24,
+    "vehicle_body_offset": 48,
+    "vehicle_origin_shift_offset": 1124,
+    "body_backend_offset": 248,
+    "body_member_offset": 88,
+    "member_origin_offset": 272,
+    "backend_vtable_rva": 38824272,
+    "backend_flags_offset": 380,
+    "buffered_mass_flag": 512,
+    "backend_buffer_offset": 112,
+    "buffer_mass_pose_offset": 224,
+    "backend_mass_pose_offset": 176,
+    "backend_world_pose_offset": 320,
+    "evidence": "research/live/2026-10-08-render-path/telemetry-physx-body-pose.txt"
+  },
+  "vehicle_fields": {
+    "pose_physics": {"type": "world_placement_wxyz", "writable": false},
+    "origin_shift": {"type": "float3", "writable": false}
+  },
+  "mirror_fields": {
+    "pose": {"offset": 64, "type": "cell_placement_wxyz", "coordinate_space": "unknown", "writable": false},
+    "projection": {"offset": 96, "type": "mat4_row_major", "writable": false}
+  },
+  "evidence": "docs/12_dx11_mirror_render_path.md",
+  "sdk_fields": [
+    {"name": "truck.world.placement", "type": "dplacement"},
+    {"name": "truck.local.velocity.linear", "type": "fvector"},
+    {"name": "truck.local.velocity.angular", "type": "fvector"},
+    {"name": "truck.local.acceleration.linear", "type": "fvector"},
+    {"name": "truck.speed", "type": "float"},
+    {"name": "truck.engine.rpm", "type": "float"},
+    {"name": "truck.input.steering", "type": "float"},
+    {"name": "truck.input.throttle", "type": "float"},
+    {"name": "truck.input.brake", "type": "float"}
+  ]
+}

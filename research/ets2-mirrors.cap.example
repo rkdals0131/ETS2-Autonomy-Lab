@@ -1,0 +1,27 @@
+{
+  "rdocCaptureSettings": 1,
+  "settings": {
+    "inject": false,
+    "autoStart": false,
+    "executable": "D:\\SteamLibrary\\steamapps\\common\\Euro Truck Simulator 2\\bin\\win_x64\\eurotrucks2.exe",
+    "workingDir": "D:\\SteamLibrary\\steamapps\\common\\Euro Truck Simulator 2\\bin\\win_x64",
+    "commandLine": "-rdevice dx11",
+    "environment": [],
+    "numQueuedFrames": 0,
+    "queuedFrameCap": 0,
+    "options": {
+      "allowVSync": true,
+      "allowFullscreen": true,
+      "apiValidation": false,
+      "captureCallstacks": true,
+      "captureCallstacksOnlyDraws": false,
+      "delayForDebugger": 0,
+      "verifyBufferAccess": false,
+      "hookIntoChildren": false,
+      "refAllResources": false,
+      "captureAllCmdLists": true,
+      "debugOutputMute": true,
+      "softMemoryLimit": 0
+    }
+  }
+}
