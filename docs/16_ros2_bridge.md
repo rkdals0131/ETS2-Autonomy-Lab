@@ -116,8 +116,9 @@ were reaped, and final state was Tier 0 / zero hooks. This exercised the same na
 panic operation as F11, not a physical keyboard press. WSL's IP was not changed in
 this experiment, and WSL was not globally shut down.
 
-Performance remediation, pause-containing replay, actual WSL-address-change
-recovery and ego/trailer rendering remain open.
+At this stage, performance remediation, pause-containing replay, actual
+WSL-address-change recovery and ego/trailer rendering were still open. Subsequent
+results are recorded below.
 
 Core 0.20.3 retains packed CPU storage across ring-slot reuse. Output descriptions,
 not retained buffer contents, select the current sample's channels. The relay
@@ -165,3 +166,31 @@ untested. Local outputs are under `ego-parts/` in the ROS run directory.
 The earlier fixed night gain (841.55) overexposed the current daylight scene.
 The body comparison was also captured with gain 1 for inspection. Automatic
 exposure is not implemented; local gain must still match the lighting conditions.
+
+## Pause transition and replay
+
+The first pause experiment exposed a real relay failure: menu rendering could
+finish a sensor bundle after the SDK paused, when `ego_at_compile` was no longer
+present. The relay now omits sensor bundles whose associated SDK sample is paused.
+State and clock publication remain independent; the missing pose is not fabricated.
+
+The corrected `bridge-pause-v3` MCAP contains 2,131 frame messages and 7,214 clock
+and vehicle-state messages. Its 409 paused states span 13.259 seconds of recorded
+receive time; all 408 clock messages within that interval have the same value.
+There are 61 frames after resume, no backwards clock steps and no sensor stamps
+without a matching frame message. Subscription startup/shutdown gives slightly
+different per-topic totals, so this is not a claim of equal topic counts.
+
+With all live publishers stopped, normal-speed `ros2 bag play` without `--clock`
+replayed the complete bag. A `use_sim_time=true` consumer received all 7,214 clocks,
+2,131 frame messages, 2,129 previews and preview calibrations, 2,130 GT messages,
+2,132 dynamic TF messages and the one static TF. The replayed pause lasted 13.25897
+wall-clock seconds with one clock value, followed by all 61 post-resume frames.
+Clock regressions and sensor stamps without frame correspondence were both zero.
+The consumer's final ROS clock equalled the last recorded clock. Local results are
+`pause3-mcap-decode.json` and `pause3-replay-result.json` in the ROS run directory.
+
+Actual trailer attachment is deferred because the user cannot connect one now.
+The tested body submission fix covers the current FH5 without a trailer. Actual
+WSL eth0 address changes and a foreground measurement with core 0.20.4 also remain
+unmeasured; the 23.26 FPS result above was obtained with core 0.20.3.

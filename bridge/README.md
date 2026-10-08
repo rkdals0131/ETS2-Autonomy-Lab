@@ -43,6 +43,9 @@ capture and rig, closes old queues, resolves eth0 again and opens a new session.
 The same game lease must still be alive; F11 cancels it and ends the relay.
 SDK timer restart also ends the relay so queued data cannot cross clock epochs.
 For DLL replacement, stop the relay first, reload the core, then restart the relay.
+During game pause, SDK state and the frozen simulation clock continue on the
+state connection. Sensor work compiled while paused is omitted; unpaused sensor
+frames resume without restarting the relay.
 
 The launch file starts both ROS and Foxglove with the shared-memory profile. Add
 `foxglove:=false` for a receive-only run. Other ROS consumers must source
@@ -106,8 +109,14 @@ of rendered depth, not ray casts; engine visibility omissions still apply.
 A full MCAP subsequently contained 79 aligned bundles and was played through
 Jazzy with all 79 image/depth/point/GT/frame/TF messages and all 147 original clock
 messages received. Foxglove WebSocket reception and ROS decoding of preview,
-point cloud, MarkerArray, TF and diagnostics also passed. Pause-containing replay
-and attached-trailer rendering still need verification.
+point cloud, MarkerArray, TF and diagnostics also passed. Attached/articulated
+trailer rendering remains unverified; the current body result is for the FH5
+without a trailer.
+
+A pause-containing MCAP was also replayed at normal speed without a generated
+clock. All 7,214 recorded clocks and 2,129 previews arrived; the 13.26-second pause
+and subsequent 61 sensor frames were preserved. Sensor stamps matched frame_info,
+and the simulation-time consumer's final clock matched the recording.
 
 Core 0.20.4 fixes missing ego body panels by using the engine's full body-part list
 for this rig's views, instead of the subset prepared for the original mirror.

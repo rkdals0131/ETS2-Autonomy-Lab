@@ -183,6 +183,10 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
     for(const auto& [file,bytes]:files) if(file.ends_with("_lidar.bin")) capacity+=bytes.size()/16*(36-16);
     packet.data.reserve(capacity);
     const auto& first=manifest.at("views").at(0).at("metadata").at("geometry_pass").at("sdk_at_compile");
+    // A menu transition can finish render work after the SDK has paused and
+    // stopped supplying the ego pose. State/clock continue on their own socket;
+    // these sensor samples do not describe a running simulation frame.
+    if(first.at("paused").get<bool>()) return {};
     const auto us=first.at("paused_simulation_time_us").get<uint64_t>();
     json cameras=json::array();
     struct Transform {std::string parent,frame;V position;Q rotation;};std::vector<Transform> transforms;
