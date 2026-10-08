@@ -209,7 +209,7 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
         context->CSSetShader(work.shader.Get(),nullptr,0);
         context->Dispatch((desc.Width+7)/8,(desc.Height+7)/8,1);
     }
-    if(!readback) {image.description=nullptr;image.pixels.clear();return;}
+    if(!readback) {image.description=nullptr;return;}
     if(!image.staging) {
         auto staging=desc;staging.Usage=D3D11_USAGE_STAGING;staging.BindFlags=0;staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
         check(device->CreateTexture2D(&staging,nullptr,&image.staging),"CreateTexture2D(pack staging)");++allocations_;
@@ -235,7 +235,7 @@ bool GpuPack::collect(ID3D11DeviceContext* context) {
             std::memcpy(image.pixels.data()+y*row,static_cast<const uint8_t*>(mapped.pData)+y*mapped.RowPitch,row);
         context->Unmap(image.staging.Get(),0);
     }
-    if(!lidar_pixels.empty()) {
+    if(!lidar_description.is_null()) {
         D3D11_MAPPED_SUBRESOURCE mapped{};
         const auto hr=context->Map(lidar_.staging.Get(),0,D3D11_MAP_READ,D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped);
         if(hr==DXGI_ERROR_WAS_STILL_DRAWING) return false;

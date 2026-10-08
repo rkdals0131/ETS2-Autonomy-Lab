@@ -95,17 +95,17 @@ RenderProbe::~RenderProbe() {
     for(auto* hook:hookset()) hook->reset();
     if(module_reference_) FreeLibrary(module_reference_);
 }
-void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool frame_timing) {
+void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool frame_timing,bool draw_metadata) {
     std::lock_guard lock(control_);
     if(mode!="observe" && mode!="rig") throw std::runtime_error("Render mode must be observe or rig");
     if(mode=="rig" && vehicle_metadata) throw std::runtime_error("Vehicle metadata requires observe mode");
     const auto selected=[&](const safetyhook::MidHook* hook) {
         if(hook==&rig_select_hook_ || hook==&rig_begin_hook_ || hook==&rig_end_hook_ || hook==&rig_dimensions_hook_) return true;
-        if(mode=="observe") return hook!=&draw_batch_hook_ || vehicle_metadata;
+        if(mode=="observe") return hook!=&draw_batch_hook_ || (vehicle_metadata && draw_metadata);
         return frame_timing && hook==&present_hook_;
     };
     const auto all=hookset();
-    if(accepting_ && std::all_of(all.begin(),all.end(),[&](auto* hook){return hook->enabled()==selected(hook);})) return;
+    if(accepting_ && vehicle_metadata_==vehicle_metadata && std::all_of(all.begin(),all.end(),[&](auto* hook){return hook->enabled()==selected(hook);})) return;
     if(GetModuleHandleW(L"renderdoc.dll"))
         throw std::runtime_error("RenderDoc is loaded; restart ETS2 normally before enabling ot render hooks");
     if(auto stream=stream_.load()) stream->stop();

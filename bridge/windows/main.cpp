@@ -117,19 +117,19 @@ public:
     }
     ~Mapping(){if(base_) UnmapViewOfFile(base_);}
     bool available() const {return base_!=nullptr;}
-    Bytes read() {
-        Bytes bytes;
+    bool read(Bytes& bytes) {
         if(bundles_) {
             ot::BundleSlot* oldest=nullptr;
             for(uint32_t i=0;i<ot::bundle_slots;++i) {
                 auto* slot=ot::bundle_slot(base_,capacity_,i);
                 if(InterlockedCompareExchange(&slot->state,2,2)==2 && (!oldest || slot->sequence<oldest->sequence)) oldest=slot;
             }
-            if(!oldest || InterlockedCompareExchange(&oldest->state,3,2)!=2) return bytes;
+            if(!oldest || InterlockedCompareExchange(&oldest->state,3,2)!=2) return false;
             struct Return {ot::BundleSlot* s;~Return(){InterlockedExchange(&s->state,0);}} release{oldest};
             if(oldest->length>capacity_) throw std::runtime_error("Invalid shared-memory slot length");
-            bytes.resize(oldest->length);std::memcpy(bytes.data(),oldest+1,bytes.size());return bytes;
+            bytes.resize(oldest->length);std::memcpy(bytes.data(),oldest+1,bytes.size());return true;
         }
+        bool copied=false;
         for(uint32_t i=0;i<(bundles_?ot::bundle_slots:ot::ring_slots);++i) {
             auto* slot=ot::bundle_slot(base_,capacity_,i);
             if(InterlockedCompareExchange(&slot->state,3,2)!=2) continue;
@@ -137,17 +137,26 @@ public:
             if(slot->length>capacity_) throw std::runtime_error("Invalid shared-memory slot length");
             if(slot->sequence<=sequence_) continue;
             // Latest ready bundle wins. The copied bytes are owned before the slot is returned.
-            bytes.resize(slot->length);std::memcpy(bytes.data(),slot+1,bytes.size());sequence_=slot->sequence;
+            bytes.resize(slot->length);std::memcpy(bytes.data(),slot+1,bytes.size());sequence_=slot->sequence;copied=true;
         }
-        return bytes;
+        return copied;
     }
 };
 template<class T> class LatestQueue {
     std::mutex mutex_;std::deque<T> queue_;
 public:
-    bool push(T value) {std::lock_guard lock(mutex_);bool dropped=queue_.size()==2;if(dropped) queue_.pop_front();queue_.push_back(std::move(value));return dropped;}
+    bool push(T value,T* retired=nullptr) {std::lock_guard lock(mutex_);bool dropped=queue_.size()==2;
+        if(dropped) {if(retired) *retired=std::move(queue_.front());queue_.pop_front();}queue_.push_back(std::move(value));return dropped;}
     bool pop(T& value) {std::lock_guard lock(mutex_);if(queue_.empty()) return false;value=std::move(queue_.front());queue_.pop_front();return true;}
     void clear() {std::lock_guard lock(mutex_);queue_.clear();}
+};
+// At most one buffer is copying, two are queued, and one is encoding. Return
+// their storage after use instead of zero-initializing a new 24 MB bundle.
+class ReadBuffers {
+    std::mutex mutex_;std::vector<Bytes> free_;
+public:
+    Bytes take() {std::lock_guard lock(mutex_);if(free_.empty()) return {};auto b=std::move(free_.back());free_.pop_back();return b;}
+    void put(Bytes b) {if(!b.capacity()) return;std::lock_guard lock(mutex_);free_.push_back(std::move(b));}
 };
 static json resolve_rig(json rig,const json& truck,const json& selected) {
     std::map<std::pair<std::string,int>,json> attributes;
@@ -222,7 +231,7 @@ int main(int argc,char** argv) {
         std::atomic<bool> capture_wanted{welcome.meta.value("capture",true)},capture_active{false};
         std::atomic<std::shared_ptr<const Demand>> demand{std::make_shared<const Demand>()};
         std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0};Latency latency,copy_time,encode_time,send_time;
-        LatestQueue<Bytes> read_queue;LatestQueue<Packet> send_queue;
+        LatestQueue<Bytes> read_queue;LatestQueue<Packet> send_queue;ReadBuffers read_buffers;
         Workers workers(state,bulk);
         workers.start([&]{while(workers.alive) {
             const auto p=receive_packet(state);if(p.meta.at("session")!=session) throw std::runtime_error("Stale control session");
@@ -232,9 +241,9 @@ int main(int argc,char** argv) {
         }});
         workers.start([&]{Mapping mapping(false);if(!mapping.available()) throw std::runtime_error("SDK shared state unavailable");
             auto fixed=static_messages(rig,patterns,session);send_packet(state,fixed.meta,fixed.data);
-            uint64_t diagnostic_time=0,last_stamp=0,last_frame=0;
-            while(workers.alive) {auto bytes=mapping.read();Packet packet{{{"session",session}}, {}};
-                if(!bytes.empty()) {
+            uint64_t diagnostic_time=0,last_stamp=0,last_frame=0;Bytes bytes;
+            while(workers.alive) {Packet packet{{{"session",session}}, {}};
+                if(mapping.read(bytes)) {
                     const auto sample=json::parse(bytes);const auto time=sample.at("paused_simulation_time_us").get<uint64_t>();
                     if(last_frame && (time<last_stamp || (sample.at("timer_flags").get<uint32_t>()&1)))
                         throw std::runtime_error("SDK clock restarted; restart relay for a new clock session");
@@ -245,14 +254,15 @@ int main(int argc,char** argv) {
                     {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}});diagnostic_time=ticks();}
                 packet.meta["ping_us"]=microseconds();send_packet(state,packet.meta,packet.data);std::this_thread::sleep_for(20ms);}
         });
-        workers.start([&]{std::unique_ptr<Mapping> mapping;while(workers.alive) {
+        workers.start([&]{std::unique_ptr<Mapping> mapping;Bytes bytes;while(workers.alive) {
             if(!mapping || !mapping->available()) mapping=std::make_unique<Mapping>(true);
-            if(mapping->available()) {const auto begin=microseconds();auto bytes=mapping->read();if(!bytes.empty()) {copy_time.add(begin);if(read_queue.push(std::move(bytes))) ++dropped;}}
+            if(mapping->available()) {if(bytes.empty()) bytes=read_buffers.take();const auto begin=microseconds();
+                if(mapping->read(bytes)) {copy_time.add(begin);Bytes retired;if(read_queue.push(std::move(bytes),&retired)) ++dropped;read_buffers.put(std::move(retired));}}
             std::this_thread::sleep_for(2ms);
         }});
         workers.start([&]{const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if(FAILED(hr)) throw std::runtime_error("COM worker initialization failed");
             struct ComEnd{~ComEnd(){CoUninitialize();}} com;
-            while(workers.alive) {Bytes bytes;if(read_queue.pop(bytes)) {const auto begin=microseconds();auto packet=sensor_messages(bytes,session,*demand.load(),dropped,stream_id,rig);encode_time.add(begin);if(!packet.data.empty() && send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
+            while(workers.alive) {Bytes bytes;if(read_queue.pop(bytes)) {const auto begin=microseconds();auto packet=sensor_messages(bytes,session,*demand.load(),dropped,stream_id,rig);encode_time.add(begin);read_buffers.put(std::move(bytes));if(!packet.data.empty() && send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
         });
         workers.start([&]{uint64_t heartbeat=0;while(workers.alive) {
             Packet packet;if(send_queue.pop(packet)) {if(packet.meta.at("native_stream")!=stream_id.load()) continue;const auto begin=microseconds();send_packet(bulk,packet.meta,packet.data);send_time.add(begin);++sent;bytes_sent+=packet.data.size();heartbeat=ticks();}
@@ -263,7 +273,7 @@ int main(int argc,char** argv) {
             if(capture_wanted.load()!=capture_active.load()) {
                 if(capture_wanted) {
                     owned({{"cmd","tier"},{"value",1}});
-                    owned({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true}});owned(rig);
+                    owned({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true},{"draw_metadata",false}});owned(rig);
                     stream_id=owned({{"cmd","stream"},{"action","start"},{"format","ros"},{"hz",10},{"duration",remaining-(ticks()-start)/1000.0},
                         {"color_gain",config.value("color_gain",1.0)},{"outputs",json::object()},{"lidars",patterns}}).at("stream_id").get<uint64_t>();
                     previous_demand.clear();capture_active=true;

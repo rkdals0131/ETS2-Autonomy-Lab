@@ -118,3 +118,16 @@ this experiment, and WSL was not globally shut down.
 
 Performance remediation, pause-containing replay, actual WSL-address-change
 recovery and ego/trailer rendering remain open.
+
+Core 0.20.3 retains packed CPU storage across ring-slot reuse. Output descriptions,
+not retained buffer contents, select the current sample's channels. The relay
+recycles shared-read buffers and writes large Image/PointCloud2 CDR messages into
+the final packet, retaining zeroed alignment padding. The bridge disables detailed
+draw-binding observation while retaining per-pass vehicle model poses; research
+callers keep the previous `draw_metadata=true` default.
+
+Actual Jazzy decoding passed for 82 full four-camera/three-LiDAR bundles after
+this change. A separate LiDAR-only → depth-only transition received 89 of each
+LiDAR and 111 depth messages. The first mixed functional run exhausted its capture
+duration before its final two subscription phases; those phases were repeated in
+the separate run. All owned processes exited and the plugin returned to Tier 0.

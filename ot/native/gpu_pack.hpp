@@ -25,7 +25,9 @@ public:
     void color(ID3D11DeviceContext1* context,ID3D11Texture2D* source,float gain,const std::string& camera,bool preview=false);
     bool collect(ID3D11DeviceContext* context);
     void release_gpu();
-    void clear() {for(auto& image:images) {image.description=nullptr;image.pixels.clear();} lidar_description=nullptr;lidar_pixels.clear();}
+    // Descriptions select this sample's outputs. Retain CPU storage so arming
+    // the next sample does not zero every pixel on the render thread.
+    void clear() {for(auto& image:images) image.description=nullptr;lidar_description=nullptr;}
     uint64_t allocations() const {return allocations_;}
     std::array<Image,3> images; // depth, color, preview
     json lidar_description;

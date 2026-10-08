@@ -3,7 +3,7 @@
 The first connection publishes captured RGB8, metric optical-depth 32FC1,
 CameraInfo, JPEG previews, render-camera TF, frame correspondence, `/clock`, SDK
 state and observed ego pose. Windows uses Fast-CDR 2.2.5 with explicit XCDRv1;
-Linux uses Jazzy GenericPublisher and the XML SHM transport profile. This is an
+Linux uses Jazzy GenericPublisher and the XML SHM transport profile. The
 implementation connects GPU LiDAR and per-pass vehicle GT, a cabin/base TF tree,
 subscription control and reconnection. Full-resolution foreground performance and
 the missing ego exterior are still blocking practical driving use.

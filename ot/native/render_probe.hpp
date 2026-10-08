@@ -11,7 +11,7 @@ namespace ot {
 class RenderProbe {
 public:
     RenderProbe()=default;
-    void enable(bool vehicle_metadata=false,const std::string& mode="observe",bool frame_timing=false);
+    void enable(bool vehicle_metadata=false,const std::string& mode="observe",bool frame_timing=false,bool draw_metadata=true);
     void disable() noexcept;
     // On failure the caller must retain this object and its module reference.
     // Code may still be returning through the hook; destruction would be unsafe.

@@ -350,7 +350,7 @@ json Runtime::command(const json& request) {
                     throw std::runtime_error("Render probe requires Tier 1, matching EXE, singleplayer_research, allow_tier1 and allow_render_probe");
                 try {
                     render_probe_->enable(request.value("vehicle_metadata",false),
-                        request.value("mode",std::string("observe")),request.value("frame_timing",false));
+                        request.value("mode",std::string("observe")),request.value("frame_timing",false),request.value("draw_metadata",true));
                 } catch(...) {
                     if(tier_==2 && !render_probe_->camera_rig(json::object()).at("enabled").get<bool>()) tier_=1;
                     throw;

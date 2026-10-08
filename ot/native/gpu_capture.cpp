@@ -422,9 +422,9 @@ void GpuCapture::append_bundle(json& views,std::vector<BundleBlob>& blobs) {
     views.push_back({{"camera",camera_},{"metadata",metadata_}});
     for(size_t i=0;i<images_.size();++i) if(!images_[i].pixels.empty())
         blobs.push_back({camera_,metadata_.at("images")[i].at("file").get<std::string>(),images_[i].pixels.data(),images_[i].pixels.size()});
-    for(const auto& image:packed_.images) if(!image.pixels.empty())
+    for(const auto& image:packed_.images) if(!image.description.is_null())
         blobs.push_back({camera_,image.description.at("file").get<std::string>(),image.pixels.data(),image.pixels.size()});
-    if(!packed_.lidar_pixels.empty()) blobs.push_back({camera_,packed_.lidar_description.at("file").get<std::string>(),packed_.lidar_pixels.data(),packed_.lidar_pixels.size()});
+    if(!packed_.lidar_description.is_null()) blobs.push_back({camera_,packed_.lidar_description.at("file").get<std::string>(),packed_.lidar_pixels.data(),packed_.lidar_pixels.size()});
     if(!geometry_depth_.pixels.empty())
         blobs.push_back({camera_,metadata_.at("geometry_gpu").at("depth_texture").at("file").get<std::string>(),
             geometry_depth_.pixels.data(),geometry_depth_.pixels.size()});
@@ -446,12 +446,12 @@ json GpuCapture::save() {
         output.write(reinterpret_cast<const char*>(images_[i].pixels.data()),images_[i].pixels.size());
         output.close();
     }
-    for(const auto& image:packed_.images) if(!image.pixels.empty()) {
+    for(const auto& image:packed_.images) if(!image.description.is_null()) {
         std::ofstream output(directory/image.description.at("file").get<std::string>(),std::ios::binary);
         output.exceptions(std::ios::badbit|std::ios::failbit);
         output.write(reinterpret_cast<const char*>(image.pixels.data()),image.pixels.size());output.close();
     }
-    if(!packed_.lidar_pixels.empty()) {
+    if(!packed_.lidar_description.is_null()) {
         std::ofstream output(directory/packed_.lidar_description.at("file").get<std::string>(),std::ios::binary);
         output.exceptions(std::ios::badbit|std::ios::failbit);
         output.write(reinterpret_cast<const char*>(packed_.lidar_pixels.data()),packed_.lidar_pixels.size());output.close();

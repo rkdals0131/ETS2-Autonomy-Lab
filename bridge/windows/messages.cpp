@@ -63,6 +63,18 @@ Packet static_messages(const json& rig,const json& patterns,const std::string& s
         c<<uint32_t(mounts.size());for(const auto& m:mounts) {header(c,0,"cabin");c<<m.name;pose(c,m.p,m.q);}
     }));return packet;
 }
+template<class F> void append_cdr(Packet& packet,const std::string& topic,size_t capacity,F write) {
+    const auto offset=packet.data.size();
+    // Value initialization also clears CDR alignment padding before it crosses
+    // the process boundary. Serialize into the final packet, without a copy.
+    packet.data.resize(offset+capacity);
+    eprosima::fastcdr::FastBuffer buffer(reinterpret_cast<char*>(packet.data.data()+offset),capacity);
+    Cdr c(buffer,Cdr::LITTLE_ENDIANNESS,eprosima::fastcdr::CdrVersion::XCDRv1);
+    c.set_encoding_flag(eprosima::fastcdr::EncodingAlgorithmFlag::PLAIN_CDR);
+    c.serialize_encapsulation();write(c);
+    const auto length=c.get_serialized_data_length();packet.data.resize(offset+length);
+    packet.meta["messages"].push_back({{"topic",topic},{"offset",offset},{"length",length}});
+}
 void add_diagnostics(Packet& packet,const json& values) {
     add_message(packet,"/diagnostics",cdr(8192,[&](Cdr& c){
         header(c,values.value("stamp_us",uint64_t{0}),"base_link");c<<uint32_t{1}<<uint8_t{0}
@@ -167,6 +179,9 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
         files.emplace(f.at("file").get<std::string>(),blobs.subspan(offset,n));
     }
     Packet packet{{{"session",session},{"frame",manifest.at("render_frame_id")},{"native_stream",stream_id}}, {}};
+    size_t capacity=input.size();
+    for(const auto& [file,bytes]:files) if(file.ends_with("_lidar.bin")) capacity+=bytes.size()/16*(36-16);
+    packet.data.reserve(capacity);
     const auto& first=manifest.at("views").at(0).at("metadata").at("geometry_pass").at("sdk_at_compile");
     const auto us=first.at("paused_simulation_time_us").get<uint64_t>();
     json cameras=json::array();
@@ -252,13 +267,19 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
             if(depth && desc.at("encoding")!="optical_depth_m_nan_invalid") throw std::runtime_error("ROS depth requires metric GPU output");
             const auto topic=base+(depth?"/depth/image_raw":"/image_raw");
             if(!preview && demand.contains(topic)) {
-                Bytes rgb;if(color) {rgb.resize(static_cast<size_t>(width)*height*3);for(size_t i=0,j=0;i<data.size();i+=4,j+=3) std::memcpy(rgb.data()+j,data.data()+i,3);}
-                auto pixels=color?std::span<const uint8_t>(rgb):data;
-                add_message(packet,topic,cdr(pixels.size()+512,[&](Cdr& c){header(c,us,frame);c<<height<<width<<std::string(color?"rgb8":"32FC1")<<uint8_t{0}<<uint32_t(width*(color?3:4))<<uint32_t(pixels.size());c.serialize_array(pixels.data(),pixels.size());}));
+                const size_t size=static_cast<size_t>(width)*height*(color?3:4);
+                append_cdr(packet,topic,size+512,[&](Cdr& c){
+                    header(c,us,frame);c<<height<<width<<std::string(color?"rgb8":"32FC1")<<uint8_t{0}<<uint32_t(width*(color?3:4))<<uint32_t(size);
+                    if(color) {
+                        auto* rgb=c.get_current_position();
+                        if(!c.jump(size)) throw std::runtime_error("Image exceeds CDR buffer");
+                        for(size_t i=0,j=0;i<data.size();i+=4,j+=3) std::memcpy(rgb+j,data.data()+i,3);
+                    } else c.serialize_array(data.data(),data.size());
+                });
             }
             if(preview && demand.contains(base+"/preview/image/compressed")) {
                 auto bytes=jpeg(data,width,height,width,height);
-                add_message(packet,base+"/preview/image/compressed",cdr(bytes.size()+512,[&](Cdr& c){header(c,us,frame);c<<std::string("rgb8; jpeg compressed bgr8")<<uint32_t(bytes.size());c.serialize_array(bytes.data(),bytes.size());}));
+                append_cdr(packet,base+"/preview/image/compressed",bytes.size()+512,[&](Cdr& c){header(c,us,frame);c<<std::string("rgb8; jpeg compressed bgr8")<<uint32_t(bytes.size());c.serialize_array(bytes.data(),bytes.size());});
                 add_message(packet,base+"/preview/camera_info",camera_info(us,frame,width,height,camera.at("projection_row_major"),vp,.5));
             }
         }
@@ -292,7 +313,15 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
         const uint32_t columns=desc.at("columns");const auto elevations=desc.at("elevations_deg").get<std::vector<double>>();
         const auto az=desc.at("azimuth_deg").get<std::array<double,3>>();const uint32_t count=desc.at("beam_count"),step=36;
         if(size_t(columns)*elevations.size()!=count) throw std::runtime_error("LiDAR beam grid does not match returns");
-        Bytes cloud(size_t(count)*step);const float nan=std::numeric_limits<float>::quiet_NaN();
+        append_cdr(packet,topic,size_t(count)*step+2048,[&](Cdr& c){
+        header(c,us,name);c<<uint32_t(elevations.size())<<columns<<uint32_t{10};
+        auto field=[&](const char* label,uint32_t offset,uint8_t datatype){c<<std::string(label)<<offset<<datatype<<uint32_t{1};};
+        field("x",0,7);field("y",4,7);field("z",8,7);field("range",12,7);field("beam_index",16,6);field("status",20,2);
+        field("source_camera",21,2);field("source_pixel_x",24,6);field("source_pixel_y",28,6);field("source_ray_error_deg",32,7);
+        c<<false<<step<<uint32_t(columns*step)<<uint32_t(count*step);
+        auto* cloud=reinterpret_cast<uint8_t*>(c.get_current_position());
+        if(!c.jump(size_t(count)*step)) throw std::runtime_error("PointCloud2 exceeds CDR buffer");
+        const float nan=std::numeric_limits<float>::quiet_NaN();
         struct Sample {float range;uint32_t status,pixel;float depth;};static_assert(sizeof(Sample)==16);
         for(uint32_t beam=0;beam<count;++beam) {
             const LidarSource* source=nullptr;Sample sample{nan,1,UINT32_MAX,nan};
@@ -300,7 +329,7 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
             const double angle=(az[0]+(beam%columns)*az[2])*std::numbers::pi/180,elevation=elevations[beam/columns]*std::numbers::pi/180;
             const V direction{std::cos(elevation)*std::cos(angle),std::cos(elevation)*std::sin(angle),std::sin(elevation)};
             std::array<float,4> xyzr{float(direction[0]*sample.range),float(direction[1]*sample.range),float(direction[2]*sample.range),sample.range};
-            auto* point=cloud.data()+size_t(beam)*step;std::memcpy(point,xyzr.data(),16);std::memcpy(point+16,&beam,4);
+            auto* point=cloud+size_t(beam)*step;std::memcpy(point,xyzr.data(),16);std::memcpy(point+16,&beam,4);
             point[20]=static_cast<uint8_t>(sample.status);point[21]=source?static_cast<uint8_t>(source->camera.back()-'0'):255;
             uint32_t x=UINT32_MAX,y=UINT32_MAX;float error=nan;
             if(source) {
@@ -316,13 +345,8 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
             }
             std::memcpy(point+24,&x,4);std::memcpy(point+28,&y,4);std::memcpy(point+32,&error,4);
         }
-        add_message(packet,topic,cdr(cloud.size()+2048,[&](Cdr& c){
-            header(c,us,name);c<<uint32_t(elevations.size())<<columns<<uint32_t{10};
-            auto field=[&](const char* label,uint32_t offset,uint8_t datatype){c<<std::string(label)<<offset<<datatype<<uint32_t{1};};
-            field("x",0,7);field("y",4,7);field("z",8,7);field("range",12,7);field("beam_index",16,6);field("status",20,2);
-            field("source_camera",21,2);field("source_pixel_x",24,6);field("source_pixel_y",28,6);field("source_ray_error_deg",32,7);
-            c<<false<<step<<uint32_t(columns*step)<<uint32_t(cloud.size());c.serialize_array(cloud.data(),cloud.size());c<<false;
-        }));
+        c<<false;
+        });
     }
     add_message(packet,"/tf",cdr(512+transforms.size()*256,[&](Cdr& c){c<<uint32_t(transforms.size());for(const auto& t:transforms) {header(c,us,t.parent);c<<t.frame;pose(c,t.position,t.rotation);}}));
     add_message(packet,"/ets2/frame_info",cdr(8192,[&](Cdr& c){
