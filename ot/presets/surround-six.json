@@ -1,0 +1,112 @@
+{
+  "views": [
+    {
+      "slot": 0,
+      "name": "front",
+      "basis": "chassis",
+      "position": [
+        0,
+        4,
+        -4
+      ],
+      "quaternion_wxyz": [
+        0.9975640502598242,
+        -0.0697564737441253,
+        0,
+        0
+      ],
+      "hfov_deg": 100,
+      "vfov_deg": 65
+    },
+    {
+      "slot": 1,
+      "name": "front_left",
+      "basis": "chassis",
+      "position": [
+        -2,
+        3,
+        -3
+      ],
+      "quaternion_wxyz": [
+        0.8639158094271043,
+        -0.06041087834083471,
+        0.49878202512991204,
+        0.034878236872062644
+      ],
+      "hfov_deg": 100,
+      "vfov_deg": 65
+    },
+    {
+      "slot": 2,
+      "name": "rear_left",
+      "basis": "chassis",
+      "position": [
+        -2,
+        3,
+        2
+      ],
+      "quaternion_wxyz": [
+        0.4987820251299122,
+        -0.03487823687206266,
+        0.8639158094271042,
+        0.0604108783408347
+      ],
+      "hfov_deg": 100,
+      "vfov_deg": 65
+    },
+    {
+      "slot": 3,
+      "name": "rear",
+      "basis": "chassis",
+      "position": [
+        0,
+        4,
+        4
+      ],
+      "quaternion_wxyz": [
+        0,
+        0,
+        0.9975640502598242,
+        0.0697564737441253
+      ],
+      "hfov_deg": 100,
+      "vfov_deg": 65
+    },
+    {
+      "slot": 4,
+      "name": "rear_right",
+      "basis": "chassis",
+      "position": [
+        2,
+        3,
+        2
+      ],
+      "quaternion_wxyz": [
+        -0.4987820251299119,
+        0.03487823687206264,
+        0.8639158094271043,
+        0.06041087834083471
+      ],
+      "hfov_deg": 100,
+      "vfov_deg": 65
+    },
+    {
+      "slot": 5,
+      "name": "front_right",
+      "basis": "chassis",
+      "position": [
+        2,
+        3,
+        -3
+      ],
+      "quaternion_wxyz": [
+        -0.8639158094271043,
+        0.06041087834083471,
+        0.49878202512991204,
+        0.034878236872062644
+      ],
+      "hfov_deg": 100,
+      "vfov_deg": 65
+    }
+  ]
+}

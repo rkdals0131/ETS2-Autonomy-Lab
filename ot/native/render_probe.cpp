@@ -14,6 +14,10 @@ constexpr uintptr_t hook_rva=0x2B3193;
 constexpr uintptr_t present_hook_rva=0x2BFEDA;
 constexpr uintptr_t compile_begin_rva=0x2B1B40,compile_end_rva=0x2B266A;
 constexpr uintptr_t draw_batch_rva=0x2E6243;
+constexpr uintptr_t rig_select_rva=0x5389CD,rig_begin_rva=0x538B11,rig_end_rva=0x538CE3;
+constexpr std::array<uint8_t,12> rig_select_signature={0x44,0x39,0xA9,0xC0,0x0A,0,0,0x76,0x05,0x83,0xFF,0x02};
+constexpr std::array<uint8_t,13> rig_begin_signature={0xBA,1,0,0,0,0x49,0x8B,0xCF,0xE8,0x42,0xAD,0xF5,0xFF};
+constexpr std::array<uint8_t,16> rig_end_signature={0x4C,0x8B,0xBC,0x24,0x28,0x02,0,0,0x45,0x33,0xED,0xFF,0xC5,0x83,0xFD,0x09};
 constexpr std::array<uint8_t,25> draw_batch_signature={
     0x8B,0x4C,0x24,0x40,0x4C,0x8D,0x05,0x02,0x4B,0xF3,0x01,
     0x48,0x8B,0x5D,0x7F,0xFF,0xC1,0x8B,0xC1,0x89,0x4C,0x24,0x40,0x48,0x3B};
@@ -52,7 +56,7 @@ uintptr_t find_target(std::span<const uint8_t> bytes_to_find,size_t adjustment,u
         throw std::runtime_error("Render hook signature does not resolve to the inspected call site");
     return found;
 }
-struct CodeRanges { std::array<std::pair<uintptr_t,uintptr_t>,11> ranges; };
+struct CodeRanges { std::array<std::pair<uintptr_t,uintptr_t>,17> ranges; };
 bool contains(const CodeRanges& ranges,DWORD64 ip) noexcept {
     for(const auto& [begin,end]:ranges.ranges) if(ip>=begin && ip<end) return true;
     return false;
@@ -137,6 +141,18 @@ void RenderProbe::enable(bool vehicle_metadata) {
             throw std::runtime_error("Cannot create draw binding observer");
         }
         draw_batch_hook_=std::move(*draw_result);
+        const std::array<std::tuple<safetyhook::MidHook*,uintptr_t,safetyhook::MidHookFn>,3> rig_hooks={{
+            {&rig_select_hook_,find_target(rig_select_signature,0,rig_select_rva),&rig_select_callback},
+            {&rig_begin_hook_,find_target(rig_begin_signature,0,rig_begin_rva),&rig_begin_callback},
+            {&rig_end_hook_,find_target(rig_end_signature,0,rig_end_rva),&rig_end_callback}}};
+        for(const auto& [destination,address,function]:rig_hooks) {
+            auto rig_result=safetyhook::MidHook::create(address,function,safetyhook::MidHook::StartDisabled);
+            if(!rig_result) {
+                for(auto* hook:hookset()) hook->reset();
+                throw std::runtime_error("Cannot create camera submission hook");
+            }
+            *destination=std::move(*rig_result);
+        }
         // A suspended external callee must not have a return address in a
         // trampoline without unwind metadata. Check the instructions themselves.
         ZydisDecoder decoder{};
@@ -177,19 +193,27 @@ void RenderProbe::disable() noexcept {
     try {
         std::lock_guard lock(control_);
         accepting_=false;
+        rig_.clear();
         vehicle_metadata_=false;
         frame_boundary_seen_=false;
         bool changed=false;
-        for(auto* hook:hookset()) if(hook->enabled()) {
+        for(auto* hook:hookset()) if(hook!=&rig_end_hook_ && hook->enabled()) {
             changed=true;
             if(!hook->disable()) last_error_="Render observer disable failed";
         }
         if(changed) log("Render probe disable requested for all hook sites");
+        // The private source copy lives until the engine has copied its pose
+        // and frustum. Keep the end callback until these submissions finish.
+        const auto deadline=GetTickCount64()+2000;
+        while((callbacks.load() || rig_.in_flight()) && GetTickCount64()<deadline) Sleep(1);
+        if(!callbacks.load() && !rig_.in_flight()) {
+            if(rig_end_hook_.enabled() && !rig_end_hook_.disable()) last_error_="Camera submission end hook disable failed";
+        } else last_error_="Camera submission still draining; payload must stay loaded";
         for(auto* camera:cameras()) camera->cancel();
     } catch(...) { accepting_=false; }
 }
 bool RenderProbe::quiescent() noexcept {
-    if(callbacks.load()) return false;
+    if(callbacks.load() || rig_.in_flight()) return false;
     CodeRanges ranges{};ranges.ranges[0]={module_begin_,module_end_};
     size_t range=1;
     for(const auto* hook:hookset()) {
@@ -269,6 +293,30 @@ void RenderProbe::compile_end_callback(safetyhook::Context& context) noexcept {
         self->compile_end_timing_.add(qpc_now()-start);
     }
     callbacks.fetch_sub(1);
+}
+void RenderProbe::rig_select_callback(safetyhook::Context& context) noexcept {
+    ++callbacks;
+    if(auto* self=observer.load();self && self->accepting_.load()) self->rig_.select(context);
+    --callbacks;
+}
+void RenderProbe::rig_begin_callback(safetyhook::Context& context) noexcept {
+    ++callbacks;
+    if(auto* self=observer.load();self && self->accepting_.load()) self->rig_.begin(context);
+    --callbacks;
+}
+void RenderProbe::rig_end_callback(safetyhook::Context&) noexcept {
+    ++callbacks;
+    if(auto* self=observer.load()) self->rig_.end();
+    --callbacks;
+}
+json RenderProbe::camera_rig(const json& request) {
+    std::lock_guard lock(control_);
+    if(request.contains("views") || request.contains("enabled")) {
+        if(request.value("enabled",true) && !rig_end_hook_.enabled())
+            throw std::runtime_error("Enable the render probe before configuring cameras");
+        return rig_.configure(request);
+    }
+    return rig_.status();
 }
 void RenderProbe::draw_batch_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
@@ -367,17 +415,18 @@ json RenderProbe::capture_views(const std::string& action,Transport* publisher,b
             if(phase=="armed" || phase=="waiting_gpu") throw std::runtime_error("A camera capture is already pending");
         }
         // Skip the interval already in progress so every requested view has a
-        // chance to render after all four requests have been armed.
+        // chance to render after every requested camera has been armed.
+        bundle_mask_=rig_.mask();if(!bundle_mask_) bundle_mask_=0x27;
         bundle_frame_=presents_.load()+2;
         published_bundle_=nullptr;
-        try {for(auto* camera:cameras()) camera->command("arm",bundle_frame_);}
+        try {for(auto* camera:capture_cameras()) camera->command("arm",bundle_frame_);}
         catch(...) {for(auto* camera:cameras()) camera->cancel();bundle_frame_=0;throw;}
     } else if(action=="cancel") {
         for(auto* camera:cameras()) camera->cancel();
         bundle_frame_=0;
     } else if(action!="status" && action!="save" && action!="save_partial" && action!="publish" && action!="publish_partial") throw std::runtime_error("Unknown camera bundle action");
     json views=json::array();bool ready=true,error=false,pending=false;
-    for(auto* camera:cameras()) {
+    for(auto* camera:capture_cameras()) {
         auto state=camera->command("status",0,metadata);const auto phase=state.at("phase");
         ready=ready && phase=="ready";error=error || phase=="error";
         pending=pending || phase=="armed" || phase=="waiting_gpu";
@@ -385,12 +434,12 @@ json RenderProbe::capture_views(const std::string& action,Transport* publisher,b
     }
     if(action=="save") {
         if(!bundle_frame_ || !ready) throw std::runtime_error("No complete camera bundle to save");
-        views=json::array();for(auto* camera:cameras()) views.push_back(camera->command("save"));
+        views=json::array();for(auto* camera:capture_cameras()) views.push_back(camera->command("save"));
     }
     if(action=="save_partial") {
         if(!bundle_frame_) throw std::runtime_error("No camera bundle was requested");
         views=json::array();
-        for(auto* camera:cameras()) {
+        for(auto* camera:capture_cameras()) {
             auto state=camera->command("status");
             views.push_back(state.at("phase")=="ready"?camera->command("save"):std::move(state));
         }
@@ -399,13 +448,14 @@ json RenderProbe::capture_views(const std::string& action,Transport* publisher,b
         if(!bundle_frame_ || pending || (!ready && action=="publish") || !publisher)
             throw std::runtime_error("Camera bundle is incomplete or still pending");
         if(!published_bundle_.is_null()) return published_bundle_;
+        json names=json::array();for(unsigned slot=0;slot<6;++slot) if(bundle_mask_&(1u<<slot)) names.push_back("mirror"+std::to_string(slot));
         json manifest={{"render_frame_id",bundle_frame_},{"observation_session_qpc",observation_session_},
-            {"complete",ready},{"requested_cameras",{"mirror0","mirror1","mirror2","mirror5"}},
+            {"complete",ready},{"requested_cameras",names},
             {"missing_views",json::array()},{"views",json::array()}};
         std::vector<BundleBlob> blobs;
         // control_ excludes arm/cancel/panic while these completed CPU spans
         // are copied. Render callbacks leave ready samples untouched.
-        for(auto* camera:cameras()) {
+        for(auto* camera:capture_cameras()) {
             const auto state=camera->command("status",0,false);
             if(state.at("phase")=="ready") camera->append_bundle(manifest["views"],blobs);
             else manifest["missing_views"].push_back({{"camera",state.at("camera")},
@@ -438,6 +488,7 @@ json RenderProbe::status() {
     const auto all=hookset();
     return {{"active",std::count_if(all.begin(),all.end(),[](auto* h){return h->enabled();})},
         {"vehicle_metadata_enabled",vehicle_metadata_.load()},
+        {"camera_rig",rig_.status()},
         {"callbacks_in_flight",callbacks.load()},
         {"qpc_frequency",qpc_frequency()},
         {"timing_scope","callback_body_elapsed; cumulative per module; excludes detour and counter bookkeeping"},
@@ -452,7 +503,10 @@ json RenderProbe::status() {
             {{"name","dx11.compile_pass_end"},{"tier",1},{"rva",compile_end_rva},{"enabled",compile_end_hook_.enabled()},
              {"timing",compile_end_timing_.snapshot()}},
             {{"name","dx11.prepare_draw_bindings"},{"tier",1},{"rva",draw_batch_rva},{"enabled",draw_batch_hook_.enabled()},
-             {"timing",draw_batch_timing_.snapshot()}}})},
+             {"timing",draw_batch_timing_.snapshot()}},
+            {{"name","camera.sensor_selection"},{"tier",2},{"rva",rig_select_rva},{"enabled",rig_select_hook_.enabled()}},
+            {{"name","camera.sensor_submission_begin"},{"tier",2},{"rva",rig_begin_rva},{"enabled",rig_begin_hook_.enabled()}},
+            {{"name","camera.sensor_submission_end"},{"tier",2},{"rva",rig_end_rva},{"enabled",rig_end_hook_.enabled()}}})},
         {"last_error",last_error_},{"render_coherent",false},{"capture",gpu_.command("status")},
         {"recent_bindings",entries}};
 }

@@ -41,7 +41,7 @@ private:
     scs_telemetry_init_params_v100_t api_;
     json schema_,config_=json::object(),values_=json::object(),registration_=json::object();
     std::string executable_hash_,gate_error_;
-    bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,paused_=true;
+    bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,allow_camera_rig_=false,paused_=true;
     std::mutex control_;
     std::atomic<int> tier_{0};
     uint64_t frame_=0,generation_=0;
@@ -61,6 +61,7 @@ void Runtime::initialize() {
     if(initial<0 || initial>1 || key<1 || key>254) throw std::runtime_error("Invalid initial_tier or panic_virtual_key");
     allow_tier1_=config_.value("allow_tier1",false) && config_.value("singleplayer_research",false);
     allow_render_probe_=config_.value("allow_render_probe",false);
+    allow_camera_rig_=config_.value("allow_camera_rig",false);
     render_probe_=std::make_unique<RenderProbe>();
     try {executable_hash_=sha256_file(module_path(nullptr)); gate_ok_=executable_hash_==OT_GAME_SHA256;}
     catch(const std::exception& e) {gate_error_=e.what();}
@@ -148,7 +149,7 @@ void Runtime::event(scs_event_t event,const void* data) {
             {"render_time_us",clock_.render_time},{"simulation_time_us",clock_.simulation_time},
             {"paused_simulation_time_us",clock_.paused_simulation_time},{"timer_flags",clock_.flags},
             {"tier",tier_.load()},{"sdk",values_}};
-        if(tier_==1 && !paused_) state["engine"]=engine_snapshot();
+        if(tier_>=1 && !paused_) state["engine"]=engine_snapshot();
         if(tier_==0) state.erase("engine");
         auto stored=std::make_shared<const json>(std::move(state));
         latest_.store(stored);
@@ -158,13 +159,14 @@ void Runtime::event(scs_event_t event,const void* data) {
 json Runtime::reload_permissions() {
     // Only the pipe worker calls this after initialization. Engine callbacks
     // consume the atomic tier; permissions never grant a higher tier implicitly.
-    panic();allow_tier1_=false;allow_render_probe_=false;
+    panic();allow_tier1_=false;allow_render_probe_=false;allow_camera_rig_=false;
     std::ifstream input(module_path(module).parent_path()/L"ot_config.json");
     if(!input) throw std::runtime_error("Cannot open ot_config.json; returned to Tier 0");
     json settings;input>>settings;
     if(!settings.is_object()) throw std::runtime_error("ot_config.json must be an object");
     allow_tier1_=settings.value("allow_tier1",false) && settings.value("singleplayer_research",false);
     allow_render_probe_=settings.value("allow_render_probe",false);
+    allow_camera_rig_=settings.value("allow_camera_rig",false);
     log("Permissions reloaded; tier=0, allow_tier1="+std::to_string(allow_tier1_));
     return {{"tier",0},{"internal_access_allowed",gate_ok_ && allow_tier1_},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_}};
@@ -217,15 +219,27 @@ json Runtime::command(const json& request) {
         {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","capture_mirrors","manual_dump","panic"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0},
-        {"field_writes",false},{"channels",registration_}};
+        {"field_writes",false},{"camera_rig",render_probe_->camera_rig(json::object())},{"channels",registration_}};
     if(cmd=="schema") return schema_;
     if(cmd=="reload_permissions") return reload_permissions();
     if(cmd=="hooks") return render_probe_->status();
     if(cmd=="frames") return render_probe_->frames(request.value("after_id",uint64_t(0)));
+    if(cmd=="camera_rig") {
+        std::lock_guard lock(control_);
+        if(request.contains("views") || request.contains("enabled")) {
+            const bool enabled=request.value("enabled",true);
+            if(enabled && (tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_ || !allow_camera_rig_))
+                throw std::runtime_error("Camera rig requires Tier 1 probe and allow_camera_rig permission");
+            auto result=render_probe_->camera_rig(request);
+            tier_=enabled?2:(tier_.load()?1:0);
+            return result;
+        }
+        return render_probe_->camera_rig(request);
+    }
     if(cmd=="capture_mirror5" || cmd=="capture_mirrors") {
         std::lock_guard lock(control_);
         const auto action=request.value("action",std::string("status"));
-        if(action=="arm" && (tier_!=1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_))
+        if(action=="arm" && (tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_))
             throw std::runtime_error("Mirror5 capture requires the permitted Tier 1 render probe");
         return cmd=="capture_mirrors"?render_probe_->capture_views(action,transport_.get(),request.value("metadata",true)):render_probe_->capture(action);
     }
@@ -233,10 +247,10 @@ json Runtime::command(const json& request) {
         std::lock_guard lock(control_);
         if(request.contains("enabled")) {
             if(request.at("enabled").get<bool>()) {
-                if(tier_!=1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_)
+                if(tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_)
                     throw std::runtime_error("Render probe requires Tier 1, matching EXE, singleplayer_research, allow_tier1 and allow_render_probe");
                 render_probe_->enable(request.value("vehicle_metadata",false));
-            } else render_probe_->disable();
+            } else {render_probe_->disable();if(tier_==2) tier_=1;}
         }
         return render_probe_->status();
     }
@@ -248,6 +262,7 @@ json Runtime::command(const json& request) {
             if(tier<0 || tier>1) throw std::runtime_error("Only Tier 0 and Tier 1 observation are implemented");
             if(tier && (!gate_ok_ || !allow_tier1_)) throw std::runtime_error("Tier 1 requires matching EXE, allow_tier1 and singleplayer_research in ot_config.json");
             if(!tier) render_probe_->disable();
+            else if(tier_==2) render_probe_->camera_rig({{"enabled",false}});
             tier_=tier;
         }
         return {{"tier",tier_.load()}};
@@ -262,7 +277,7 @@ json Runtime::command(const json& request) {
         if(field.starts_with("vehicle.")) {
             auto member=field.substr(8);
             if(!schema_["vehicle_fields"].contains(member)) throw std::runtime_error("Unknown vehicle field");
-            if(tier_!=1 || !state.contains("engine") || !state["engine"].contains("vehicle")) throw std::runtime_error("No Tier 1 vehicle sample available");
+            if(tier_<1 || !state.contains("engine") || !state["engine"].contains("vehicle")) throw std::runtime_error("No Tier 1 vehicle sample available");
             const auto& vehicle=state["engine"]["vehicle"];
             if(!vehicle.value("available",false)) return vehicle;
             return {{"value",vehicle.at(member)},{"frame_id",state["frame_id"]},{"phase",vehicle["phase"]}};
@@ -275,7 +290,7 @@ json Runtime::command(const json& request) {
             if(digits.empty() || digits.find_first_not_of("0123456789")!=std::string::npos) throw std::runtime_error("Invalid mirror index");
             const auto index=std::stoul(digits); const auto member=field.substr(close+2);
             if(!schema_["mirror_fields"].contains(member)) throw std::runtime_error("Unknown mirror field");
-            if(tier_!=1 || !state.contains("engine") || !state["engine"].value("available",false)) throw std::runtime_error("No Tier 1 engine sample available");
+            if(tier_<1 || !state.contains("engine") || !state["engine"].value("available",false)) throw std::runtime_error("No Tier 1 engine sample available");
             const auto& mirrors=state["engine"]["mirrors"];
             if(index>=mirrors.size() || !mirrors[index].value("available",false)) throw std::runtime_error("Mirror not present");
             return {{"value",mirrors[index].at(member)},{"frame_id",state["frame_id"]},{"phase",state["engine"]["phase"]}};

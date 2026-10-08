@@ -20,10 +20,13 @@ def main():
     probe = sub.add_parser("render_probe", help="Inspect or switch the Tier 1 render-call observer")
     probe.add_argument("mode", choices=("on", "off", "status"), default="status", nargs="?")
     probe.add_argument("--vehicles", action="store_true", help="With on: read vehicle model metadata at mirror pass compilation")
+    rig = sub.add_parser("camera_rig", help="Place up to six cameras; +X right, +Y up, -Z forward")
+    rig.add_argument("mode", choices=("status", "apply", "off"), default="status", nargs="?")
+    rig.add_argument("--config", help="JSON containing views with slot, basis, position, quaternion_wxyz and FOVs")
     sub.add_parser("capture_mirror5", help="One requested mirror5 GPU readback").add_argument(
         "action", choices=("arm", "status", "save", "cancel"), default="status", nargs="?")
     sub.add_parser("capture_mirrors", help="Request mirror 0/1/2/5 in one Present interval").add_argument(
-        "action", choices=("arm", "status", "save", "cancel"), default="status", nargs="?")
+        "action", choices=("arm", "status", "save", "save_partial", "publish", "publish_partial", "cancel"), default="status", nargs="?")
     record = sub.add_parser("record_mirror5", help="Record bounded mirror5 samples; restores Tier 0 on exit")
     record.add_argument("--hz", type=float, default=10.0)
     record.add_argument("--duration", type=float, required=True)
@@ -85,6 +88,21 @@ def main():
                     parser.error("--vehicles requires render_probe on")
                 options["vehicle_metadata"] = True
             result = client.request("render_probe", **options)
+        elif args.command == "camera_rig":
+            if args.mode == "apply":
+                if not args.config:
+                    parser.error("camera_rig apply requires --config")
+                with open(args.config, encoding="utf-8") as source:
+                    settings = json.load(source)
+                client.tier(1)
+                client.request("render_probe", enabled=True)
+                try:
+                    result = client.request("camera_rig", **settings)
+                except Exception:
+                    client.panic()
+                    raise
+            else:
+                result = client.request("camera_rig", **({"enabled": False} if args.mode == "off" else {}))
         elif args.command in ("capture_mirror5", "capture_mirrors"):
             result = client.request(args.command, action=args.action)
         else:

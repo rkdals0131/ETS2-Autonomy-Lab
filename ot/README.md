@@ -1,8 +1,44 @@
-# ot 0.8.4 — 네 미러 영상·깊이·차량 draw 상수
+# ot 0.10.0 — 자유 배치 6카메라
 
-> **확정:** SDK/IPC·내부 자차 pose 대조. mirror5 10 Hz 기록·네 미러 같은 Present 구간 수집. 0.8.0은 명령 구간을 통해 영상과 pass 기본 카메라 상태를 연결. 콘솔 없는 기능 DLL 교체, hook 시간 계측·내부 읽기 비용 감소도 실측.
-> **남은 검증:** draw별 상수 변경 범위·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
-> **다음:** draw별 변경 범위·월드 정합·AI 박스 대조, 주행 및 연속 데이터 전달.
+> **확정:** 기존 미러 슬롯 0–5를 임의 위치·회전·FOV의 센서로 전용했습니다. 서로 다른 샤시 상대 위치의 여섯 영상을 같은 Present 구간 27에서 수집했습니다. 월드 고정 카메라도 동작합니다.
+> **다음:** 센서 해상도 통일과 실시간 미리보기, 주행 중 갱신 및 메인 카메라 기준 가시성·LOD의 누락 해결. 저장 경로 최적화보다 실제 카메라 사용성을 우선합니다.
+
+### 자유 배치 리그 사용
+
+게임 옆 `ot_runtime/ot_config.json`의 `allow_camera_rig`, `allow_tier1`, `allow_render_probe`, `singleplayer_research`를 켜야 합니다. 저장소 기본 설정은 모두 꺼져 있습니다. 연구 PC에는 권한을 적용했으며 시작 상태는 계속 Tier 0입니다.
+
+프로젝트 루트에서 실행합니다. 콘솔 입력이나 게임 재실행은 필요 없습니다.
+
+```powershell
+.\ot\ot.cmd camera_rig apply --config .\ot\presets\surround-six.json
+.\ot\ot.cmd capture_mirrors arm
+.\ot\ot.cmd capture_mirrors status
+# phase가 ready이면 RGB·깊이·재질·카메라 상수 저장
+.\ot\ot.cmd capture_mirrors save
+.\ot\ot.cmd panic
+```
+
+`camera_rig apply`는 probe와 Tier 2 리그를 켭니다. `camera_rig off`는 기본 미러로 복귀하고 관측 hook은 유지합니다. `panic` 또는 F11은 리그와 여덟 hook을 모두 끕니다. `capture_mirrors`는 arm 때 설정된 리그 슬롯을 묶으며, 리그가 없으면 기존 0·1·2·5를 요청합니다.
+
+[surround-six.json](presets/surround-six.json)의 각 view에서 다음을 바꿉니다.
+
+- `slot`: 기존 출력 슬롯 0–5. 새 카메라 객체나 엔진 슬롯 확장은 필요하지 않습니다.
+- `basis`: `chassis`는 렌더 보간된 본체 기준, `world`는 절대 월드 좌표입니다. 캐빈 서스펜션과 운전석 시점은 상대 배치의 입력에 사용하지 않습니다.
+- `position`: XYZ. 샤시 기준 +X 오른쪽, +Y 위, -Z 앞입니다. 단위는 게임 길이 단위입니다.
+- `quaternion_wxyz`: 카메라에서 기준 좌표계로의 회전. 단위 회전은 -Z를 봅니다. yaw·pitch·roll을 함께 지정할 수 있습니다.
+- `hfov_deg`, `vfov_deg`: 가로·세로 FOV. 현재 출력 크기는 기존 미러 크기이므로 두 FOV와 원시 화면 비율을 별도로 취급합니다.
+
+![독립 배치한 여섯 카메라의 실제 RGB](../docs/images/surround-six-0.10.0.png)
+
+그림은 같은 Present 구간의 실제 RGB를 공통 노출과 FOV 비율로 표시한 것입니다. 원시 크기는 슬롯 순서대로 512×1024, 512×512, 512×1024, 512×512, 512×256, 512×256입니다. 이미지 flip은 하지 않았습니다. 원본 픽셀·DSV·재질은 그대로 보존합니다.
+
+구현은 `0x5389CD`에서 센서 요청 bit를 합치고, `0x538B11`에서 제출 함수의 RBX만 private camera 복사본으로 돌립니다. 엔진이 그 복사본의 pose/FOV로 렌더 카메라와 후보 선택 frustum을 만듭니다. 원래 미러 객체는 수정하지 않습니다. `0x538CE3`에서 사용 종료를 추적하며, 패닉·언로드는 복사본을 사용하는 호출이 끝날 때까지 종료 hook을 유지합니다. 카메라 생성자의 Z축 반회전을 보정해 일반적인 pinhole 좌표계를 제공합니다.
+
+임의 yaw/pitch/roll을 함께 넣은 월드 카메라의 요청 회전과 실제 pass 회전 차이는 최대 9.01e-8, 위치 차이는 4.70e-6 게임 길이 단위였습니다. 최종 6뷰는 서로 다른 위치·방향과 아래로 8° 기울어진 리그입니다. 원본은 로컬 `research/live/2026-10-08-camera-rig/world-oblique-corrected.json`, `surround-six-final.json`에 있습니다. 운전석 고개 조작·장시간 주행 시험과 원거리 객체 누락 측정은 아직 수행하지 않았습니다.
+
+CLI로 6뷰 리그를 적용한 상태에서 메타로더 `unload`/`load`도 실제 실행했습니다. private 제출 호출·여덟 hook의 임시 코드가 정리됐고, 새 모듈은 Tier 0·hook 0·SDK 9채널로 돌아왔습니다. 기존 FFB는 유지됐습니다. 기록은 로컬 `active-unload.json`입니다.
+
+0.9.0의 `OT_Bundles`는 선택적 공유 메모리 전달입니다. `publish` 후 `otpy.BundleReader`로 읽고 `otpy.bundles.save_bundle`로 Python에서 저장할 수 있습니다. `save_partial`/`publish_partial`은 누락 뷰를 명시한 진단 표본에만 사용하며 완전한 센서 묶음으로 간주하지 않습니다. 연속 GPU staging ring과 기록 CLI는 후순위입니다.
 
 ### 0.8.4 — 차량별 GPU 변환 상수
 
