@@ -9,6 +9,6 @@ if path.exists():
 path.write_text(json.dumps({
     "token": secrets.token_hex(32), "state_port": 17401, "bulk_port": 17400,
     "rig": "../../ot/presets/phase1-highway.json", "slots": [0],
-    "duration_s": 60, "color_gain": 841.55,
+    "duration_s": 60, "color_gain": 1.0, "auto_exposure": True, "shared_gpu": True,
 }, indent=2) + "\n", encoding="utf-8")
 print(path)

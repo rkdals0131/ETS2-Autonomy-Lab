@@ -28,6 +28,7 @@ private:
     void run() noexcept;
     void finish_slot(Slot& slot);
     std::array<Slot,3> slots_;
+    std::array<std::shared_ptr<ExposureState>,6> exposure_;
     CaptureOptions options_;
     std::atomic<std::shared_ptr<const CaptureOptions>> pending_options_;
     std::vector<unsigned> camera_indices_;

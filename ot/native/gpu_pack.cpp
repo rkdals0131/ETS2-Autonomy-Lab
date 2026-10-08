@@ -2,6 +2,7 @@
 #include "pack_depth.hpp"
 #include "pack_color.hpp"
 #include "gather_lidar.hpp"
+#include "auto_exposure.hpp"
 #include <set>
 #include <numbers>
 #include <stdexcept>
@@ -21,19 +22,19 @@ struct ComputeState {
     Com<ID3D11ComputeShader> shader;
     std::array<ID3D11ClassInstance*,D3D11_SHADER_MAX_INTERFACES> instances{};
     UINT instance_count=static_cast<UINT>(instances.size()),first{},count{};
-    std::array<ID3D11ShaderResourceView*,3> resources{};
+    std::array<ID3D11ShaderResourceView*,4> resources{};
     Com<ID3D11UnorderedAccessView> output;
     Com<ID3D11Buffer> constants;
     explicit ComputeState(ID3D11DeviceContext1* c):context(c) {
         context->CSGetShader(&shader,instances.data(),&instance_count);
-        context->CSGetShaderResources(0,3,resources.data());
+        context->CSGetShaderResources(0,4,resources.data());
         context->CSGetUnorderedAccessViews(0,1,&output);
         context->CSGetConstantBuffers1(0,1,&constants,&first,&count);
     }
     ~ComputeState() {
         ID3D11UnorderedAccessView* null_output{};
         context->CSSetUnorderedAccessViews(0,1,&null_output,nullptr);
-        context->CSSetShaderResources(0,3,resources.data());
+        context->CSSetShaderResources(0,4,resources.data());
         const UINT keep=UINT(-1);
         context->CSSetUnorderedAccessViews(0,1,output.GetAddressOf(),&keep);
         context->CSSetConstantBuffers1(0,1,constants.GetAddressOf(),&first,&count);
@@ -43,7 +44,30 @@ struct ComputeState {
     }
 };
 }
+void ExposureState::update(ID3D11DeviceContext1* context,ID3D11ShaderResourceView* source,float initial_gain) {
+    Com<ID3D11Device> current;context->GetDevice(&current);
+    if(current.Get()!=device.Get()) {*this=ExposureState{};device=current;}
+    if(!value) {
+        D3D11_BUFFER_DESC desc{};desc.ByteWidth=16;desc.Usage=D3D11_USAGE_DEFAULT;
+        desc.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_UNORDERED_ACCESS;desc.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;desc.StructureByteStride=16;
+        std::array<float,4> first{initial_gain,0,0,0};D3D11_SUBRESOURCE_DATA data{first.data(),0,0};
+        check(device->CreateBuffer(&desc,&data,&value),"Create exposure state");
+        check(device->CreateShaderResourceView(value.Get(),nullptr,&view),"Create exposure SRV");
+        check(device->CreateUnorderedAccessView(value.Get(),nullptr,&output),"Create exposure UAV");
+        desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;desc.MiscFlags=desc.StructureByteStride=0;
+        check(device->CreateBuffer(&desc,nullptr,&constants),"Create exposure constants");
+        check(device->CreateComputeShader(ot_auto_exposure,sizeof(ot_auto_exposure),nullptr,&shader),"Create exposure shader");
+    }
+    const auto now=qpc_now();const float dt=previous?static_cast<float>(std::min(1.0,double(now-previous)/qpc_frequency())):0;
+    previous=now;std::array<float,4> parameters{dt,0,0,0};
+    context->UpdateSubresource(constants.Get(),0,nullptr,parameters.data(),0,0);
+    ComputeState restore(context);
+    ID3D11ShaderResourceView* inputs[]{source,nullptr,nullptr,nullptr};
+    context->CSSetShaderResources(0,4,inputs);context->CSSetUnorderedAccessViews(0,1,output.GetAddressOf(),nullptr);
+    context->CSSetConstantBuffers(0,1,constants.GetAddressOf());context->CSSetShader(shader.Get(),nullptr,0);context->Dispatch(1,1,1);
+}
 void GpuPack::release_gpu() {
+    exposure_staging_.Reset();
     fence_handle_.reset();fence_.Reset();fence_value_=0;awaiting_reader_=false;
     lidar_=LidarWork{};
     for(auto& image:images) image.staging.Reset();
@@ -145,7 +169,7 @@ void GpuPack::depth(ID3D11DeviceContext1* context,ID3D11Texture2D* source,
     if(lidar) gather(context,lidar,*projection,vp,camera);
 }
 void GpuPack::color(ID3D11DeviceContext1* context,ID3D11Texture2D* source,float gain,const std::string& camera,bool preview) {
-    dispatch(context,{source,nullptr,nullptr},{gain,0,preview?2.0f:1.0f,0,0,0,0,0,0,0,0,0},preview?2:1,camera);
+    dispatch(context,{source,nullptr,nullptr},{gain,0,preview?2.0f:1.0f,exposure_?1.f:0.f,0,0,0,0,0,0,0,0},preview?2:1,camera);
 }
 void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*,3> sources,
                        const std::array<float,28>& values,unsigned kind,const std::string& camera,bool readback) {
@@ -187,6 +211,14 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
         }
         if(depth || !color_copied_) context->CopyResource(copies[i].Get(),sources[i]);
     }
+    if(!depth && !color_copied_ && exposure_) {
+        exposure_->update(context,views[0].Get(),values[0]);
+        if(!exposure_staging_) {
+            D3D11_BUFFER_DESC desc{};desc.ByteWidth=16;desc.Usage=D3D11_USAGE_STAGING;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+            check(device->CreateBuffer(&desc,nullptr,&exposure_staging_),"Create exposure staging");
+        }
+        context->CopyResource(exposure_staging_.Get(),exposure_->value.Get());
+    }
     if(!depth) color_copied_=true;
     auto desc=dimensions;if(kind==2) {desc.Width/=2;desc.Height/=2;}desc.Format=depth?DXGI_FORMAT_R32_FLOAT:DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_UNORDERED_ACCESS|D3D11_BIND_SHADER_RESOURCE;
@@ -216,8 +248,8 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
     context->UpdateSubresource(work.constants.Get(),0,nullptr,values.data(),0,0);
     {
         ComputeState restore(context);
-        ID3D11ShaderResourceView* inputs[]={views[0].Get(),views[1].Get(),views[2].Get()};
-        context->CSSetShaderResources(0,3,inputs);
+        ID3D11ShaderResourceView* inputs[]={views[0].Get(),views[1].Get(),views[2].Get(),!depth && exposure_?exposure_->view.Get():nullptr};
+        context->CSSetShaderResources(0,4,inputs);
         context->CSSetUnorderedAccessViews(0,1,work.uav.GetAddressOf(),nullptr);
         context->CSSetConstantBuffers(0,1,work.constants.GetAddressOf());
         context->CSSetShader(work.shader.Get(),nullptr,0);
@@ -261,6 +293,14 @@ json GpuPack::seal(ID3D11DeviceContext* context) {
         {"ready",fence_value_-1},{"released",fence_value_},{"adapter_low",description.AdapterLuid.LowPart},{"adapter_high",description.AdapterLuid.HighPart}};
 }
 bool GpuPack::collect(ID3D11DeviceContext* context) {
+    if(color_copied_ && exposure_) {
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        const auto hr=context->Map(exposure_staging_.Get(),0,D3D11_MAP_READ,D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped);
+        if(hr==DXGI_ERROR_WAS_STILL_DRAWING) return false;check(hr,"Map exposure");
+        std::array<float,4> values{};std::memcpy(values.data(),mapped.pData,sizeof(values));context->Unmap(exposure_staging_.Get(),0);
+        exposure_sample={{"automatic",true},{"linear_gain",values[0]},{"log_average_luminance",values[1]},{"target_gain",values[2]}};
+        for(unsigned kind:{1u,2u}) if(!images[kind].description.is_null()) images[kind].description["linear_gain"]=values[0];
+    }
     for(auto& image:images) {
         if(image.description.is_null() || shared_) continue;
         D3D11_MAPPED_SUBRESOURCE mapped{};

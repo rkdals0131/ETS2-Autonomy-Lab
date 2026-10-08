@@ -287,7 +287,7 @@ int main(int argc,char** argv) {
                     owned({{"cmd","tier"},{"value",1}});
                     owned({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true},{"draw_metadata",false}});owned(rig);
                     stream_id=owned({{"cmd","stream"},{"action","start"},{"format","ros"},{"shared_gpu",config.value("shared_gpu",true)},{"hz",10},{"duration",remaining-(ticks()-start)/1000.0},
-                        {"color_gain",config.value("color_gain",1.0)},{"outputs",json::object()},{"lidars",patterns}}).at("stream_id").get<uint64_t>();
+                        {"auto_exposure",config.value("auto_exposure",true)},{"color_gain",config.value("color_gain",1.0)},{"outputs",json::object()},{"lidars",patterns}}).at("stream_id").get<uint64_t>();
                     previous_demand.clear();capture_active=true;
                 } else {
                     stream_id=0;owned({{"cmd","tier"},{"value",0}});read_queue.clear();send_queue.clear();capture_active=false;
@@ -302,14 +302,15 @@ int main(int argc,char** argv) {
                     auto selected=json::array();
                     if(requested->contains(base_topic+"/image_raw")) selected.push_back("color");
                     if(requested->contains(base_topic+"/depth/image_raw")) selected.push_back("depth");
-                    if(requested->contains(base_topic+"/preview/image/compressed")) selected.push_back("preview");
-                    if(requested->contains(base_topic+"/camera_info") || requested->contains(base_topic+"/preview/camera_info") ||
-                       requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/objects") || requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/markers") || requested->contains("/tf") || requested->contains("/ets2/frame_info")) selected.push_back("metadata");
+                    if(requested->contains(base_topic+"/preview/image/compressed") || requested->contains(base_topic+"/perception/image_raw")) selected.push_back("preview");
+                    if(requested->contains(base_topic+"/camera_info") || requested->contains(base_topic+"/preview/camera_info") || requested->contains(base_topic+"/perception/camera_info") ||
+                       requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/objects") || requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/markers") || requested->contains("/tf") || requested->contains("/ets2/frame_info") || requested->contains("/ets2/frame_info/exposure")) selected.push_back("metadata");
                     const auto mirror="mirror"+std::to_string(slot);
                     if(patterns.contains(mirror) && requested->contains("/ets2/lidar/"+patterns.at(mirror).at("name").get<std::string>()+"/points")) selected.push_back("lidar");
                     if(!selected.empty()) outputs[mirror]=selected;
                 }
-                owned({{"cmd","stream"},{"action","update"},{"format","ros"},{"shared_gpu",config.value("shared_gpu",true)},{"color_gain",config.value("color_gain",1.0)},{"outputs",outputs},{"lidars",patterns}});
+                owned({{"cmd","stream"},{"action","update"},{"format","ros"},{"shared_gpu",config.value("shared_gpu",true)},
+                    {"auto_exposure",config.value("auto_exposure",true)},{"color_gain",config.value("color_gain",1.0)},{"outputs",outputs},{"lidars",patterns}});
                 previous_demand=*requested;
             }
             if(ticks()-report>=1000) {std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},

@@ -2,6 +2,7 @@
 Texture2D<float4> source : register(t0);
 Texture2D<float4> attributes : register(t1);
 Texture2D<uint4> material : register(t2);
+StructuredBuffer<float4> exposure : register(t3);
 cbuffer Parameters : register(b0) {
     float4 controls; // x: common linear RGB gain
     float4 viewport; // x, y, width, height
@@ -44,7 +45,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     rgb /= scale*scale;
     rgb = float3(isfinite(rgb.x) ? max(rgb.x, 0) : 0,
                  isfinite(rgb.y) ? max(rgb.y, 0) : 0,
-                 isfinite(rgb.z) ? max(rgb.z, 0) : 0) * controls.x;
+                 isfinite(rgb.z) ? max(rgb.z, 0) : 0) * (controls.w!=0?exposure[0].x:controls.x);
     rgb = saturate(1 - rcp(1 + rgb));
     float3 srgb = float3(rgb.x <= .0031308 ? 12.92*rgb.x : 1.055*pow(rgb.x, 1.0/2.4)-.055,
                         rgb.y <= .0031308 ? 12.92*rgb.y : 1.055*pow(rgb.y, 1.0/2.4)-.055,

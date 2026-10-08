@@ -138,7 +138,8 @@ inline std::vector<Topic> topics() {
         {"/diagnostics","diagnostic_msgs/msg/DiagnosticArray",true},
         {"/tf_static","tf2_msgs/msg/TFMessage",true,true},
         {"/tf","tf2_msgs/msg/TFMessage"},
-        {"/ets2/frame_info","ets2_msgs/msg/FrameInfo"}};
+        {"/ets2/frame_info","ets2_msgs/msg/FrameInfo"},
+        {"/ets2/frame_info/exposure","ets2_msgs/msg/FrameExposure"}};
     for(const auto* name:{"C_FN","C_FW","C_RL","C_RR"}) {
         const std::string base=std::string("/ets2/camera/")+name;
         result.push_back({base+"/image_raw","sensor_msgs/msg/Image"});
@@ -146,6 +147,8 @@ inline std::vector<Topic> topics() {
         result.push_back({base+"/camera_info","sensor_msgs/msg/CameraInfo"});
         result.push_back({base+"/preview/image/compressed","sensor_msgs/msg/CompressedImage"});
         result.push_back({base+"/preview/camera_info","sensor_msgs/msg/CameraInfo"});
+        result.push_back({base+"/perception/image_raw","sensor_msgs/msg/Image"});
+        result.push_back({base+"/perception/camera_info","sensor_msgs/msg/CameraInfo"});
         result.push_back({std::string("/ets2/ground_truth/")+name+"/objects","vision_msgs/msg/Detection3DArray"});
         result.push_back({std::string("/ets2/ground_truth/")+name+"/markers","visualization_msgs/msg/MarkerArray"});
     }

@@ -312,6 +312,8 @@ json Runtime::command(const json& request) {
             options.format=request.value("format",std::string(cmd=="stream"?"rgbd8":"raw"));
             options.color_gain=request.value("color_gain",1.0f);
             options.shared_gpu=request.value("shared_gpu",false);
+            options.auto_exposure=request.value("auto_exposure",false);
+            if(options.auto_exposure && cmd!="stream") throw std::runtime_error("Auto exposure requires a continuous stream");
             if(options.shared_gpu && (cmd!="stream" || options.format!="ros"))
                 throw std::runtime_error("Shared GPU output requires a ROS stream relay");
             if(request.contains("lidars")) for(const auto& item:request.at("lidars").items()) {

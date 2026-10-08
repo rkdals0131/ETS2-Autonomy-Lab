@@ -86,7 +86,7 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool
             throw std::runtime_error("A camera capture is already pending");
         release_sources();
         if(!packed_.reusable()) throw std::runtime_error("Shared GPU sample still belongs to the relay");
-        options_=options;packed_.clear();packed_.share(options.shared_gpu);
+        options_=options;packed_.clear();packed_.share(options.shared_gpu);packed_.exposure(options.exposure);
         for(auto& image:images_) image.pixels.clear();
         geometry_depth_.pixels.clear();
         for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
@@ -388,6 +388,10 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
         context->Unmap(geometry_depth_.staging.Get(),0);
     }
     if(options_.packed() && !packed_.collect(context)) return;
+    if(!packed_.exposure_sample.is_null()) {
+        metadata_["color_exposure"]=packed_.exposure_sample;
+        for(auto& desc:metadata_["images"]) if(desc.contains("linear_gain")) desc["linear_gain"]=packed_.exposure_sample.at("linear_gain");
+    }
     json constants_json=json::array();
     for(auto& sample:geometry_constants_) {
         if(!sample.bytes.empty()) {

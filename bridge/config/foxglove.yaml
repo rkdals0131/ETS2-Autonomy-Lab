@@ -7,6 +7,7 @@ foxglove_bridge:
       - '^/ets2/ground_truth/.*$'
       - '^/ets2/vehicle/state$'
       - '^/ets2/frame_info$'
+      - '^/ets2/frame_info/exposure$'
       - '^/tf$'
       - '^/tf_static$'
       - '^/clock$'

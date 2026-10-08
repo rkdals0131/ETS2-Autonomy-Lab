@@ -10,6 +10,15 @@ struct LidarPattern {
     std::vector<std::array<float,4>> directions;
 };
 std::shared_ptr<const LidarPattern> make_lidar_pattern(const json& config);
+struct ExposureState {
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> value,constants;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> output;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> shader;
+    uint64_t previous=0;
+    void update(ID3D11DeviceContext1* context,ID3D11ShaderResourceView* source,float initial_gain);
+};
 class GpuPack {
     template<class T> using Com=Microsoft::WRL::ComPtr<T>;
 public:
@@ -25,17 +34,19 @@ public:
     void color(ID3D11DeviceContext1* context,ID3D11Texture2D* source,float gain,const std::string& camera,bool preview=false);
     bool collect(ID3D11DeviceContext* context);
     void share(bool enabled) {shared_=enabled;}
+    void exposure(std::shared_ptr<ExposureState> value) {exposure_=std::move(value);}
     json seal(ID3D11DeviceContext* context);
     bool reusable() const {return !awaiting_reader_ || (fence_ && fence_->GetCompletedValue()>=fence_value_);}
     void abandon() {awaiting_reader_=false;}
     void release_gpu();
     // Descriptions select this sample's outputs. Retain CPU storage so arming
     // the next sample does not zero every pixel on the render thread.
-    void clear() {for(auto& image:images) image.description=nullptr;lidar_description=nullptr;color_copied_=false;}
+    void clear() {for(auto& image:images) image.description=nullptr;lidar_description=nullptr;color_copied_=false;exposure_sample=nullptr;}
     uint64_t allocations() const {return allocations_;}
     std::array<Image,3> images; // depth, color, preview
     json lidar_description;
     std::vector<uint8_t> lidar_pixels;
+    json exposure_sample;
 private:
     struct Work {
         std::array<Com<ID3D11Texture2D>,3> copies;
@@ -54,6 +65,8 @@ private:
     uint64_t allocations_=0;
     bool shared_=false,awaiting_reader_=false;
     bool color_copied_=false;
+    std::shared_ptr<ExposureState> exposure_;
+    Com<ID3D11Buffer> exposure_staging_;
     Com<ID3D11Fence> fence_;
     std::unique_ptr<Handle> fence_handle_;
     uint64_t fence_value_=0,fence_id_=0;

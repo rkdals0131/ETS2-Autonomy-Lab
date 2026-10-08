@@ -9,6 +9,7 @@ CaptureStream::CaptureStream(uint32_t mask,const CaptureOptions& options,double 
     stop_event_(CreateEventW(nullptr,TRUE,FALSE,nullptr)) {
     if(!stop_event_) throw std::runtime_error("Cannot create capture stream stop event");
     for(unsigned camera=0;camera<6;++camera) if(mask&(1u<<camera)) {
+        exposure_[camera]=std::make_shared<ExposureState>();
         const auto name="mirror"+std::to_string(camera);names_.push_back(name);camera_indices_.push_back(camera);
         for(auto& slot:slots_) slot.cameras.push_back(std::make_unique<GpuCapture>(name));
     }
@@ -108,6 +109,7 @@ void CaptureStream::run() noexcept {
                         uint32_t mask=0;
                         for(size_t i=0;i<available->cameras.size();++i) {
                             auto options=options_;options.products=options.outputs[camera_indices_[i]];
+                            options.exposure=options.auto_exposure?exposure_[camera_indices_[i]]:nullptr;
                             options.lidar_pattern=options.lidar()?options.lidar_patterns[camera_indices_[i]]:nullptr;
                             if(options.selective && !options.products) continue;
                             available->cameras[i]->command("arm",frame,false,options);mask|=1u<<camera_indices_[i];
@@ -125,6 +127,7 @@ void CaptureStream::run() noexcept {
         if(slot.active.exchange(false)) ++canceled_;
         for(auto& camera:slot.cameras) camera->cancel();
     }
+    for(auto& exposure:exposure_) if(exposure) *exposure=ExposureState{};
     {std::lock_guard lock(result_mutex_);reason_=reason;if(!error.empty()) error_=error;}
     ended_=qpc_now();running_=false;
 }

@@ -7,12 +7,27 @@
 #include <limits>
 #include <map>
 #include <numbers>
+#include <immintrin.h>
+#include <intrin.h>
 
 namespace bridge {
 using eprosima::fastcdr::Cdr;
 using V=std::array<double,3>;
 using M=std::array<double,9>;
 using Q=std::array<double,4>;
+static void pack_rgb(uint8_t* rgb,std::span<const uint8_t> rgba) {
+    static const bool ssse3=[] {int registers[4];__cpuid(registers,1);return (registers[2]&(1<<9))!=0;}();
+    size_t i=0,j=0;
+    if(ssse3) {
+        const auto mask=_mm_setr_epi8(0,1,2,4,5,6,8,9,10,12,13,14,-1,-1,-1,-1);
+        for(;i+16<=rgba.size();i+=16,j+=12) {
+            const auto packed=_mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(rgba.data()+i)),mask);
+            _mm_storel_epi64(reinterpret_cast<__m128i*>(rgb+j),packed);
+            const auto tail=_mm_cvtsi128_si32(_mm_srli_si128(packed,8));std::memcpy(rgb+j+8,&tail,4);
+        }
+    }
+    for(;i<rgba.size();i+=4,j+=3) std::memcpy(rgb+j,rgba.data()+i,3);
+}
 template<class F> Bytes cdr(size_t capacity,F write) {
     Bytes bytes(capacity);eprosima::fastcdr::FastBuffer buffer(reinterpret_cast<char*>(bytes.data()),bytes.size());
     Cdr c(buffer,Cdr::LITTLE_ENDIANNESS,eprosima::fastcdr::CdrVersion::XCDRv1);
@@ -196,7 +211,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
     // these sensor samples do not describe a running simulation frame.
     if(first.at("paused").get<bool>()) return {};
     const auto us=first.at("paused_simulation_time_us").get<uint64_t>();
-    json cameras=json::array();
+    json cameras=json::array();std::vector<float> gains;std::vector<bool> automatic;
     struct Transform {std::string parent,frame;V position;Q rotation;};std::vector<Transform> transforms;
     const auto& reference=manifest.at("views").at(0);
     const auto& pass=reference.at("metadata").at("geometry_pass");
@@ -228,6 +243,9 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         if(pass.at("sdk_at_compile").at("frame_id")!=first.at("frame_id")) throw std::runtime_error("Different SDK associations within one sensor bundle");
         if(camera.at("projection_modifier_flag").get<unsigned>()!=0) throw std::runtime_error("Unsupported modified camera projection");
         cameras.push_back(name);
+        float gain=std::numeric_limits<float>::quiet_NaN();
+        for(const auto& image:meta.at("images")) if(image.contains("linear_gain")) {gain=image.at("linear_gain");break;}
+        gains.push_back(gain);automatic.push_back(meta.contains("color_exposure") && meta.at("color_exposure").value("automatic",false));
         const auto& vp=meta.at("geometry_gpu").at("viewports").at(0);
         const auto rotation=matrix(camera.at("camera_rotation_row_major"));const auto origin=camera.at("camera_world_xyz").get<V>();
         const auto gt_topic="/ets2/ground_truth/"+name+"/objects";
@@ -277,15 +295,16 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
             if(!width || !height || data.size()!=static_cast<size_t>(width)*height*4 || desc.at("row_bytes")!=width*4)
                 throw std::runtime_error("Invalid packed image dimensions");
             if(depth && desc.at("encoding")!="optical_depth_m_nan_invalid") throw std::runtime_error("ROS depth requires metric GPU output");
-            const auto topic=base+(depth?"/depth/image_raw":"/image_raw");
-            if(!preview && demand.contains(topic)) {
-                const size_t size=static_cast<size_t>(width)*height*(color?3:4);
+            const bool rgb=!depth;
+            const auto topic=base+(depth?"/depth/image_raw":preview?"/perception/image_raw":"/image_raw");
+            if(demand.contains(topic)) {
+                const size_t size=static_cast<size_t>(width)*height*(rgb?3:4);
                 append_cdr(packet,topic,size+512,[&](Cdr& c){
-                    header(c,us,frame);c<<height<<width<<std::string(color?"rgb8":"32FC1")<<uint8_t{0}<<uint32_t(width*(color?3:4))<<uint32_t(size);
-                    if(color) {
+                    header(c,us,frame);c<<height<<width<<std::string(rgb?"rgb8":"32FC1")<<uint8_t{0}<<uint32_t(width*(rgb?3:4))<<uint32_t(size);
+                    if(rgb) {
                         auto* rgb=c.get_current_position();
                         if(!c.jump(size)) throw std::runtime_error("Image exceeds CDR buffer");
-                        for(size_t i=0,j=0;i<data.size();i+=4,j+=3) std::memcpy(rgb+j,data.data()+i,3);
+                        pack_rgb(reinterpret_cast<uint8_t*>(rgb),data);
                     } else c.serialize_array(data.data(),data.size());
                 });
             }
@@ -297,6 +316,8 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         }
         if(demand.contains(base+"/preview/camera_info") && !demand.contains(base+"/preview/image/compressed"))
             add_message(packet,base+"/preview/camera_info",camera_info(us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5));
+        if(demand.contains(base+"/perception/image_raw") || demand.contains(base+"/perception/camera_info"))
+            add_message(packet,base+"/perception/camera_info",camera_info(us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5));
         if(width && (demand.contains(base+"/camera_info") || demand.contains(base+"/image_raw") || demand.contains(base+"/depth/image_raw")))
             add_message(packet,base+"/camera_info",camera_info(us,frame,width,height,camera.at("projection_row_major"),vp,1));
     }
@@ -325,6 +346,18 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         const uint32_t columns=desc.at("columns");const auto elevations=desc.at("elevations_deg").get<std::vector<double>>();
         const auto az=desc.at("azimuth_deg").get<std::array<double,3>>();const uint32_t count=desc.at("beam_count"),step=36;
         if(size_t(columns)*elevations.size()!=count) throw std::runtime_error("LiDAR beam grid does not match returns");
+        // Beam directions are sensor configuration, independent of the truck's
+        // pose. Keep trigonometry out of the per-frame PointCloud2 loop.
+        struct Directions {std::array<double,3> az{};std::vector<double> elevations;std::vector<V> beams;};
+        thread_local std::map<std::string,Directions> beam_cache;
+        auto& directions=beam_cache[name];
+        if(directions.az!=az || directions.elevations!=elevations || directions.beams.size()!=count) {
+            directions.az=az;directions.elevations=elevations;directions.beams.resize(count);
+            for(uint32_t beam=0;beam<count;++beam) {
+                const double angle=(az[0]+(beam%columns)*az[2])*std::numbers::pi/180,elevation=elevations[beam/columns]*std::numbers::pi/180;
+                directions.beams[beam]={std::cos(elevation)*std::cos(angle),std::cos(elevation)*std::sin(angle),std::sin(elevation)};
+            }
+        }
         append_cdr(packet,topic,size_t(count)*step+2048,[&](Cdr& c){
         header(c,us,name);c<<uint32_t(elevations.size())<<columns<<uint32_t{10};
         auto field=[&](const char* label,uint32_t offset,uint8_t datatype){c<<std::string(label)<<offset<<datatype<<uint32_t{1};};
@@ -338,8 +371,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         for(uint32_t beam=0;beam<count;++beam) {
             const LidarSource* source=nullptr;Sample sample{nan,1,UINT32_MAX,nan};
             for(const auto& candidate:sources) {std::memcpy(&sample,candidate.data.data()+beam*16,16);if(sample.status!=1) {source=&candidate;break;}}
-            const double angle=(az[0]+(beam%columns)*az[2])*std::numbers::pi/180,elevation=elevations[beam/columns]*std::numbers::pi/180;
-            const V direction{std::cos(elevation)*std::cos(angle),std::cos(elevation)*std::sin(angle),std::sin(elevation)};
+            const auto& direction=directions.beams[beam];
             std::array<float,4> xyzr{float(direction[0]*sample.range),float(direction[1]*sample.range),float(direction[2]*sample.range),sample.range};
             auto* point=cloud+size_t(beam)*step;std::memcpy(point,xyzr.data(),16);std::memcpy(point+16,&beam,4);
             point[20]=static_cast<uint8_t>(sample.status);point[21]=source?static_cast<uint8_t>(source->camera.back()-'0'):255;
@@ -361,6 +393,12 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         });
     }
     add_message(packet,"/tf",cdr(512+transforms.size()*256,[&](Cdr& c){c<<uint32_t(transforms.size());for(const auto& t:transforms) {header(c,us,t.parent);c<<t.frame;pose(c,t.position,t.rotation);}}));
+    add_message(packet,"/ets2/frame_info/exposure",cdr(1024,[&](Cdr& c){
+        header(c,us,"world");c<<manifest.at("render_frame_id").get<uint64_t>();
+        c<<uint32_t(cameras.size());for(const auto& name:cameras) c<<name.get<std::string>();
+        c<<uint32_t(gains.size());c.serialize_array(gains.data(),gains.size());
+        c<<uint32_t(automatic.size());for(bool value:automatic) c<<value;
+    }));
     add_message(packet,"/ets2/frame_info",cdr(8192,[&](Cdr& c){
         header(c,us,"world");c<<session<<manifest.at("render_frame_id").get<uint64_t>()<<first.at("frame_id").get<uint64_t>();
         for(const auto* key:{"render_time_us","simulation_time_us","paused_simulation_time_us"}) c<<first.at(key).get<uint64_t>();

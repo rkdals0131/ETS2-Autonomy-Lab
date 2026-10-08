@@ -11,6 +11,8 @@ struct CaptureOptions {
     float color_gain=1;
     bool selective=false;
     bool shared_gpu=false;
+    bool auto_exposure=false;
+    std::shared_ptr<ExposureState> exposure;
     std::array<uint8_t,6> outputs{3,3,3,3,3,3}; // color=1, depth=2, preview=4, lidar=8, metadata=16
     uint8_t products=3;
     std::array<std::shared_ptr<const LidarPattern>,6> lidar_patterns;
