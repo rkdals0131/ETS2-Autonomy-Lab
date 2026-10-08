@@ -1,8 +1,10 @@
 #include "wire.hpp"
 #include <rclcpp/rclcpp.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 #include <ifaddrs.h>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 
@@ -27,8 +29,10 @@ static Socket listener(const std::string& ip,uint16_t port) {
         throw std::runtime_error("Cannot listen on "+ip+":"+std::to_string(port));
     return s;
 }
-static Socket accept_client(const Socket& server,bool state) {
+static Socket accept_client(const Socket& server,bool state,bool paired=false) {
+    const auto deadline=std::chrono::steady_clock::now()+3s;
     while(rclcpp::ok()) {
+        if(paired && std::chrono::steady_clock::now()>=deadline) throw TransportError("Bulk connection did not arrive");
         fd_set reads;FD_ZERO(&reads);FD_SET(server.id,&reads);timeval timeout{0,250000};
         if(select(server.id+1,&reads,nullptr,nullptr,&timeout)>0) {
             Socket s(accept(server.id,nullptr,nullptr));s.configure(state);return s;
@@ -40,6 +44,17 @@ int main(int argc,char** argv) {
     rclcpp::init(argc,argv);
     try {
         auto node=std::make_shared<rclcpp::Node>("ets2_bridge");
+        std::atomic<bool> capture_enabled{true};
+        auto capture_service=node->create_service<std_srvs::srv::SetBool>("/ets2/capture",
+            [&](const std_srvs::srv::SetBool::Request::SharedPtr request,std_srvs::srv::SetBool::Response::SharedPtr response) {
+                capture_enabled=request->data;response->success=true;
+                response->message="Capture request updated; F11 still requires restarting the Windows relay";
+            });
+        rclcpp::executors::SingleThreadedExecutor executor;executor.add_node(node);
+        struct Spin {rclcpp::Executor& executor;std::jthread thread;
+            explicit Spin(rclcpp::Executor& e):executor(e),thread([&e]{e.spin();}) {}
+            ~Spin(){executor.cancel();if(thread.joinable()) thread.join();}
+        } spin(executor);
         const auto config_path=node->declare_parameter<std::string>("config","");
         std::ifstream file(config_path);json config;file>>config;
         const auto token=config.at("token").get<std::string>();
@@ -77,18 +92,21 @@ int main(int argc,char** argv) {
                 auto hello=receive_packet(state);
                 if(hello.meta.value("token","")!=token || hello.meta.value("channel","")!="state") throw std::runtime_error("Pairing rejected");
                 const auto session=hello.meta.at("session").get<std::string>();
-                send_packet(state,{{"session",session},{"ready",true}});
-                auto bulk=accept_client(bulk_listener,false);
+                send_packet(state,{{"session",session},{"ready",true},{"capture",capture_enabled.load()}});
+                auto bulk=accept_client(bulk_listener,false,true);
                 hello=receive_packet(bulk);
                 if(hello.meta.value("token","")!=token || hello.meta.value("session","")!=session || hello.meta.value("channel","")!="bulk")
                     throw std::runtime_error("Bulk pairing rejected");
                 std::atomic<bool> alive{true};
-                std::atomic<uint64_t> echo{0},received{0};
+                std::atomic<uint64_t> received{0};std::mutex state_tx;
                 auto stop=[&]{alive=false;state.interrupt();bulk.interrupt();};
                 auto receive=[&](const Socket& socket,bool is_state) {
                     try {while(alive && rclcpp::ok()) {
                         auto p=receive_packet(socket);publish(p,is_state,session);
-                        if(is_state) echo=p.meta.value("ping",uint64_t{0});
+                        if(is_state && p.meta.contains("ping_us")) {
+                            std::lock_guard lock(state_tx);
+                            send_packet(state,{{"session",session},{"echo_us",p.meta.at("ping_us")}});
+                        }
                         else if(!p.data.empty()) ++received;
                     }} catch(const std::exception& e) {if(alive) std::cerr<<e.what()<<std::endl;}
                     stop();
@@ -99,7 +117,7 @@ int main(int argc,char** argv) {
                     while(alive && rclcpp::ok()) {
                         json demand=json::array();
                         for(const auto& [name,p]:pubs) if(p.publisher->get_subscription_count()>0) demand.push_back(name);
-                        send_packet(state,{{"session",session},{"demand",demand},{"capture",true},{"echo",echo.load()},{"received_bundles",received.load()}});
+                        {std::lock_guard lock(state_tx);send_packet(state,{{"session",session},{"demand",demand},{"capture",capture_enabled.load()},{"received_bundles",received.load()}});}
                         std::this_thread::sleep_for(200ms);
                     }
                 } catch(const std::exception& e) {std::cerr<<e.what()<<std::endl;}

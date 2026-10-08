@@ -7,6 +7,8 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <cerrno>
 #endif
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -22,6 +24,7 @@
 namespace bridge {
 using json=nlohmann::json;
 using Bytes=std::vector<uint8_t>;
+struct TransportError:std::runtime_error {using std::runtime_error::runtime_error;};
 #ifdef _WIN32
 using SocketId=SOCKET;
 constexpr SocketId invalid_socket=INVALID_SOCKET;
@@ -60,9 +63,29 @@ struct Socket {
 inline Socket connect_to(const std::string& ip,uint16_t port,bool state) {
     Socket s(socket(AF_INET,SOCK_STREAM,IPPROTO_TCP));s.configure(state);
     sockaddr_in address{};address.sin_family=AF_INET;address.sin_port=htons(port);
-    if(inet_pton(AF_INET,ip.c_str(),&address.sin_addr)!=1 ||
-       connect(s.id,reinterpret_cast<sockaddr*>(&address),sizeof(address))!=0)
-        throw std::runtime_error("Cannot connect to WSL "+ip+":"+std::to_string(port));
+    if(inet_pton(AF_INET,ip.c_str(),&address.sin_addr)!=1) throw std::runtime_error("Invalid WSL IPv4");
+#ifdef _WIN32
+    u_long nonblocking=1;ioctlsocket(s.id,FIONBIO,&nonblocking);
+#else
+    const auto flags=fcntl(s.id,F_GETFL,0);fcntl(s.id,F_SETFL,flags|O_NONBLOCK);
+#endif
+    if(connect(s.id,reinterpret_cast<sockaddr*>(&address),sizeof(address))!=0) {
+        fd_set writes,errors;FD_ZERO(&writes);FD_ZERO(&errors);FD_SET(s.id,&writes);FD_SET(s.id,&errors);timeval timeout{2,0};
+        const auto selected=select(static_cast<int>(s.id+1),nullptr,&writes,&errors,&timeout);
+        int error=0;
+#ifdef _WIN32
+        int size=sizeof(error);
+#else
+        socklen_t size=sizeof(error);
+#endif
+        if(selected<=0 || getsockopt(s.id,SOL_SOCKET,SO_ERROR,reinterpret_cast<char*>(&error),&size)!=0 || error)
+            throw TransportError("Cannot connect to WSL "+ip+":"+std::to_string(port));
+    }
+#ifdef _WIN32
+    nonblocking=0;ioctlsocket(s.id,FIONBIO,&nonblocking);
+#else
+    fcntl(s.id,F_SETFL,flags);
+#endif
     return s;
 }
 inline void transfer(const Socket& s,void* data,size_t size,bool write) {
@@ -75,7 +98,7 @@ inline void transfer(const Socket& s,void* data,size_t size,bool write) {
         const int flags=write?MSG_NOSIGNAL:0;
 #endif
         const auto n=write?send(s.id,p,count,flags):recv(s.id,p,count,flags);
-        if(n<=0) throw std::runtime_error(write?"TCP send ended or timed out":"TCP receive ended or timed out");
+        if(n<=0) throw TransportError(write?"TCP send ended or timed out":"TCP receive ended or timed out");
         p+=n;size-=n;
     }
 }
@@ -120,6 +143,7 @@ inline std::vector<Topic> topics() {
         result.push_back({base+"/preview/image/compressed","sensor_msgs/msg/CompressedImage"});
         result.push_back({base+"/preview/camera_info","sensor_msgs/msg/CameraInfo"});
         result.push_back({std::string("/ets2/ground_truth/")+name+"/objects","vision_msgs/msg/Detection3DArray"});
+        result.push_back({std::string("/ets2/ground_truth/")+name+"/markers","visualization_msgs/msg/MarkerArray"});
     }
     for(const auto* name:{"L_F","L_PL","L_PR"})
         result.push_back({std::string("/ets2/lidar/")+name+"/points","sensor_msgs/msg/PointCloud2"});

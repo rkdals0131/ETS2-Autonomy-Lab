@@ -82,5 +82,39 @@ An interrupted bundle reader is recovered under its exclusive mutex, and ready
 slots from an earlier native stream are discarded before attaching a new session.
 Runtime cleanup returned to Tier 0 with zero hooks and both owned processes exited.
 
-Complete cabin/base TF, MCAP replay/pause, reconnection, full-sensor foreground
-performance and ego-render correction remain open.
+## Full bridge and recovery — core 0.20.2
+
+The first full-resolution foreground window had 589 / 589 foreground Presents,
+9.73 FPS, frame p50 / p95 / p99 102.44 / 126.51 / 142.92 ms, game CPU 210.4%,
+relay CPU 174.0%, whole-system CPU 60.6%. There were no missing Present records.
+During the whole 70-second run the relay dropped 38 pending bundles; ROS received
+599 on each sensor topic. Status publish/ack round trip p95 was 3.27 ms, p99
+19.95 ms, maximum 60.24 ms. This is **not a usable driving performance result**.
+
+Pipeline timing was then added to diagnose the regression. A separate functional
+recovery run showed about 14 / 67 / 57 ms median shared copy / encode / TCP send;
+these stages have separate workers and overlap. Those timings are not a replacement
+foreground benchmark. Game GPU memory was 2.79 GB against a 7.61 GB budget.
+
+The cabin/base TF tree, static camera/LiDAR mounts, diagnostics and Foxglove
+MarkerArray presentation are implemented. Foxglove bridge 3.6 received 228 previews,
+point clouds, markers and dynamic TFs through its `foxglove.sdk.v1` endpoint. The
+whitelist advertised no raw RGB or depth topics. Saved WebSocket payloads were
+deserialized with actual Jazzy types. The desktop visualization UI itself was not
+automated.
+
+`bridge-full-v2` in the local WSL bag directory contains 79 complete sensor bundles.
+With live publishers stopped, ordinary `ros2 bag play` (no `--clock`) delivered all
+79 checked image/depth/LiDAR/GT/frame/TF messages and 147 recorded clock messages.
+Sensor stamps matched frame_info and the consumer used simulation time.
+
+`/ets2/capture` SetBool stop/resume restored Tier 0 and then resumed capture.
+Stopping only the owned ROS server restored Tier 0; restarting it caused a fresh
+eth0 lookup, new session and resumed delivery. A later panic canceled the game
+lease; a ROS resume request did not reactivate it. The relay exited, both servers
+were reaped, and final state was Tier 0 / zero hooks. This exercised the same native
+panic operation as F11, not a physical keyboard press. WSL's IP was not changed in
+this experiment, and WSL was not globally shut down.
+
+Performance remediation, pause-containing replay, actual WSL-address-change
+recovery and ego/trailer rendering remain open.

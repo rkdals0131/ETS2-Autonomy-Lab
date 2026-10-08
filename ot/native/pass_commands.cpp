@@ -308,6 +308,8 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
                     for(const auto* key:{"frame_id","truck_generation","paused","render_time_us","simulation_time_us",
                             "paused_simulation_time_us","timer_flags","sdk"}) sample[key]=sdk->at(key);
                     sample["association"]="last SDK frame_end before pass compilation";
+                    if(sdk->contains("engine") && sdk->at("engine").contains("vehicle"))
+                        result["ego_at_compile"]=sdk->at("engine").at("vehicle");
                 }
                 auto camera=camera_at_compile(pass,base);
                 if(vehicles && camera.at("available").get<bool>()) {

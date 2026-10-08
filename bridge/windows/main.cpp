@@ -23,7 +23,22 @@ struct Handle {
 };
 static std::atomic<bool> stopped{false};
 static BOOL WINAPI signal_handler(DWORD) {stopped=true;return TRUE;}
+static std::string uuid_string() {
+    GUID value{};if(FAILED(CoCreateGuid(&value))) throw std::runtime_error("Cannot create session ID");
+    wchar_t text[40];StringFromGUID2(value,text,40);char ascii[40];
+    if(!WideCharToMultiByte(CP_UTF8,0,text,-1,ascii,sizeof(ascii),nullptr,nullptr)) throw std::runtime_error("Cannot encode session ID");
+    return ascii;
+}
 static uint64_t ticks() {return GetTickCount64();}
+static uint64_t microseconds() {return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
+struct Latency {
+    std::mutex mutex;std::deque<double> values;
+    void add(uint64_t ping) {const double ms=(microseconds()-ping)/1000.0;std::lock_guard lock(mutex);if(values.size()==4096) values.pop_front();values.push_back(ms);}
+    json snapshot() {std::vector<double> v;{std::lock_guard lock(mutex);v.assign(values.begin(),values.end());}
+        if(v.empty()) return nullptr;std::sort(v.begin(),v.end());
+        return {{"samples",v.size()},{"p50_ms",v[(v.size()-1)/2]},{"p95_ms",v[(v.size()-1)*95/100]},{"p99_ms",v[(v.size()-1)*99/100]},{"max_ms",v.back()}};
+    }
+};
 static std::string wsl_address() {
     SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};HANDLE read_raw{},write_raw{};
     if(!CreatePipe(&read_raw,&write_raw,&sa,0)) throw std::runtime_error("Cannot query WSL address");
@@ -132,6 +147,7 @@ template<class T> class LatestQueue {
 public:
     bool push(T value) {std::lock_guard lock(mutex_);bool dropped=queue_.size()==2;if(dropped) queue_.pop_front();queue_.push_back(std::move(value));return dropped;}
     bool pop(T& value) {std::lock_guard lock(mutex_);if(queue_.empty()) return false;value=std::move(queue_.front());queue_.pop_front();return true;}
+    void clear() {std::lock_guard lock(mutex_);queue_.clear();}
 };
 static json resolve_rig(json rig,const json& truck,const json& selected) {
     std::map<std::pair<std::string,int>,json> attributes;
@@ -154,11 +170,15 @@ static json resolve_rig(json rig,const json& truck,const json& selected) {
     rig["views"]=views;rig["base_origin"]=origin;rig["enabled"]=true;rig["cmd"]="camera_rig";return rig;
 }
 struct Workers {
-    std::atomic<bool> alive{true};const Socket& state;const Socket& bulk;std::vector<std::jthread> threads;
+    std::atomic<bool> alive{true},network_failed{false},fatal{false};const Socket& state;const Socket& bulk;std::vector<std::jthread> threads;
     Workers(const Socket& a,const Socket& b):state(a),bulk(b) {}
     void stop(){alive=false;state.interrupt();bulk.interrupt();for(auto& t:threads) if(t.joinable()) t.join();}
     ~Workers(){stop();}
-    template<class F> void start(F f) {threads.emplace_back([this,f]{try{f();}catch(const std::exception& e){std::cerr<<e.what()<<std::endl;alive=false;state.interrupt();bulk.interrupt();}});}
+    template<class F> void start(F f) {threads.emplace_back([this,f]{
+        try{f();}
+        catch(const TransportError& e) {if(alive.exchange(false)) {network_failed=true;std::cerr<<e.what()<<std::endl;}state.interrupt();bulk.interrupt();}
+        catch(const std::exception& e) {if(alive.exchange(false)) {fatal=true;std::cerr<<e.what()<<std::endl;}state.interrupt();bulk.interrupt();}
+    });}
 };
 int main(int argc,char** argv) {
     SetConsoleCtrlHandler(signal_handler,TRUE);WSADATA winsock{};
@@ -175,7 +195,18 @@ int main(int argc,char** argv) {
         const auto patterns=lidar_patterns(rig,lidar_profile);
         const auto duration=config.value("duration_s",60.0);
         if(!std::isfinite(duration) || duration<=0) throw std::runtime_error("duration_s must be positive");
-        GUID uuid{};CoCreateGuid(&uuid);wchar_t wide[40];StringFromGUID2(uuid,wide,40);std::wstring w(wide);const std::string session(w.begin(),w.end());
+        const auto owner=uuid_string();
+        command({{"cmd","lease"},{"action","claim"},{"owner",owner}});
+        struct Lease {std::string owner;~Lease(){try{command({{"cmd","lease"},{"action","release"},{"owner",owner}});}catch(const std::exception& e){std::cerr<<"Lease cleanup: "<<e.what()<<std::endl;}}} lease{owner};
+        std::atomic<bool> lease_ok{true};
+        std::jthread keepalive([&](std::stop_token stop){while(!stop.stop_requested()) {
+            try {command({{"cmd","lease"},{"action","heartbeat"},{"owner",owner}});}
+            catch(const std::exception& e) {std::cerr<<e.what()<<std::endl;lease_ok=false;break;}
+            for(int i=0;i<10 && !stop.stop_requested();++i) std::this_thread::sleep_for(50ms);
+        }});
+        const auto owned=[&](json request){request["owner"]=owner;return command(std::move(request));};
+        const auto run=[&](double remaining) {
+        const auto session=uuid_string();
         const auto ip=wsl_address();std::cout<<"WSL direct IP "<<ip<<"; session "<<session<<std::endl;
         auto state=connect_to(ip,config.value("state_port",17401),true),bulk=connect_to(ip,config.value("bulk_port",17400),false);
         send_packet(state,{{"token",token},{"session",session},{"channel","state"}});
@@ -185,42 +216,63 @@ int main(int argc,char** argv) {
         const auto acquired=reader.h?WaitForSingleObject(reader.h,0):WAIT_FAILED;
         if(acquired!=WAIT_OBJECT_0 && acquired!=WAIT_ABANDONED) throw std::runtime_error("Another bundle reader is active");
         struct ReaderEnd {HANDLE h;~ReaderEnd(){ReleaseMutex(h);}} reader_end{reader.h};
-        command({{"cmd","lease"},{"action","claim"},{"owner",session}});
-        struct Lease {std::string owner;~Lease(){try{command({{"cmd","lease"},{"action","release"},{"owner",owner}});}catch(const std::exception& e){std::cerr<<"Lease cleanup: "<<e.what()<<std::endl;}}} lease{session};
-        command({{"cmd","tier"},{"value",1}});
-        command({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true}});command(rig);
-        const auto stream_id=command({{"cmd","stream"},{"action","start"},{"format","ros"},{"hz",10},{"duration",duration},{"color_gain",config.value("color_gain",1.0)},{"outputs",json::object()},{"lidars",patterns}}).at("stream_id").get<uint64_t>();
+        if(!lease_ok || stopped) return false;
+        struct Idle {decltype(owned)& control;~Idle(){try{control({{"cmd","tier"},{"value",0}});}catch(...) {}}} idle{owned};
+        std::atomic<uint64_t> stream_id{0};
+        std::atomic<bool> capture_wanted{welcome.meta.value("capture",true)},capture_active{false};
         std::atomic<std::shared_ptr<const Demand>> demand{std::make_shared<const Demand>()};
-        std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0},echo_ms{0};
+        std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0};Latency latency,copy_time,encode_time,send_time;
         LatestQueue<Bytes> read_queue;LatestQueue<Packet> send_queue;
         Workers workers(state,bulk);
         workers.start([&]{while(workers.alive) {
             const auto p=receive_packet(state);if(p.meta.at("session")!=session) throw std::runtime_error("Stale control session");
-            demand.store(std::make_shared<const Demand>(p.meta.at("demand").get<Demand>()));
-            if(!p.meta.value("capture",true)) throw std::runtime_error("Capture stopped by ROS consumer");
-            const auto echo=p.meta.value("echo",uint64_t{0});if(echo) echo_ms=ticks()-echo;
+            if(p.meta.contains("demand")) demand.store(std::make_shared<const Demand>(p.meta.at("demand").get<Demand>()));
+            if(p.meta.contains("capture")) capture_wanted=p.meta.at("capture").get<bool>();
+            const auto echo=p.meta.value("echo_us",uint64_t{0});if(echo) latency.add(echo);
         }});
         workers.start([&]{Mapping mapping(false);if(!mapping.available()) throw std::runtime_error("SDK shared state unavailable");
-            while(workers.alive) {auto bytes=mapping.read();auto packet=bytes.empty()?Packet{{{"session",session}}, {}}:state_messages(json::parse(bytes),session,base);
-                packet.meta["ping"]=ticks();send_packet(state,packet.meta,packet.data);std::this_thread::sleep_for(20ms);}
+            auto fixed=static_messages(rig,patterns,session);send_packet(state,fixed.meta,fixed.data);
+            uint64_t diagnostic_time=0,last_stamp=0,last_frame=0;
+            while(workers.alive) {auto bytes=mapping.read();Packet packet{{{"session",session}}, {}};
+                if(!bytes.empty()) {
+                    const auto sample=json::parse(bytes);const auto time=sample.at("paused_simulation_time_us").get<uint64_t>();
+                    if(last_frame && (time<last_stamp || (sample.at("timer_flags").get<uint32_t>()&1)))
+                        throw std::runtime_error("SDK clock restarted; restart relay for a new clock session");
+                    last_frame=sample.at("frame_id");last_stamp=time;packet=state_messages(sample,session,base);
+                }
+                if(ticks()-diagnostic_time>=1000) {add_diagnostics(packet,{{"stamp_us",last_stamp},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
+                    {"queue_dropped",dropped.load()},{"capture_active",capture_active.load()},{"status_publish_roundtrip",latency.snapshot()},
+                    {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}});diagnostic_time=ticks();}
+                packet.meta["ping_us"]=microseconds();send_packet(state,packet.meta,packet.data);std::this_thread::sleep_for(20ms);}
         });
         workers.start([&]{std::unique_ptr<Mapping> mapping;while(workers.alive) {
             if(!mapping || !mapping->available()) mapping=std::make_unique<Mapping>(true);
-            if(mapping->available()) {auto bytes=mapping->read();if(!bytes.empty() && read_queue.push(std::move(bytes))) ++dropped;}
+            if(mapping->available()) {const auto begin=microseconds();auto bytes=mapping->read();if(!bytes.empty()) {copy_time.add(begin);if(read_queue.push(std::move(bytes))) ++dropped;}}
             std::this_thread::sleep_for(2ms);
         }});
         workers.start([&]{const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if(FAILED(hr)) throw std::runtime_error("COM worker initialization failed");
             struct ComEnd{~ComEnd(){CoUninitialize();}} com;
-            while(workers.alive) {Bytes bytes;if(read_queue.pop(bytes)) {auto packet=sensor_messages(bytes,session,*demand.load(),dropped,stream_id);if(!packet.data.empty() && send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
+            while(workers.alive) {Bytes bytes;if(read_queue.pop(bytes)) {const auto begin=microseconds();auto packet=sensor_messages(bytes,session,*demand.load(),dropped,stream_id,rig);encode_time.add(begin);if(!packet.data.empty() && send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
         });
         workers.start([&]{uint64_t heartbeat=0;while(workers.alive) {
-            Packet packet;if(send_queue.pop(packet)) {send_packet(bulk,packet.meta,packet.data);++sent;bytes_sent+=packet.data.size();heartbeat=ticks();}
+            Packet packet;if(send_queue.pop(packet)) {if(packet.meta.at("native_stream")!=stream_id.load()) continue;const auto begin=microseconds();send_packet(bulk,packet.meta,packet.data);send_time.add(begin);++sent;bytes_sent+=packet.data.size();heartbeat=ticks();}
             else {if(ticks()-heartbeat>250) {send_packet(bulk,{{"session",session}});heartbeat=ticks();}std::this_thread::sleep_for(2ms);}
         }});
-        const auto start=ticks();uint64_t heartbeat=0,report=0;Demand previous_demand;
-        while(workers.alive && !stopped && ticks()-start<duration*1000) {
+        const auto start=ticks();uint64_t report=0;Demand previous_demand;
+        while(workers.alive && !stopped && lease_ok && ticks()-start<remaining*1000) {
+            if(capture_wanted.load()!=capture_active.load()) {
+                if(capture_wanted) {
+                    owned({{"cmd","tier"},{"value",1}});
+                    owned({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true}});owned(rig);
+                    stream_id=owned({{"cmd","stream"},{"action","start"},{"format","ros"},{"hz",10},{"duration",remaining-(ticks()-start)/1000.0},
+                        {"color_gain",config.value("color_gain",1.0)},{"outputs",json::object()},{"lidars",patterns}}).at("stream_id").get<uint64_t>();
+                    previous_demand.clear();capture_active=true;
+                } else {
+                    stream_id=0;owned({{"cmd","tier"},{"value",0}});read_queue.clear();send_queue.clear();capture_active=false;
+                }
+            }
             const auto requested=demand.load();
-            if(*requested!=previous_demand) {
+            if(capture_active && *requested!=previous_demand) {
                 json outputs=json::object();
                 const std::map<int,std::string> camera_names{{0,"C_FN"},{1,"C_FW"},{2,"C_RL"},{5,"C_RR"}};
                 for(const auto& view:rig.at("views")) {
@@ -230,19 +282,31 @@ int main(int argc,char** argv) {
                     if(requested->contains(base_topic+"/depth/image_raw")) selected.push_back("depth");
                     if(requested->contains(base_topic+"/preview/image/compressed")) selected.push_back("preview");
                     if(requested->contains(base_topic+"/camera_info") || requested->contains(base_topic+"/preview/camera_info") ||
-                       requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/objects") || requested->contains("/tf") || requested->contains("/ets2/frame_info")) selected.push_back("metadata");
+                       requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/objects") || requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/markers") || requested->contains("/tf") || requested->contains("/ets2/frame_info")) selected.push_back("metadata");
                     const auto mirror="mirror"+std::to_string(slot);
                     if(patterns.contains(mirror) && requested->contains("/ets2/lidar/"+patterns.at(mirror).at("name").get<std::string>()+"/points")) selected.push_back("lidar");
                     if(!selected.empty()) outputs[mirror]=selected;
                 }
-                command({{"cmd","stream"},{"action","update"},{"format","ros"},{"color_gain",config.value("color_gain",1.0)},{"outputs",outputs},{"lidars",patterns}});
+                owned({{"cmd","stream"},{"action","update"},{"format","ros"},{"color_gain",config.value("color_gain",1.0)},{"outputs",outputs},{"lidars",patterns}});
                 previous_demand=*requested;
             }
-            if(ticks()-heartbeat>=500) {command({{"cmd","lease"},{"action","heartbeat"},{"owner",session}});heartbeat=ticks();}
             if(ticks()-report>=1000) {std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
-                {"queue_dropped",dropped.load()},{"status_echo_ms",echo_ms.load()}}.dump()<<std::endl;report=ticks();}
+                {"queue_dropped",dropped.load()},{"status_publish_roundtrip",latency.snapshot()},
+                {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}}.dump()<<std::endl;report=ticks();}
             std::this_thread::sleep_for(20ms);
         }
-        workers.stop();return stopped || ticks()-start>=duration*1000?0:1;
+        workers.stop();
+        if(workers.fatal) throw std::runtime_error("Relay session ended on a data or game error; explicit restart required");
+        return workers.network_failed.load();
+        };
+        const auto deadline=ticks()+static_cast<uint64_t>(duration*1000);
+        while(!stopped && lease_ok && ticks()<deadline) {
+            try {if(!run((deadline-ticks())/1000.0)) break;}
+            catch(const TransportError& e) {std::cerr<<e.what()<<std::endl;}
+            if(stopped || !lease_ok || ticks()>=deadline) break;
+            std::cout<<"Network disconnected; capture is off. Resolving Ubuntu eth0 again."<<std::endl;
+            for(int i=0;i<20 && !stopped && lease_ok;++i) std::this_thread::sleep_for(50ms);
+        }
+        return lease_ok?0:1;
     } catch(const std::exception& e) {std::cerr<<e.what()<<std::endl;return 1;}
 }

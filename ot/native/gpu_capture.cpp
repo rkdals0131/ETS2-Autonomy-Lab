@@ -1,6 +1,7 @@
 #include "gpu_capture.hpp"
 #include <fstream>
 #include <stdexcept>
+#include <dxgi1_4.h>
 
 namespace ot {
 uint64_t qpc_now() noexcept { LARGE_INTEGER value{};QueryPerformanceCounter(&value);return value.QuadPart; }
@@ -97,7 +98,15 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool
         release_gpu();if(phase_!=Phase::ready) phase_=Phase::idle;
     } else if(action=="save") return save();
     else if(action!="status") throw std::runtime_error("Unknown camera capture action");
-    return status(metadata);
+    auto result=status(metadata);
+    if(action=="status" && device_) {
+        ComPtr<IDXGIDevice> dxgi;ComPtr<IDXGIAdapter> adapter;ComPtr<IDXGIAdapter3> memory;
+        DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+        if(SUCCEEDED(device_.As(&dxgi)) && SUCCEEDED(dxgi->GetAdapter(&adapter)) && SUCCEEDED(adapter.As(&memory)) &&
+           SUCCEEDED(memory->QueryVideoMemoryInfo(0,DXGI_MEMORY_SEGMENT_GROUP_LOCAL,&info)))
+            result["video_memory"]={{"usage_bytes",info.CurrentUsage},{"budget_bytes",info.Budget}};
+    }
+    return result;
 }
 void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
                          uint64_t binding_sequence,uint64_t sdk_frame,uint64_t render_frame,

@@ -39,10 +39,37 @@ static Q quaternion(M a) { // ROS x,y,z,w, matrix maps child vectors into parent
         const int j=(i+1)%3,k=(i+2)%3;const auto s=std::sqrt(1+a[i*3+i]-a[j*3+j]-a[k*3+k])*2;
         q[i]=s/4;q[j]=(a[j*3+i]+a[i*3+j])/s;q[k]=(a[k*3+i]+a[i*3+k])/s;q[3]=(a[k*3+j]-a[j*3+k])/s;
     }
+    double norm=0;for(double v:q) norm+=v*v;
+    for(auto& v:q) v/=std::sqrt(norm);
     return q;
 }
 static void pose(Cdr& c,V p,Q q) {c.serialize_array(p.data(),3);c.serialize_array(q.data(),4);}
 static const M enu{1,0,0,0,0,-1,0,1,0},optical{1,0,0,0,-1,0,0,0,-1},base_to_model{0,-1,0,0,0,1,-1,0,0};
+Packet static_messages(const json& rig,const json& patterns,const std::string& session) {
+    struct Mount {std::string name;V p;Q q;};std::vector<Mount> mounts;
+    const std::map<int,std::string> names{{0,"C_FN"},{1,"C_FW"},{2,"C_RL"},{5,"C_RR"}};
+    for(const auto& view:rig.at("views")) {
+        const int slot=view.at("slot");
+        if(view.at("basis")!="cabin") throw std::runtime_error("ROS mounting tree requires cabin mounts");
+        const auto p=mul(transpose(base_to_model),view.at("position").get<V>());
+        const auto r=mul(transpose(base_to_model),from_quat(view.at("quaternion_wxyz").get<Q>()));
+        mounts.push_back({names.at(slot)+"_optical",p,quaternion(mul(r,optical))});
+        const auto source="mirror"+std::to_string(slot);
+        if(patterns.contains(source) && patterns.at(source).at("axis_camera")==source)
+            mounts.push_back({patterns.at(source).at("name"),p,quaternion(mul(r,base_to_model))});
+    }
+    Packet packet{{{"session",session}}, {}};
+    add_message(packet,"/tf_static",cdr(512+mounts.size()*256,[&](Cdr& c){
+        c<<uint32_t(mounts.size());for(const auto& m:mounts) {header(c,0,"cabin");c<<m.name;pose(c,m.p,m.q);}
+    }));return packet;
+}
+void add_diagnostics(Packet& packet,const json& values) {
+    add_message(packet,"/diagnostics",cdr(8192,[&](Cdr& c){
+        header(c,values.value("stamp_us",uint64_t{0}),"base_link");c<<uint32_t{1}<<uint8_t{0}
+            <<std::string("ets2_bridge")<<std::string("Streaming")<<std::string("Windows relay / WSL Jazzy")<<uint32_t(values.size());
+        for(const auto& item:values.items()) c<<item.key()<<item.value().dump();
+    }));
+}
 json lidar_patterns(const json& rig,const json& profile) {
     std::map<std::string,json> views;
     for(const auto& view:rig.at("views")) views["mirror"+std::to_string(view.at("slot").get<int>())]=view;
@@ -128,7 +155,7 @@ static Bytes camera_info(uint64_t us,const std::string& frame,uint32_t width,uin
         c<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<false;
     });
 }
-Packet sensor_messages(std::span<const uint8_t> input,const std::string& session,const Demand& demand,uint64_t dropped,uint64_t stream_id) {
+Packet sensor_messages(std::span<const uint8_t> input,const std::string& session,const Demand& demand,uint64_t dropped,uint64_t stream_id,const json& rig) {
     uint64_t length{};if(input.size()<8) throw std::runtime_error("Truncated bundle");std::memcpy(&length,input.data(),8);
     if(length>input.size()-8) throw std::runtime_error("Invalid bundle manifest length");
     const auto manifest=json::parse(input.begin()+8,input.begin()+8+length);const auto blobs=input.subspan(8+length);
@@ -139,11 +166,28 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
         if(offset>blobs.size() || n>blobs.size()-offset) throw std::runtime_error("Invalid bundle blob bounds");
         files.emplace(f.at("file").get<std::string>(),blobs.subspan(offset,n));
     }
-    Packet packet{{{"session",session},{"frame",manifest.at("render_frame_id")}}, {}};
+    Packet packet{{{"session",session},{"frame",manifest.at("render_frame_id")},{"native_stream",stream_id}}, {}};
     const auto& first=manifest.at("views").at(0).at("metadata").at("geometry_pass").at("sdk_at_compile");
     const auto us=first.at("paused_simulation_time_us").get<uint64_t>();
     json cameras=json::array();
-    struct Transform {std::string frame;V position;Q rotation;};std::vector<Transform> transforms;
+    struct Transform {std::string parent,frame;V position;Q rotation;};std::vector<Transform> transforms;
+    const auto& reference=manifest.at("views").at(0);
+    const auto& pass=reference.at("metadata").at("geometry_pass");
+    const auto& camera=pass.at("camera_at_compile");
+    const auto& body=pass.at("ego_at_compile").at("pose_physics");
+    const auto reference_name=reference.at("camera").get<std::string>();
+    const auto mount=std::find_if(rig.at("views").begin(),rig.at("views").end(),[&](const auto& v){return "mirror"+std::to_string(v.at("slot").template get<int>())==reference_name;});
+    if(mount==rig.at("views").end()) throw std::runtime_error("Unconfigured render camera");
+    // Derive the moving cabin parent from the actual rendered view and its fixed
+    // mount. This includes render interpolation/suspension and excludes head pose.
+    const M cabin_rotation=mul(transpose(matrix(camera.at("camera_rotation_row_major"))),transpose(from_quat(mount->at("quaternion_wxyz").get<Q>())));
+    const V cabin_position=sub(camera.at("camera_world_xyz").get<V>(),mul(cabin_rotation,mount->at("position").get<V>()));
+    const M body_rotation=from_quat(body.at("quaternion_wxyz").get<Q>());
+    const V base_world=mul(enu,add(body.at("position_m").get<V>(),mul(body_rotation,rig.at("base_origin").get<V>())));
+    const M world_from_base=mul(mul(enu,body_rotation),base_to_model);
+    transforms.push_back({"world","base_link",base_world,quaternion(world_from_base)});
+    transforms.push_back({"base_link","cabin",mul(transpose(world_from_base),sub(mul(enu,cabin_position),base_world)),
+        quaternion(mul(mul(transpose(world_from_base),enu),mul(cabin_rotation,base_to_model)))});
     struct LidarSource {
         std::string camera;json description;const json* meta;std::span<const uint8_t> data;
         uint32_t width{};M world_from_eye{};std::array<double,16> projection{};std::array<double,4> viewport{};
@@ -159,21 +203,36 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
         cameras.push_back(name);
         const auto& vp=meta.at("geometry_gpu").at("viewports").at(0);
         const auto rotation=matrix(camera.at("camera_rotation_row_major"));const auto origin=camera.at("camera_world_xyz").get<V>();
-        transforms.push_back({frame,mul(enu,origin),quaternion(mul(mul(enu,transpose(rotation)),optical))});
         const auto gt_topic="/ets2/ground_truth/"+name+"/objects";
-        if(demand.contains(gt_topic) && pass.contains("vehicles_at_compile") && pass.at("vehicles_at_compile").value("available",false)) {
+        const auto marker_topic="/ets2/ground_truth/"+name+"/markers";
+        if((demand.contains(gt_topic) || demand.contains(marker_topic)) && pass.contains("vehicles_at_compile") && pass.at("vehicles_at_compile").value("available",false)) {
             const auto& vehicles=pass.at("vehicles_at_compile").at("vehicles");
-            add_message(packet,gt_topic,cdr(1024+vehicles.size()*512,[&](Cdr& c){
-                header(c,us,frame);c<<uint32_t(vehicles.size());
-                for(const auto& v:vehicles) {
+            struct Box {V p,size;Q q;std::string id;};std::vector<Box> boxes;
+            for(const auto& v:vehicles) {
                     const auto bounds=v.at("actor_observation").at("aabb_raw").get<std::array<double,6>>();
                     V center{},size{};for(size_t i=0;i<3;++i) {center[i]=(bounds[i]+bounds[i+3])*.5;size[i]=bounds[i+3]-bounds[i];}
                     const auto model=matrix(v.at("model_rotation_row_major"));
                     const auto world=add(v.at("model_world_xyz").get<V>(),mul(model,sub(center,v.at("model_reference_offset_raw").get<V>())));
+                    boxes.push_back({mul(optical,mul(rotation,sub(world,origin))),size,quaternion(mul(mul(optical,rotation),model)),session+":"+std::to_string(v.at("actor_address").get<uint64_t>())});
+            }
+            if(demand.contains(gt_topic)) add_message(packet,gt_topic,cdr(1024+boxes.size()*512,[&](Cdr& c){
+                header(c,us,frame);c<<uint32_t(boxes.size());
+                for(const auto& b:boxes) {
                     header(c,us,frame);c<<uint32_t{0}; // No invented semantic class/confidence.
-                    pose(c,mul(optical,mul(rotation,sub(world,origin))),quaternion(mul(mul(optical,rotation),model)));
-                    c.serialize_array(size.data(),3);c<<session+":"+std::to_string(v.at("actor_address").get<uint64_t>());
+                    pose(c,b.p,b.q);c.serialize_array(b.size.data(),3);c<<b.id;
                 }
+            }));
+            if(demand.contains(marker_topic)) add_message(packet,marker_topic,cdr(1024+boxes.size()*512,[&](Cdr& c){
+                c<<uint32_t(boxes.size()+1);
+                auto marker=[&](int32_t id,int32_t action,const Box& b) {
+                    header(c,us,frame);c<<name<<id<<int32_t{1}<<action;pose(c,b.p,b.q);c.serialize_array(b.size.data(),3);
+                    c<<.2f<<1.f<<.3f<<.35f<<int32_t{0}<<uint32_t{300000000}<<false; // 300 ms lifetime
+                    c<<uint32_t{0}<<uint32_t{0}<<std::string{}; // points, colors, texture_resource
+                    header(c,0,"");c<<std::string{}<<uint32_t{0}; // empty CompressedImage texture
+                    c<<uint32_t{0}<<std::string{}<<std::string{}<<std::string{}<<uint32_t{0}<<false; // UV, text, mesh resource/file, materials
+                };
+                marker(0,3,{{0,0,0},{1,1,1},{0,0,0,1},""});
+                for(size_t i=0;i<boxes.size();++i) marker(static_cast<int32_t>(i),0,boxes[i]);
             }));
         }
         uint32_t width=meta.at("sensor_dimensions").at(0),height=meta.at("sensor_dimensions").at(1);
@@ -230,7 +289,6 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
             if(std::hypot(delta[0],delta[1],delta[2])>1e-4 || source.description.at("beam_count")!=desc.at("beam_count"))
                 throw std::runtime_error("Captured LiDAR sources are not co-located/aligned");
         }
-        transforms.push_back({name,mul(enu,origin),quaternion(mul(enu,world_from_sensor))});
         const uint32_t columns=desc.at("columns");const auto elevations=desc.at("elevations_deg").get<std::vector<double>>();
         const auto az=desc.at("azimuth_deg").get<std::array<double,3>>();const uint32_t count=desc.at("beam_count"),step=36;
         if(size_t(columns)*elevations.size()!=count) throw std::runtime_error("LiDAR beam grid does not match returns");
@@ -266,7 +324,7 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
             c<<false<<step<<uint32_t(columns*step)<<uint32_t(cloud.size());c.serialize_array(cloud.data(),cloud.size());c<<false;
         }));
     }
-    add_message(packet,"/tf",cdr(512+transforms.size()*256,[&](Cdr& c){c<<uint32_t(transforms.size());for(const auto& t:transforms) {header(c,us,"world");c<<t.frame;pose(c,t.position,t.rotation);}}));
+    add_message(packet,"/tf",cdr(512+transforms.size()*256,[&](Cdr& c){c<<uint32_t(transforms.size());for(const auto& t:transforms) {header(c,us,t.parent);c<<t.frame;pose(c,t.position,t.rotation);}}));
     add_message(packet,"/ets2/frame_info",cdr(8192,[&](Cdr& c){
         header(c,us,"world");c<<session<<manifest.at("render_frame_id").get<uint64_t>()<<first.at("frame_id").get<uint64_t>();
         for(const auto* key:{"render_time_us","simulation_time_us","paused_simulation_time_us"}) c<<first.at(key).get<uint64_t>();

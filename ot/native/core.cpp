@@ -248,6 +248,12 @@ json Runtime::snapshot() const {
 }
 json Runtime::command(const json& request) {
     const auto cmd=request.at("cmd").get<std::string>();
+    // Call under control_ at each mutating boundary. A queued command from a
+    // canceled lease cannot race F11 and turn capture back on.
+    const auto require_owner=[&] {
+        if((!lease_.empty() || request.contains("owner")) && request.value("owner",std::string{})!=lease_)
+            throw std::runtime_error("Lease ended or belongs to another controller; explicit restart required");
+    };
     if(cmd=="lease") {
         const auto action=request.at("action").get<std::string>();
         const auto owner=request.at("owner").get<std::string>();
@@ -285,6 +291,7 @@ json Runtime::command(const json& request) {
     if(cmd=="camera_rig") {
         std::lock_guard lock(control_);
         if(request.contains("views") || request.contains("enabled")) {
+            require_owner();
             const bool enabled=request.value("enabled",true);
             if(enabled && (tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_ || !allow_camera_rig_))
                 throw std::runtime_error("Camera rig requires Tier 1 probe and allow_camera_rig permission");
@@ -297,6 +304,7 @@ json Runtime::command(const json& request) {
     if(cmd=="capture_mirror5" || cmd=="capture_mirrors" || cmd=="stream") {
         std::lock_guard lock(control_);
         const auto action=request.value("action",std::string("status"));
+        if(action!="status") require_owner();
         if((action=="arm" || action=="start") && (tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_))
             throw std::runtime_error("Mirror5 capture requires the permitted Tier 1 render probe");
         CaptureOptions options;
@@ -336,6 +344,7 @@ json Runtime::command(const json& request) {
     if(cmd=="render_probe") {
         std::lock_guard lock(control_);
         if(request.contains("enabled")) {
+            require_owner();
             if(request.at("enabled").get<bool>()) {
                 if(tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_)
                     throw std::runtime_error("Render probe requires Tier 1, matching EXE, singleplayer_research, allow_tier1 and allow_render_probe");
@@ -354,6 +363,7 @@ json Runtime::command(const json& request) {
     if(cmd=="tier") {
         std::lock_guard lock(control_);
         if(request.contains("value")) {
+            require_owner();
             int tier=request.at("value").get<int>();
             if(tier<0 || tier>1) throw std::runtime_error("Only Tier 0 and Tier 1 observation are implemented");
             if(tier && (!gate_ok_ || !allow_tier1_)) throw std::runtime_error("Tier 1 requires matching EXE, allow_tier1 and singleplayer_research in ot_config.json");
