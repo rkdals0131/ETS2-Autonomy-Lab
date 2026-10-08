@@ -18,7 +18,7 @@ public:
     json status();
     json frames(uint64_t after_id=0);
     json capture(const std::string& action);
-    json capture_views(const std::string& action);
+    json capture_views(const std::string& action,Transport* publisher=nullptr,bool metadata=true);
     ~RenderProbe();
 private:
     struct Record {
@@ -75,6 +75,7 @@ private:
     std::string last_error_;
     GpuCapture gpu_{"mirror5"},gpu0_{"mirror0"},gpu1_{"mirror1"},gpu2_{"mirror2"};
     uint64_t bundle_frame_=0;
+    json published_bundle_;
     std::array<GpuCapture*,4> cameras() noexcept {return {&gpu0_,&gpu1_,&gpu2_,&gpu_};}
 };
 }

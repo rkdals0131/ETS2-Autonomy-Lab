@@ -47,15 +47,17 @@ void GpuCapture::cancel() noexcept {
         if(phase_==Phase::armed || phase_==Phase::waiting_gpu) phase_=Phase::idle;
     } catch(...) {}
 }
-json GpuCapture::status() const {
+json GpuCapture::status(bool metadata) const {
     const char* phase=phase_==Phase::idle?"idle":phase_==Phase::armed?"armed":
         phase_==Phase::waiting_gpu?"waiting_gpu":phase_==Phase::ready?"ready":"error";
-    return {{"phase",phase},{"capture_sequence",sequence_},{"bindings_seen",bindings_seen_},
+    json result={{"phase",phase},{"capture_sequence",sequence_},{"bindings_seen",bindings_seen_},
             {"camera",camera_},{"requested_frame_id",requested_frame_},{"last_label",last_label_},
             {"gpu_polls",gpu_polls_},{"error",error_},
-            {"metadata",metadata_},{"saved_directory",saved_.string()}};
+            {"saved_directory",saved_.string()}};
+    if(metadata) result["metadata"]=metadata_;
+    return result;
 }
-json GpuCapture::command(const std::string& action,uint64_t requested_frame) {
+json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool metadata) {
     std::lock_guard lock(mutex_);
     if(action=="arm") {
         if(phase_==Phase::armed || phase_==Phase::waiting_gpu)
@@ -73,7 +75,7 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame) {
         release_gpu();if(phase_!=Phase::ready) phase_=Phase::idle;
     } else if(action=="save") return save();
     else if(action!="status") throw std::runtime_error("Unknown camera capture action");
-    return status();
+    return status(metadata);
 }
 void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
                          uint64_t binding_sequence,uint64_t sdk_frame,uint64_t render_frame,
@@ -350,6 +352,20 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
     metadata_["readback_ready_qpc"]=qpc_now();
     metadata_["readback_cpu_ticks"]=qpc_now()-cpu_begin;
     release_gpu();phase_=Phase::ready;
+}
+void GpuCapture::append_bundle(json& views,std::vector<BundleBlob>& blobs) {
+    std::lock_guard lock(mutex_);
+    if(phase_!=Phase::ready) throw std::runtime_error("Camera CPU sample is not complete");
+    views.push_back({{"camera",camera_},{"metadata",metadata_}});
+    for(size_t i=0;i<images_.size();++i)
+        blobs.push_back({camera_,metadata_.at("images")[i].at("file").get<std::string>(),images_[i].pixels.data(),images_[i].pixels.size()});
+    if(!geometry_depth_.pixels.empty())
+        blobs.push_back({camera_,metadata_.at("geometry_gpu").at("depth_texture").at("file").get<std::string>(),
+            geometry_depth_.pixels.data(),geometry_depth_.pixels.size()});
+    for(const auto& sample:geometry_constants_) if(!sample.bytes.empty())
+        blobs.push_back({camera_,sample.description.at("file").get<std::string>(),sample.bytes.data(),sample.bytes.size()});
+    for(const auto& sample:vehicle_constants_) if(!sample.bytes.empty())
+        blobs.push_back({camera_,sample.description.at("file").get<std::string>(),sample.bytes.data(),sample.bytes.size()});
 }
 json GpuCapture::save() {
     if(phase_!=Phase::ready) throw std::runtime_error("No completed camera CPU sample to save");

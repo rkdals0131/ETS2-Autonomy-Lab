@@ -7,7 +7,7 @@ namespace ot {
 Transport::Transport(std::function<json(const json&)> handler,std::function<void()> panic,int key,std::wstring pipe_name)
     : handler_(std::move(handler)),panic_(std::move(panic)),panic_key_(key),pipe_name_(std::move(pipe_name)),
       stop_event_(CreateEventW(nullptr,TRUE,FALSE,nullptr)) {}
-Transport::~Transport() { stop(); if(ring_) UnmapViewOfFile(ring_); if(security_) LocalFree(security_); }
+Transport::~Transport() { stop(); if(ring_) UnmapViewOfFile(ring_); if(bundles_) UnmapViewOfFile(bundles_); if(security_) LocalFree(security_); }
 void Transport::start(bool shared) {
     if(!stop_event_) throw std::runtime_error("Stop event creation failed");
     HANDLE token_raw{};
@@ -130,5 +130,70 @@ json Transport::status() const {
     return {{"enabled",true},{"abi",1},{"slots",ring_slots},{"slot_bytes",slot_bytes},
         {"published",InterlockedCompareExchange64(&ring_->header.published,0,0)},
         {"dropped",InterlockedCompareExchange64(&ring_->header.dropped,0,0)}};
+}
+json Transport::publish_bundle(json manifest,const std::vector<BundleBlob>& blobs) {
+    // Called only by the pipe worker, while RenderProbe owns the completed
+    // samples. No game/render thread waits for this copy or performs file I/O.
+    size_t binary_bytes=0;
+    auto& files=manifest["files"]=json::array();
+    for(const auto& blob:blobs) {
+        files.push_back({{"camera",blob.camera},{"file",blob.file},{"offset",binary_bytes},{"length",blob.bytes}});
+        binary_bytes+=blob.bytes;
+    }
+    const auto metadata=manifest.dump();
+    const uint64_t metadata_bytes=metadata.size();
+    const size_t length=sizeof(metadata_bytes)+metadata.size()+binary_bytes;
+    if(length>bundle_max_bytes) throw std::runtime_error("Bundle exceeds the 256 MiB slot limit");
+    if(!bundles_) {
+        // Allocate from the first real sample, rounded to a MiB. Do not touch
+        // unused payload pages. Dimensions may shrink within this allocation.
+        bundle_capacity_=static_cast<uint32_t>((length+1048575)&~size_t{1048575});
+        const size_t bytes=sizeof(RingHeader)+bundle_slots*(sizeof(BundleSlot)+bundle_capacity_);
+        SECURITY_ATTRIBUTES sa{sizeof(sa),security_,FALSE};
+        bundle_mapping_.h=CreateFileMappingW(INVALID_HANDLE_VALUE,&sa,PAGE_READWRITE,0,
+            static_cast<DWORD>(bytes),L"Local\\OT_Bundles");
+        if(!bundle_mapping_) throw std::runtime_error("Cannot create Local\\OT_Bundles");
+        if(GetLastError()==ERROR_ALREADY_EXISTS) {
+            CloseHandle(bundle_mapping_.h);bundle_mapping_.h=nullptr;
+            throw std::runtime_error("Local\\OT_Bundles is still open; close its readers before replacing the producer");
+        }
+        bundles_=static_cast<RingHeader*>(MapViewOfFile(bundle_mapping_.h,FILE_MAP_ALL_ACCESS,0,0,bytes));
+        if(!bundles_) {
+            CloseHandle(bundle_mapping_.h);bundle_mapping_.h=nullptr;
+            throw std::runtime_error("Cannot map Local\\OT_Bundles");
+        }
+        std::memset(bundles_,0,sizeof(RingHeader));
+        std::memcpy(bundles_->magic,"OTBNDL01",8);
+        bundles_->abi=1;bundles_->slots=bundle_slots;bundles_->bytes_per_slot=bundle_capacity_;
+        bundles_->producer_pid=GetCurrentProcessId();
+        for(uint32_t i=0;i<bundle_slots;++i) std::memset(bundle_slot(bundles_,bundle_capacity_,i),0,sizeof(BundleSlot));
+    }
+    if(length>bundle_capacity_) {
+        InterlockedIncrement64(&bundles_->dropped);
+        throw std::runtime_error("Bundle dimensions outgrew OT_Bundles; close readers and reload the core to resize");
+    }
+    for(uint32_t n=0;n<bundle_slots;++n) {
+        const auto index=(bundle_cursor_+n)%bundle_slots;
+        auto* slot=bundle_slot(bundles_,bundle_capacity_,index);
+        if(InterlockedCompareExchange(&slot->state,1,0)!=0) continue;
+        const auto sequence=static_cast<uint64_t>(InterlockedCompareExchange64(&bundles_->published,0,0))+1;
+        auto* destination=reinterpret_cast<char*>(slot+1);
+        std::memcpy(destination,&metadata_bytes,sizeof(metadata_bytes));destination+=sizeof(metadata_bytes);
+        std::memcpy(destination,metadata.data(),metadata.size());destination+=metadata.size();
+        for(const auto& blob:blobs) {std::memcpy(destination,blob.data,blob.bytes);destination+=blob.bytes;}
+        slot->length=static_cast<uint32_t>(length);slot->sequence=sequence;
+        InterlockedExchange(&slot->state,2);
+        InterlockedExchange64(&bundles_->published,static_cast<LONG64>(sequence));
+        bundle_cursor_=(index+1)%bundle_slots;
+        return {{"published",true},{"sequence",sequence},{"bytes",length},{"ring",bundle_status()}};
+    }
+    InterlockedIncrement64(&bundles_->dropped);
+    return {{"published",false},{"reason","queue_full"},{"ring",bundle_status()}};
+}
+json Transport::bundle_status() const {
+    if(!bundles_) return {{"enabled",false}};
+    return {{"enabled",true},{"abi",1},{"slots",bundle_slots},{"slot_bytes",bundle_capacity_},
+        {"published",InterlockedCompareExchange64(&bundles_->published,0,0)},
+        {"dropped",InterlockedCompareExchange64(&bundles_->dropped,0,0)}};
 }
 }

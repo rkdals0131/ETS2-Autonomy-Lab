@@ -39,6 +39,7 @@ json read_vehicle_physics(uintptr_t actor, const json& schema);
 template<class T> bool read_memory(uintptr_t address, T& value) noexcept {
     return address && copy_memory(address, &value, sizeof(value));
 }
+struct BundleBlob {std::string camera,file;const uint8_t* data;size_t bytes;};
 
 class Transport {
 public:
@@ -49,6 +50,8 @@ public:
     void stop() noexcept;
     void publish(const std::string& text, uint64_t sequence) noexcept;
     json status() const;
+    json publish_bundle(json manifest,const std::vector<BundleBlob>& blobs);
+    json bundle_status() const;
 private:
     void serve() noexcept;
     bool io(HANDLE pipe, bool write, void* buffer, DWORD size, DWORD& transferred);
@@ -60,6 +63,9 @@ private:
     std::wstring pipe_name_;
     Handle stop_event_, pipe_, mapping_;
     Ring* ring_ = nullptr;
+    Handle bundle_mapping_;
+    RingHeader* bundles_ = nullptr;
+    uint32_t bundle_capacity_=0,bundle_cursor_=0;
     PSECURITY_DESCRIPTOR security_ = nullptr;
     std::thread worker_;
     uint32_t cursor_ = 0;

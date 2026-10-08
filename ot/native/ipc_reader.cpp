@@ -21,3 +21,31 @@ extern "C" __declspec(dllexport) int ot_state_copy(ot::Ring* ring, char* output,
     }
     return bytes;
 }
+
+// The client has validated the immutable ABI header and mapped the full size.
+// Acquire before reading sequence/length; keep all unselected ready slots.
+extern "C" __declspec(dllexport) int ot_bundle_copy(void* ring,char* output,
+    uint32_t capacity,uint64_t after,uint64_t* sequence) noexcept {
+    if(!ring || !output || !sequence || !capacity || capacity>ot::bundle_max_bytes) return -1;
+    ot::BundleSlot* selected=nullptr;
+    for(uint32_t i=0;i<ot::bundle_slots;++i) {
+        auto* slot=ot::bundle_slot(ring,capacity,i);
+        if(InterlockedCompareExchange(&slot->state,3,2)!=2) continue;
+        if(slot->length>capacity) {
+            InterlockedExchange(&slot->state,0);
+            if(selected) InterlockedExchange(&selected->state,2);
+            return -1;
+        }
+        if(slot->sequence<=after) {InterlockedExchange(&slot->state,0);continue;}
+        if(!selected || slot->sequence<selected->sequence) {
+            if(selected) InterlockedExchange(&selected->state,2);
+            selected=slot;
+        } else InterlockedExchange(&slot->state,2);
+    }
+    if(!selected) return 0;
+    const auto length=selected->length;
+    *sequence=selected->sequence;
+    std::memcpy(output,selected+1,length);
+    InterlockedExchange(&selected->state,0);
+    return static_cast<int>(length);
+}

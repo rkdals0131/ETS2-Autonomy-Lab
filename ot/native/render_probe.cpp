@@ -358,7 +358,7 @@ json RenderProbe::capture(const std::string& action) {
     }
     return gpu_.command(action);
 }
-json RenderProbe::capture_views(const std::string& action) {
+json RenderProbe::capture_views(const std::string& action,Transport* publisher,bool metadata) {
     std::lock_guard lock(control_);
     if(action=="arm") {
         if(!hook_.enabled()) throw std::runtime_error("Enable the render probe before arming capture");
@@ -369,15 +369,16 @@ json RenderProbe::capture_views(const std::string& action) {
         // Skip the interval already in progress so every requested view has a
         // chance to render after all four requests have been armed.
         bundle_frame_=presents_.load()+2;
+        published_bundle_=nullptr;
         try {for(auto* camera:cameras()) camera->command("arm",bundle_frame_);}
         catch(...) {for(auto* camera:cameras()) camera->cancel();bundle_frame_=0;throw;}
     } else if(action=="cancel") {
         for(auto* camera:cameras()) camera->cancel();
         bundle_frame_=0;
-    } else if(action!="status" && action!="save") throw std::runtime_error("Unknown camera bundle action");
+    } else if(action!="status" && action!="save" && action!="save_partial" && action!="publish" && action!="publish_partial") throw std::runtime_error("Unknown camera bundle action");
     json views=json::array();bool ready=true,error=false,pending=false;
     for(auto* camera:cameras()) {
-        auto state=camera->command("status");const auto phase=state.at("phase");
+        auto state=camera->command("status",0,metadata);const auto phase=state.at("phase");
         ready=ready && phase=="ready";error=error || phase=="error";
         pending=pending || phase=="armed" || phase=="waiting_gpu";
         views.push_back(std::move(state));
@@ -385,6 +386,36 @@ json RenderProbe::capture_views(const std::string& action) {
     if(action=="save") {
         if(!bundle_frame_ || !ready) throw std::runtime_error("No complete camera bundle to save");
         views=json::array();for(auto* camera:cameras()) views.push_back(camera->command("save"));
+    }
+    if(action=="save_partial") {
+        if(!bundle_frame_) throw std::runtime_error("No camera bundle was requested");
+        views=json::array();
+        for(auto* camera:cameras()) {
+            auto state=camera->command("status");
+            views.push_back(state.at("phase")=="ready"?camera->command("save"):std::move(state));
+        }
+    }
+    if(action=="publish" || action=="publish_partial") {
+        if(!bundle_frame_ || pending || (!ready && action=="publish") || !publisher)
+            throw std::runtime_error("Camera bundle is incomplete or still pending");
+        if(!published_bundle_.is_null()) return published_bundle_;
+        json manifest={{"render_frame_id",bundle_frame_},{"observation_session_qpc",observation_session_},
+            {"complete",ready},{"requested_cameras",{"mirror0","mirror1","mirror2","mirror5"}},
+            {"missing_views",json::array()},{"views",json::array()}};
+        std::vector<BundleBlob> blobs;
+        // control_ excludes arm/cancel/panic while these completed CPU spans
+        // are copied. Render callbacks leave ready samples untouched.
+        for(auto* camera:cameras()) {
+            const auto state=camera->command("status",0,false);
+            if(state.at("phase")=="ready") camera->append_bundle(manifest["views"],blobs);
+            else manifest["missing_views"].push_back({{"camera",state.at("camera")},
+                {"phase",state.at("phase")},{"error",state.at("error")}});
+        }
+        if(manifest.at("views").empty()) throw std::runtime_error("No completed views to publish");
+        auto result=publisher->publish_bundle(std::move(manifest),blobs);
+        result["render_frame_id"]=bundle_frame_;result["observation_session_qpc"]=observation_session_;
+        if(result.at("published").get<bool>()) published_bundle_=result;
+        return result;
     }
     return {{"phase",!bundle_frame_?"idle":error?"error":ready?"ready":pending?"pending":"idle"},
         {"render_frame_id",bundle_frame_},{"observation_session_qpc",observation_session_},{"views",views}};

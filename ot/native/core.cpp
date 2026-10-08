@@ -227,7 +227,7 @@ json Runtime::command(const json& request) {
         const auto action=request.value("action",std::string("status"));
         if(action=="arm" && (tier_!=1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_))
             throw std::runtime_error("Mirror5 capture requires the permitted Tier 1 render probe");
-        return cmd=="capture_mirrors"?render_probe_->capture_views(action):render_probe_->capture(action);
+        return cmd=="capture_mirrors"?render_probe_->capture_views(action,transport_.get(),request.value("metadata",true)):render_probe_->capture(action);
     }
     if(cmd=="render_probe") {
         std::lock_guard lock(control_);
@@ -254,6 +254,7 @@ json Runtime::command(const json& request) {
     }
     if(cmd=="snapshot") return snapshot();
     if(cmd=="state") return transport_->status();
+    if(cmd=="bundles") return transport_->bundle_status();
     if(cmd=="dump") return dump_process();
     if(cmd=="read") {
         std::string field=request.at("field"); auto state=snapshot();

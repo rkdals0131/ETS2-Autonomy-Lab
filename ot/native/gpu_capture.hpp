@@ -10,8 +10,9 @@ namespace ot {
 class GpuCapture {
 public:
     explicit GpuCapture(std::string camera):camera_(std::move(camera)) {}
-    json command(const std::string& action,uint64_t requested_frame=0);
+    json command(const std::string& action,uint64_t requested_frame=0,bool metadata=true);
     void cancel() noexcept;
+    void append_bundle(json& views,std::vector<BundleBlob>& blobs);
     void observe(ID3D11DeviceContext* context, uint32_t count, const uintptr_t* targets,
                  uint64_t binding_sequence, uint64_t sdk_frame, uint64_t render_frame,
                  uint64_t observation_session,const json* pass) noexcept;
@@ -34,7 +35,7 @@ private:
     void geometry_constants(ID3D11DeviceContext* context,uint64_t binding_sequence);
     void vehicle_constants(ID3D11DeviceContext* context,ID3D11Device* device);
     void release_gpu();
-    json status() const;
+    json status(bool metadata=true) const;
     json save();
     std::mutex mutex_;
     const std::string camera_;
