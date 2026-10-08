@@ -19,7 +19,7 @@ JSONL은 캡처 metadata·원시 파일 저장 경로·Present 기록·실제 �
 
 정차 중 5.0002초에 **50표본, 9.9996 Hz**, 요청 슬롯 누락 0회, raw 150 MiB를 기록했습니다. 프레임 구간은 153부터 300까지 3씩 증가했고, 50개 모두 복사 제출 시각이 해당 Present 반환 사이에 있었습니다. Present 기록 손실은 0, HRESULT는 모두 S_OK였습니다. 같은 세 hook으로 픽셀 수집 없이 관측한 5초는 29.996회/s, 수집 구간은 30.001회/s였고 p95 간격은 각각 34.031/34.080 ms였습니다. 이 장면의 약 30 Hz 제출 속도에서는 차이가 관측되지 않았지만, hook 자체 비용·제한 없는 처리율·장시간 FPS 영향까지 검증한 결과는 아닙니다.
 
-복사 자원 준비·제출 CPU 시간의 중앙값은 0.341 ms, readback CPU 시간은 0.414 ms였습니다. GPU 시간은 아닙니다. 마지막 50번 표본의 RGB/Z/재질 그림을 확인했고 Z는 전부 유한·비영, 범위는 `-6.03125~-0.26806640625`였습니다. 세 hook 지점의 원래 코드 복원과 Tier 0·활성 hook 0도 확인했습니다. 이어 사용자 `sdk unload` 후 DLL·pipe 부재와 `Render probe drained; trampoline and stub released` 로그를 확인했습니다. 기록은 `research/live/2026-10-08-render-probe/0.5.0-record-5s.jsonl`, `0.5.0-first-record.json`, `0.5.0-record-summary.json`, 대표 픽셀은 [`mirror5-record-sample50`](../research/live/2026-10-08-render-probe/mirror5-record-sample50/)입니다. 50개 전체 raw 경로는 JSONL에 있습니다.
+복사 자원 준비·제출 CPU 시간의 중앙값은 0.341 ms, readback CPU 시간은 0.414 ms였습니다. GPU 시간은 아닙니다. 마지막 50번 표본의 RGB/Z/재질 그림을 확인했고 Z는 전부 유한·비영, 범위는 `-6.03125~-0.26806640625`였습니다. 세 hook 지점의 원래 코드 복원과 Tier 0·활성 hook 0도 확인했습니다. 이어 사용자 `sdk unload` 후 DLL·pipe 부재와 `Render probe drained; trampoline and stub released` 로그를 확인했습니다. 기록은 `research/live/2026-10-08-render-probe/0.5.0-record-5s.jsonl`, `0.5.0-first-record.json`, `0.5.0-record-summary.json`, 대표 픽셀은 [`mirror5-record-sample50`](../research/live/2026-10-08-render-probe/mirror5-record-sample50/)입니다. 50개 전체 raw 경로는 JSONL에 있습니다. 최종 재로딩에서도 0.5.0·Tier 0·활성 hook 0·캡처 idle·SDK 9채널 수신을 확인했습니다(`0.5.0-reloaded-idle.json`).
 
 ## 구현 범위
 
@@ -37,7 +37,7 @@ JSONL은 캡처 metadata·원시 파일 저장 경로·Present 기록·실제 �
 | 진단 | `%LOCALAPPDATA%\ETS2AutonomyLab\ot\<PID>\ot_core.log`, 요청 시 수동 minidump |
 | Python | `Client`와 공유 메모리 `StateReader`, CLI |
 
-현재 Tier 0은 **SDK 수신을 유지하고 내부 필드 읽기와 render probe를 끈 상태**입니다. Tier 1에서 내부 읽기와 별도 opt-in 렌더 hook을 지원합니다. 0.4.1의 mirror5 단일 GPU 복사는 실제 확인했습니다. ImGui, 카메라 필드 쓰기, Tier 3 게임 동작 패치, `OT_Bundles`, MCAP, Foxglove는 아직 구현하지 않았습니다. `dump`는 수동 진단이며 자동 크래시 덤프 기능은 아닙니다.
+현재 Tier 0은 **SDK 수신을 유지하고 내부 필드 읽기와 render probe를 끈 상태**입니다. Tier 1에서 내부 읽기와 별도 opt-in 렌더 hook을 지원합니다. 0.5.0의 mirror5 5초·10 Hz 기록까지 실제 확인했습니다. ImGui, 카메라 필드 쓰기, Tier 3 게임 동작 패치, `OT_Bundles`, MCAP, Foxglove는 아직 구현하지 않았습니다. `dump`는 수동 진단이며 자동 크래시 덤프 기능은 아닙니다.
 
 ### 0.4.1 mirror5 GPU 캡처 — 실제 픽셀 4회 확보
 
@@ -127,7 +127,7 @@ RenderDoc 1.46 공식 portable을 `research/tools/renderdoc-1.46/`에 준비했�
 
 첫 사용자 실행에서는 설정이 UI에 정상 로딩되고 RenderDoc이 게임 PID 5732에 주입됐습니다. 그러나 이 프로세스의 연결이 끊어진 뒤 Steam이 별도 PID 32268을 실행했고, 그 게임에는 `renderdoc.dll`이 없었습니다. `research/live/2026-10-08-renderdoc/first-launch.log`와 `first-launch.cap`에 이 시도의 로그·실제 적용 설정을 보존했습니다. [공식 Steamworks 디버깅 방식](https://partner.steamgames.com/doc/sdk/api#SteamAPI_RestartAppIfNecessary)에 따라 게임 `bin/win_x64/steam_appid.txt`를 새로 만들고 설치 manifest에서 확인한 `227300`을 넣어 재실행했습니다. 그 결과 PID 28532에 RenderDoc이 유지되어 frame 3160 캡처에 성공했습니다. 임시 App ID 파일은 캡처 후 삭제했고 부재도 확인했습니다.
 
-`research/live/2026-10-08-renderdoc/frame3160.rdc` (1.72 GB), 화면 썸네일, XML 렌더 명령을 보존했습니다. 패스 마커가 없고 두 세로형 G-buffer 구간이 같은 리소스를 재사용함을 확인했습니다. 실제 분석과 hook 후보는 [13번 M1 기록](../docs/13_game_operating_table.md)에 있습니다. `export_frame3160.py`를 RenderDoc 내장 Python으로 실행해 4뷰의 원시 텍스처 12개를 확보했고, `convert_pixels.py`를 Python 3.13으로 실행해 NPY와 비교 그림을 확인했습니다. 원시 Z는 음수 또는 0이며 두 세로형 시점의 색상은 서로 다릅니다. `pixels/export.log`, `images.json`, `pixel-statistics.json`에 실제 결과가 있습니다. `export_frame3160_constants.py`도 실제 실행해 16개 draw의 VS/PS·상수·viewport를 추출했습니다. `reconstruct_pixels.py`로 4개 카메라 공간 점군을 NPY·PLY로 저장했으며 fog ray와 geometry projection의 pixel-center 차이는 최대 0.000033 pixel 미만입니다. DLL 실시간 GPU 수집·월드 pose·미터 단위 검증은 아직입니다.
+`research/live/2026-10-08-renderdoc/frame3160.rdc` (1.72 GB), 화면 썸네일, XML 렌더 명령을 보존했습니다. 패스 마커가 없고 두 세로형 G-buffer 구간이 같은 리소스를 재사용함을 확인했습니다. 실제 분석과 hook 후보는 [13번 M1 기록](../docs/13_game_operating_table.md)에 있습니다. `export_frame3160.py`를 RenderDoc 내장 Python으로 실행해 4뷰의 원시 텍스처 12개를 확보했고, `convert_pixels.py`를 Python 3.13으로 실행해 NPY와 비교 그림을 확인했습니다. 원시 Z는 음수 또는 0이며 두 세로형 시점의 색상은 서로 다릅니다. `pixels/export.log`, `images.json`, `pixel-statistics.json`에 실제 결과가 있습니다. `export_frame3160_constants.py`도 실제 실행해 16개 draw의 VS/PS·상수·viewport를 추출했습니다. `reconstruct_pixels.py`로 4개 카메라 공간 점군을 NPY·PLY로 저장했으며 fog ray와 geometry projection의 pixel-center 차이는 최대 0.000033 pixel 미만입니다. 후속 DLL에서 mirror5 단일·제한 시간 수집을 확인했으며, 4뷰 실시간 수집·월드 pose·미터 단위 검증은 아직입니다.
 
 연구용 싱글플레이 프로필에서 사용합니다. Convoy/TruckersMP에는 플러그인을 빼고 실행합니다. `singleplayer_research`는 사용자가 설정하는 확인 값이며 멀티플레이 자동 감지 기능이 아닙니다.
 

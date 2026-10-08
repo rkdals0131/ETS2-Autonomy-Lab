@@ -14,7 +14,7 @@
 | M3 | 같은 캡처의 fog 상수로 카메라 공간 점군 복원. geometry projection과의 좌표 일관성 확인. 월드 pose·AI 박스·미터·DSV 정밀도 비교는 아직 |
 | M4–M6 | 미착수. 리그·독립 6뷰·누락 측정·센서 묶음 출력 없음 |
 
-현재 구현의 차이: 스키마는 추가 YAML 의존성 없이 JSON으로 저장·컴파일합니다. Tier 0에서도 공식 SDK 수신은 유지합니다. Tier 1은 `sdk_frame_end`에서 미러와 물리 차량 자세를 읽는 초기 경로이며, 렌더 완료 스냅샷이 아닙니다. 공유 메모리의 슬롯 소유권 교환은 Python 프로세스에 로드하는 작은 `ot_ipc.dll`이 담당합니다. RenderDoc 캡처용 백업은 `ot/backup/before-renderdoc-20261008-132657/`이며, `dxgi.dll`, `vrperfkit.yml`, `vrperfkit.log`, 구버전 `plugins/ot_core.dll`이 보존돼 있습니다. 캡처 후 게임 정상 종료를 확인하고 14:29에 새 0.3.0 DLL을 plugins 폴더에 배치했습니다. vrperfkit은 계속 분리 상태입니다. 첫 캡처 시도는 Steam 재실행으로 연결이 빠졌으나 임시 `steam_appid.txt`로 해결했고, 실제 캡처 후 이 파일은 제거했습니다. 이후 저장된 RDC에서 4개 뷰의 픽셀을 추출했습니다. 게임 DLL의 연속 수집 경로는 아직 아닙니다.
+현재 구현의 차이: 스키마는 추가 YAML 의존성 없이 JSON으로 저장·컴파일합니다. Tier 0에서도 공식 SDK 수신은 유지합니다. Tier 1은 `sdk_frame_end`에서 미러와 물리 차량 자세를 읽는 초기 경로이며, 렌더 완료 스냅샷이 아닙니다. 공유 메모리의 슬롯 소유권 교환은 Python 프로세스에 로드하는 작은 `ot_ipc.dll`이 담당합니다. RenderDoc 캡처용 백업은 `ot/backup/before-renderdoc-20261008-132657/`이며, `dxgi.dll`, `vrperfkit.yml`, `vrperfkit.log`, 구버전 `plugins/ot_core.dll`이 보존돼 있습니다. 캡처 후 게임 정상 종료를 확인하고 14:29에 새 0.3.0 DLL을 plugins 폴더에 배치했습니다. vrperfkit은 계속 분리 상태입니다. 첫 캡처 시도는 Steam 재실행으로 연결이 빠졌으나 임시 `steam_appid.txt`로 해결했고, 실제 캡처 후 이 파일은 제거했습니다. 이후 저장된 RDC에서 4개 뷰의 픽셀을 추출했습니다. 이는 저장된 캡처의 추출 이력이며, 후속 DLL의 mirror5 10 Hz 실측은 아래에 따로 기록합니다.
 
 ### M1의 실제 캡처 결과
 
