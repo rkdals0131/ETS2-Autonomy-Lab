@@ -47,6 +47,9 @@ During game pause, SDK state and the frozen simulation clock continue on the
 state connection. Sensor work compiled while paused is omitted; unpaused sensor
 frames resume without restarting the relay.
 
+`ros-env.sh` supports both Bash and Zsh, selecting the matching ROS setup scripts.
+Source it in the current shell; it does not require switching the terminal to Bash.
+
 The launch file starts both ROS and Foxglove with the shared-memory profile. Add
 `foxglove:=false` for a receive-only run. Other ROS consumers must source
 `ros-env.sh` to join domain 42 with the same DDS profile.
