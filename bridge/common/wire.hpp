@@ -115,13 +115,17 @@ inline void send_packet(const Socket& s,const json& meta,std::span<const uint8_t
     transfer(s,const_cast<char*>(text.data()),text.size(),true);
     if(n) transfer(s,const_cast<uint8_t*>(data.data()),data.size(),true);
 }
-inline Packet receive_packet(const Socket& s) {
+inline std::pair<json,size_t> receive_header(const Socket& s) {
     std::array<uint8_t,16> header{};transfer(s,header.data(),header.size(),false);
     uint32_t m;uint64_t n;std::memcpy(&m,header.data()+4,4);std::memcpy(&n,header.data()+8,8);
     if(std::memcmp(header.data(),"OTR1",4) || m>65536 || n>64*1024*1024)
         throw std::runtime_error("Invalid transport header");
     std::string text(m,'\0');transfer(s,text.data(),text.size(),false);
-    Packet p{json::parse(text),Bytes(static_cast<size_t>(n))};
+    return {json::parse(text),static_cast<size_t>(n)};
+}
+inline Packet receive_packet(const Socket& s) {
+    auto [meta,n]=receive_header(s);
+    Packet p{std::move(meta),Bytes(n)};
     if(n) transfer(s,p.data.data(),p.data.size(),false);
     return p;
 }
