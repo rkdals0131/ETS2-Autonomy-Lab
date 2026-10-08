@@ -31,6 +31,10 @@ def main():
     reconstruct.add_argument("directory", help="Capture directory containing images.json")
     reconstruct.add_argument("--output", required=True, help="New NPZ file; existing files are not overwritten")
     reconstruct.add_argument("--depth-source", choices=("geometry", "attributes"), default="geometry")
+    boxes = sub.add_parser("project_boxes", help="Offline actor box projection and DSV occlusion comparison (NumPy)")
+    boxes.add_argument("directory", help="Capture directory containing images.json")
+    boxes.add_argument("--objects", required=True, help="JSON list of address, placement and aabb_raw records")
+    boxes.add_argument("--output", required=True, help="New JSON file containing projected edges and depth counts")
     watch = sub.add_parser("watch", help="Print newest shared state as JSON lines; Ctrl+C closes the reader")
     watch.add_argument("--hz", type=float, default=10.0)
     watch.add_argument("--duration", type=float, help="Stop after this many seconds")
@@ -41,6 +45,9 @@ def main():
         if args.command == "reconstruct":
             from .reconstruction import save_reconstruction
             result = save_reconstruction(args.directory, args.output, args.depth_source)
+        elif args.command == "project_boxes":
+            from .projection import save_box_comparison
+            result = save_box_comparison(args.directory, args.objects, args.output)
         elif args.command == "loader":
             client = LoaderClient(timeout=args.timeout)
             result = client.status() if args.action == "status" else client.control(args.action)

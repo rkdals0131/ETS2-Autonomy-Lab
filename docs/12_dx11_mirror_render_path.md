@@ -1102,3 +1102,30 @@ SM5 DXBC도 같은 의미의 `dp2 r0.x, r3.xxxx, v4.zzzz`와 `add o0.w, r0.x, v5
 실용적으로 깊이 출처를 나눈다. `otpy reconstruct`의 기본 `geometry`는 DSV와 viewport·pass 투영을 사용하고, `attributes`는 보정된 Z와 deferred ray를 사용한다. 기존 원시 자료를 덮어쓰거나 둘을 같은 센서값으로 혼합하지 않는다. 네 뷰에서 두 경로의 점군을 만들었으며 각 경로의 유효 점은 1,413,986개다. 기본 카메라 월드 변환과 실제 거리·AI 박스의 정합은 후속 검증 대상이다.
 
 근거 자료는 `research/extracted/effect-analysis/leaves_defattr.asm`, 원본 GLSL 추출본, `research/live/2026-10-08-render-probe/0.8.2-depth-comparison/material-groups.json`, `0.8.2-world-reconstruction/`이다. 게임 셰이더 원본과 raw 배열은 공개 저장소에 포함하지 않는다.
+
+## 주차 차량 박스와 실제 월드 점군 대조
+
+DLL 0.8.2로 Present 구간 55의 미러 0·1·2·5를 수집하고 외부 객체 읽기로 앞뒤를 감쌌다. 객체 관측 구간은 약 93.28ms이며 원자적 스냅샷은 아니다. 관측한 차량 56개의 actor 배치와 로컬 AABB를 월드 OBB로 변환하고 pass 카메라로 투영했다. `otpy project_boxes`는 이 계산을 저장된 자료에서 재실행한다. 화면 행 순서는 원시 텍스처와 같다.
+
+| 주차 차량 / 뷰 | actor 원점 거리(게임 단위) | 투영 영역 픽셀 | 깊이가 박스 안 | 앞의 물체에 가림 | 박스 뒤 깊이 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 노란 트럭 / mirror0 | 129.92 | 422 | 109 | 163 | 150 |
+| 같은 트럭 / mirror1 | 129.91 | 237 | 79 | 65 | 93 |
+| 차고 벽 뒤 차량 / mirror0 | 56.00 | 514 | 0 | 514 | 0 |
+| 같은 차량 / mirror1 | 55.98 | 136 | 0 | 136 | 0 |
+
+노란 트럭은 actor `0x2968e6c17f0`, world `[10391.8721, 44.4008, -9238.4717]`다. [RGB 위 투영 박스 확대](../research/live/2026-10-08-object-projection/cli-parked-truck-crops.png)에서 나무에 일부 가린 트럭과 박스가 겹친다. 깊이 판정은 각 광선과 OBB의 진입/이탈 거리로 계산한다. 박스 중심 거리를 표면 깊이 정답으로 삼지 않으며, OBB 안의 다른 물체도 같은 판정을 받을 수 있다. 넓은 AABB 안에는 빈 공간이 있으므로 박스 뒤 배경도 예상되는 결과다. 이 비율을 객체 검출 정확도나 미러 누락률로 해석하지 않는다.
+
+해당 주차 트럭의 전후 pose는 같았다. 반면 영상에 투영된 AI 후보의 actor 원점은 읽기 구간에 0.43–1.16단위 움직였고 박스들은 앞의 깊이에 가려졌다. 현재 자료는 정적 객체의 월드 정합을 지지하지만 움직이는 AI의 렌더 자세, 객체별 픽셀 식별, 거리 구간별 오차 및 미터 단위의 독립 검증은 남아 있다. 원본·수치는 `research/live/2026-10-08-object-projection/capture-with-object-brackets.json`, `objects-before.json`, `mirror*-cli-boxes.json`에 있다.
+
+## 차량 렌더 모델의 실제 변환 성분
+
+차량 모델에서 셰이더의 model 변환까지 읽기 경로를 연결했다. 확정 필드는 [스키마 `render_vehicle`](../ot/schema/1.61.1.1/fields.json)에 저장했다. AI actor는 모델 포인터를 직접 가지며, parked actor는 holder를 한 번 더 거친다. 모델의 LOD 배열이 가진 각 model object는 geometry 객체 `Q` 목록과 `pp_model_simple` 성분을 가진다. 타입 getter의 기계어 `mov eax,1; ret`로 component slot 1임을 확인했다. 게임 함수를 호출한 결과가 아니다.
+
+`model-object-prepare-render`(`0x15E12A0`)는 배치 cache getter(`0x4575E0`)의 결과를 성분의 virtual setter에 전달한다. setter `0x321460`은 배치의 quaternion을 회전행렬로 바꾸고 local XYZ·cell XZ를 복사한다. 일반 변환 경로 `0x3EB290 → 0x320B40`은 slot 1의 이 행렬·위치를 카메라 성분과 합성한다. geometry의 추가 component 묶음이 이 성분을 보유하며, uniform 인수 생성(`0x1509140`) 때 pass 기본 묶음과 병합한다. instancing·MVP filter 분기는 별도다.
+
+현재 PID 24748에서 주차 트럭 1대와 AI 8대의 LOD model object 36개를 읽었다. 모든 조사한 geometry의 추가 묶음이 해당 model object의 성분을 가리켰다. 그러나 현재 사용하지 않는 LOD의 성분에는 identity·원점 또는 과거 위치가 남아 있었다. **LOD 배열 전체의 성분을 현재 렌더 자세라고 취급하면 잘못된 박스를 만들 수 있다.** 단순히 포인터가 존재하는지나 cache 유효 비트로 현재 사용 여부를 대신 판정하지 않는다.
+
+노란 주차 트럭의 마지막 LOD 성분은 `[10393.0456, 44.4072, -9239.4701]`로 해당 model object cache와 같았다. actor 원점과는 약 1.5408단위 차이가 있었다. 따라서 actor 기준 AABB를 model 원점에 그대로 붙여서도 안 된다. 원점 변환을 연결하고, 실제 미러 제출 목록의 `Q` 및 그 component를 같은 compile 구간에서 읽는 것이 다음 단계다. 외부에서 시차를 두고 읽은 성분과 GPU 영상이 동일 시각이라는 증거는 아직 없다.
+
+외부 읽기는 2,199회·66,546 bytes·약 12.80ms였고 handle을 닫았다. 자료는 `vehicle-render-components.json`, `model-component-setter.txt`, `model-view-input.txt`, `draw-prepare-uniform.txt`다. 이어 외부에서 source pass를 찾으려던 순간에는 대응 미러 pass를 포착하지 못했으므로 `vehicle-source-pass-matches.json`의 빈 결과를 미러 제출 없음의 증거로 사용하지 않는다. 기존 compile hook에서 읽을 필요가 있다.

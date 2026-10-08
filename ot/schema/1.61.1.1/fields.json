@@ -47,6 +47,24 @@
     "cell_scale": 512,
     "evidence": "docs/12_dx11_mirror_render_path.md"
   },
+  "render_vehicle": {
+    "ai_actor_model_offset": 528,
+    "parked_actor_model_holder_offset": 144,
+    "holder_model_offset": 0,
+    "model_vtable_rva": 36566880,
+    "model_lod_array_offset": 40,
+    "model_object_cached_placement_offset": 16,
+    "model_object_geometry_array_offset": 752,
+    "model_object_component_offset": 888,
+    "geometry_additional_batch_id_offset": 322,
+    "model_component_vtable_rva": 35794904,
+    "model_component_type": 1,
+    "model_component_rotation_offset": 24,
+    "model_component_local_xyz_offset": 88,
+    "model_component_cell_xz_offset": 100,
+    "model_component_set_placement_rva": 3282016,
+    "evidence": "docs/12_dx11_mirror_render_path.md#차량-렌더-모델의-실제-변환-성분"
+  },
   "vehicle_physics": {
     "actor_vehicle_offset": 24,
     "vehicle_body_offset": 48,
