@@ -1,8 +1,22 @@
-# ot 0.8.0 — 상주 로더·네 미러 영상·pass 카메라 상수
+# ot 0.8.1 — 상주 로더·네 미러 영상·CPU/GPU 카메라 상수
 
 > **확정:** SDK/IPC·내부 자차 pose 대조. mirror5 10 Hz 기록·네 미러 같은 Present 구간 수집. 0.8.0은 명령 구간을 통해 영상과 pass 기본 카메라 상태를 연결. 콘솔 없는 기능 DLL 교체, hook 시간 계측·내부 읽기 비용 감소도 실측.
 > **미확정:** DLL 영상과 최종 카메라 상수 연결·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
-> **다음:** 개별 draw의 최종 GPU 상수와 pass 기본 상태 대조, 월드 정합·주행 및 연속 데이터 전달.
+> **다음:** draw별 변경 범위·월드 정합·AI 박스 대조, 주행 및 연속 데이터 전달.
+
+### 0.8.1 — 같은 영상의 GPU geometry 상수 대조
+
+기존 OM hook에서 해당 미러의 G-buffer를 떠나기 직전 VS/PS slot 0의 실제 바인딩 범위와 viewport를 수집합니다. CPU pass 상태는 기존처럼 컴파일 시점에 보존합니다. VS/PS raw 파일과 `geometry_gpu` metadata가 기존 이미지 묶음에 추가되며 `images` 배열과 기존 CLI는 그대로입니다. 추가 hook은 없습니다.
+
+`VSGetConstantBuffers1`·`PSGetConstantBuffers1`에서 시작 위치와 길이를 받아, 해당 범위를 작은 staging buffer로 GPU 복사합니다. 바인딩 offset의 단위는 16 bytes이며 source buffer 전체를 처음부터 읽지 않습니다. 이미지 복사 뒤의 기존 completion query가 앞서 제출한 상수 복사도 포함하므로 별도 GPU wait 없이 회수합니다. [GetConstantBuffers1 문서](https://learn.microsoft.com/en-us/windows/win32/api/d3d11_1/nf-d3d11_1-id3d11devicecontext1-vsgetconstantbuffers1), [CopySubresourceRegion 문서](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-copysubresourceregion).
+
+저장된 RenderDoc 네 미러의 마지막 geometry draw와 다음 OM binding 사이에는 UAV/SRV 해제와 clear만 있었고 VS/PS shader·상수 변경은 없었습니다(`geometry-exit-api-order.json`). 이 순서가 수집 지점을 고른 근거입니다. metadata의 정확한 관측 시점은 `before_leaving_gbuffer_binding`이며 모든 draw의 상수를 기록한다는 뜻은 아닙니다. geometry의 PS 상수는 fog 상수와 구별합니다.
+
+일반 DX11 PID 24748의 Present 구간 61에서 네 영상과 GPU VS/PS 상수 8개를 실제 수집했습니다. 각각 256 bytes이며 원본은 2 MiB constant buffer의 서로 다른 offset에 있었습니다. 네 카메라에서 GPU VS 상수로 분리한 회전 성분과 CPU pass 회전이 정확히 같았고, GPU에서 분리한 투영과 보정한 CPU 투영의 최대 차이는 5.61e-8 미만이었습니다. 실제 GPU viewport의 깊이 범위도 CPU 값과 같았습니다. CPU ray의 세 pixel-center 표본을 실제 GPU 투영으로 되돌린 최대 오차는 0.000022 pixel 미만입니다.
+
+각 GPU 변환의 이동 성분 `t`에서 `camera_world + inverse(R) * t`를 계산하면 네 뷰가 같은 입력 기준 원점을 가리켰습니다. 뷰 간 최대 차이는 1.53e-7 게임 길이 단위였습니다. 이 수치는 CPU/GPU 카메라 변환의 일관성이며 깊이 센서의 거리 오차나 미터 정확도가 아닙니다. 개별 draw override·다른 shader·주행 중 상태 변화는 추가 관측이 필요합니다.
+
+원본은 `research/live/2026-10-08-render-probe/0.8.1-geometry-gpu.json`, 수치 비교는 `0.8.1-gpu-camera-comparison.json`입니다. 각 상수 복사와 이미지 복사는 같은 Present 구간 안에 있었습니다. 캡처 후 패닉·메타로더 재로딩으로 staging buffer와 hook 임시 코드를 정리하고 Tier 0으로 돌아왔습니다.
 
 ### 0.8.0 — 영상에 pass 기본 카메라 상태 연결
 

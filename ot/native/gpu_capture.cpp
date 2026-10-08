@@ -34,6 +34,7 @@ void check(HRESULT result,const char* operation) {
 
 void GpuCapture::release_gpu() {
     for(auto& image:images_) {image.source.Reset();image.staging.Reset();}
+    for(auto& constants:geometry_constants_) constants.staging.Reset();
     completion_.Reset();context_.Reset();
 }
 void GpuCapture::cancel() noexcept {
@@ -59,9 +60,10 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame) {
             throw std::runtime_error("A camera capture is already pending");
         release_gpu();
         for(auto& image:images_) image.pixels.clear();
+        for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
         metadata_=json::object();error_.clear();last_label_.clear();saved_.clear();
         geometry_binding_=geometry_sdk_=gpu_polls_=bindings_seen_=0;
-        geometry_pass_=color_pass_=nullptr;requested_frame_=requested_frame;
+        geometry_pass_=color_pass_=geometry_gpu_=nullptr;requested_frame_=requested_frame;
         request_started_=GetTickCount64();phase_=Phase::armed;
     } else if(action=="cancel") {
         release_gpu();if(phase_!=Phase::ready) phase_=Phase::idle;
@@ -87,6 +89,13 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
         if(requested_frame_ && render_frame>requested_frame_)
             throw std::runtime_error(camera_+" did not finish rendering in the requested Present interval");
         auto next=count?texture(targets[0]):ComPtr<ID3D11Texture2D>{};
+        if(images_[0].source && geometry_gpu_.is_null() && context==context_.Get() &&
+           geometry_frame_==render_frame && (count!=4 || next.Get()!=images_[0].source.Get())) {
+            ComPtr<ID3D11RenderTargetView> current;
+            context->OMGetRenderTargets(1,&current,nullptr);
+            if(texture(reinterpret_cast<uintptr_t>(current.Get())).Get()==images_[0].source.Get())
+                geometry_constants(context,binding_sequence);
+        }
         // Copy before a new group overwrites the shared G-buffer. Unbinding or
         // switching to multiple targets also ends the outgoing color pass.
         if(images_[2].source && context==context_.Get() &&
@@ -109,12 +118,59 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
             if(!next || !flags) return;
             images_[0].source=std::move(next);images_[1].source=std::move(flags);
             context_=context;geometry_binding_=binding_sequence;geometry_sdk_=sdk_frame;geometry_frame_=render_frame;
-            geometry_pass_=*pass;
+            geometry_pass_=*pass;geometry_gpu_=nullptr;
+            for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
         } else if(count==1 && images_[0].source && context==context_.Get() && label==camera_+"/composition_raw") {
             images_[2].source=std::move(next);color_pass_=*pass;
         }
     } catch(const std::exception& e) {error_=e.what();release_gpu();phase_=Phase::error;}
     catch(...) {error_="Camera readback failed";release_gpu();phase_=Phase::error;}
+}
+void GpuCapture::geometry_constants(ID3D11DeviceContext* context,uint64_t binding_sequence) {
+    Com<ID3D11DeviceContext1> context1;
+    check(context->QueryInterface(IID_PPV_ARGS(&context1)),"QueryInterface(DeviceContext1)");
+    Com<ID3D11Device> device;context->GetDevice(&device);
+    Com<ID3D11VertexShader> vs;Com<ID3D11PixelShader> ps;
+    context->VSGetShader(&vs,nullptr,nullptr);context->PSGetShader(&ps,nullptr,nullptr);
+    UINT viewport_count=D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    std::array<D3D11_VIEWPORT,D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> viewports{};
+    context->RSGetViewports(&viewport_count,viewports.data());
+    json viewport_json=json::array();
+    for(UINT i=0;i<viewport_count;++i) {
+        const auto& v=viewports[i];
+        viewport_json.push_back({{"x",v.TopLeftX},{"y",v.TopLeftY},{"width",v.Width},{"height",v.Height},
+            {"min_depth",v.MinDepth},{"max_depth",v.MaxDepth}});
+    }
+    geometry_gpu_={{"phase","before_leaving_gbuffer_binding"},{"qpc",qpc_now()},
+        {"binding_sequence",binding_sequence},{"viewports",viewport_json},
+        {"vertex_shader",reinterpret_cast<uintptr_t>(vs.Get())},{"pixel_shader",reinterpret_cast<uintptr_t>(ps.Get())}};
+    for(size_t stage=0;stage<geometry_constants_.size();++stage) {
+        auto& sample=geometry_constants_[stage];
+        Com<ID3D11Buffer> source;UINT first{},count{};
+        if(stage==0) context1->VSGetConstantBuffers1(0,1,&source,&first,&count);
+        else context1->PSGetConstantBuffers1(0,1,&source,&first,&count);
+        sample.description={{"stage",stage==0?"vs":"ps"},{"slot",0},{"bound",source!=nullptr},
+            {"first_constant",first},{"num_constants",count}};
+        if(!source) continue;
+        D3D11_BUFFER_DESC desc{};source->GetDesc(&desc);
+        const uint64_t offset=static_cast<uint64_t>(first)*16;
+        const uint64_t bound_size=static_cast<uint64_t>(count)*16;
+        // The API exposes 16-byte constant units; bound ranges can extend past
+        // the buffer, where shader reads are zero. Copy only existing storage.
+        const auto bytes=offset<desc.ByteWidth?std::min<uint64_t>(bound_size,desc.ByteWidth-offset):0;
+        sample.description.update({{"source_buffer",reinterpret_cast<uintptr_t>(source.Get())},
+            {"source_byte_width",desc.ByteWidth},{"source_byte_offset",offset},{"copied_bytes",bytes}});
+        if(!bytes) continue;
+        D3D11_BUFFER_DESC staging{};staging.ByteWidth=static_cast<UINT>(bytes);
+        staging.Usage=D3D11_USAGE_STAGING;staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        check(device->CreateBuffer(&staging,nullptr,&sample.staging),"CreateBuffer(constant staging)");
+        sample.bytes.resize(static_cast<size_t>(bytes));
+        sample.description["file"]=camera_+(stage==0?"_geometry_vs_cb0.bin":"_geometry_ps_cb0.bin");
+        D3D11_BOX box{static_cast<UINT>(offset),0,0,static_cast<UINT>(offset+bytes),1,1};
+        context->CopySubresourceRegion(sample.staging.Get(),0,0,0,0,source.Get(),0,&box);
+    }
+    // The existing image completion query is inserted later on this context,
+    // so it also covers these buffer copies without an additional GPU wait.
 }
 void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t sdk_frame,
                         uint64_t render_frame,uint64_t observation_session) {
@@ -144,6 +200,7 @@ void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t 
     ++sequence_;
     metadata_={{"capture_sequence",sequence_},{"camera",camera_},{"phase","leaving_camera_composition"},
         {"geometry_pass",geometry_pass_},{"color_pass",color_pass_},
+        {"geometry_gpu",geometry_gpu_},
         {"render_frame_id",render_frame},{"frame_id_source","Present return intervals"},
         {"observation_session_qpc",observation_session},{"qpc_frequency",qpc_frequency()},
         {"copy_submission_qpc",cpu_begin},{"copy_submission_cpu_ticks",qpc_now()-cpu_begin},
@@ -176,6 +233,20 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
             std::memcpy(image.pixels.data()+y*row,static_cast<uint8_t*>(mapped[i].pData)+y*mapped[i].RowPitch,row);
         context->Unmap(image.staging.Get(),0);
     }
+    json constants_json=json::array();
+    for(auto& sample:geometry_constants_) {
+        if(sample.staging) {
+            D3D11_MAPPED_SUBRESOURCE mapped_buffer{};
+            const auto result=context->Map(sample.staging.Get(),0,D3D11_MAP_READ,
+                D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped_buffer);
+            if(result==DXGI_ERROR_WAS_STILL_DRAWING) return;
+            check(result,"Map(constant staging)");
+            std::memcpy(sample.bytes.data(),mapped_buffer.pData,sample.bytes.size());
+            context->Unmap(sample.staging.Get(),0);
+        }
+        if(!sample.description.is_null()) constants_json.push_back(sample.description);
+    }
+    if(!metadata_["geometry_gpu"].is_null()) metadata_["geometry_gpu"]["constant_buffers"]=std::move(constants_json);
     metadata_["readback_ready_qpc"]=qpc_now();
     metadata_["readback_cpu_ticks"]=qpc_now()-cpu_begin;
     release_gpu();phase_=Phase::ready;
@@ -190,6 +261,12 @@ json GpuCapture::save() {
         std::ofstream output(directory/metadata_["images"][i]["file"].get<std::string>(),std::ios::binary);
         output.exceptions(std::ios::badbit|std::ios::failbit);
         output.write(reinterpret_cast<const char*>(images_[i].pixels.data()),images_[i].pixels.size());
+        output.close();
+    }
+    for(const auto& sample:geometry_constants_) if(!sample.bytes.empty()) {
+        std::ofstream output(directory/sample.description.at("file").get<std::string>(),std::ios::binary);
+        output.exceptions(std::ios::badbit|std::ios::failbit);
+        output.write(reinterpret_cast<const char*>(sample.bytes.data()),sample.bytes.size());
         output.close();
     }
     // Publish metadata last; incomplete files are not presented as a saved capture.
