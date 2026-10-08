@@ -6,12 +6,13 @@ import threading
 import time
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageTk, ImageOps
 import tkinter as tk
 from tkinter import filedialog
 
 from .client import Client
 from .bundles import BundleReader
+from .rig_editor import RigEditor
 
 
 def _latest(output, message):
@@ -61,8 +62,8 @@ class Mosaic:
             drawing.text((x+4, y+4), title, font=self.font, fill="#e3eef8")
             # Resize in float32 before tone mapping; leave raw sensor arrays
             # untouched. FOV aspect also handles non-square native pixels.
-            out_width = min(476, round(280*aspect))
-            out_height = min(280, round(out_width/aspect))
+            out_width = max(1, min(476, round(280*aspect)))
+            out_height = max(1, min(280, round(out_width/aspect)))
             small = np.stack([np.asarray(Image.fromarray(rgb[..., channel].astype(np.float32)).resize(
                 (out_width, out_height), Image.Resampling.BILINEAR)) for channel in range(3)], axis=-1)
             small = np.maximum(np.nan_to_num(small), 0) * (2.0**exposure_ev / self.white)
@@ -80,19 +81,39 @@ class PreviewState:
     misses: int = 0
     error: str = ""
     cleanup_error: str = ""
+    applied_config: dict | None = None
+    config_result: tuple | None = None
+    config_updates: int = 0
 
 
-def _capture(config, hz, stop, output, state):
+def _capture(config, hz, stop, output, state, updates):
     client, reader = Client(timeout=3), None
     try:
         client.tier(1)
         client.request("render_probe", enabled=True)
         client.request("camera_rig", **config)
+        state.applied_config = config
+        state.config_result = (config, "")
         mosaic = Mosaic(config)
         due = time.monotonic()
         while not stop.is_set():
             if stop.wait(max(0, due-time.monotonic())):
                 break
+            try:
+                settings = updates.get_nowait()
+            except queue.Empty:
+                pass
+            else:
+                try:
+                    client.request("camera_rig", **settings)
+                except RuntimeError as error:
+                    # A rejected edit leaves the previous native configuration
+                    # intact. Keep displaying it so the user can fix the input.
+                    state.config_result = (settings, str(error))
+                else:
+                    state.applied_config = settings
+                    state.config_result = (settings, "")
+                    state.config_updates += 1
             client.request("capture_mirrors", action="arm", metadata=False)
             deadline = time.monotonic()+3
             while not stop.is_set():
@@ -145,13 +166,17 @@ def run_preview(config_file, hz=5.0, duration=None, snapshot=None):
     root = tk.Tk()
     root.title("ETS2 camera rig — live RGB")
     root.configure(bg="#111820")
+    root.geometry(f"{min(1500, root.winfo_screenwidth()-80)}x{min(940, root.winfo_screenheight()-80)}")
     state, stop, messages = PreviewState(), threading.Event(), queue.Queue(maxsize=2)
     label = tk.Label(root, bg="#111820", text="Connecting to ETS2…", fg="white", width=120, height=28)
     label.pack(fill="both", expand=True)
+    updates = queue.Queue(maxsize=1)
+    editor = RigEditor(root, config, lambda settings: _latest(updates, settings), lambda: state.applied_config)
+    editor.pack(fill="x")
     footer = tk.Frame(root, bg="#111820")
     footer.pack(fill="x", padx=12, pady=8)
     status = tk.StringVar(value="Starting the camera rig")
-    tk.Label(footer, textvariable=status, bg="#111820", fg="#d8e4ef").pack(side="left")
+    tk.Label(footer, textvariable=status, bg="#111820", fg="#d8e4ef").pack(anchor="w")
     last_picture, last_frame, last_time = None, None, None
     image_reference = None
     closing, finished, capture_status = False, False, ""
@@ -179,7 +204,7 @@ def run_preview(config_file, hz=5.0, duration=None, snapshot=None):
                         bg="#111820", fg="white", highlightthickness=0, length=180)
     exposure.pack(side="right", padx=15)
     root.protocol("WM_DELETE_WINDOW", close)
-    worker = threading.Thread(target=_capture, args=(config, hz, stop, messages, state), name="ot-preview-capture")
+    worker = threading.Thread(target=_capture, args=(config, hz, stop, messages, state, updates), name="ot-preview-capture")
 
     def tick():
         nonlocal finished, last_picture, last_frame, last_time, image_reference, capture_status
@@ -191,12 +216,14 @@ def run_preview(config_file, hz=5.0, duration=None, snapshot=None):
             if message[0] == "frame":
                 capture_status = ""
                 last_picture, last_frame, last_time = message[1:]
-                image_reference = ImageTk.PhotoImage(last_picture)
+                display = ImageOps.contain(last_picture, (max(1, label.winfo_width()), max(1, label.winfo_height())))
+                image_reference = ImageTk.PhotoImage(display)
                 label.configure(image=image_reference, text="", width=0, height=0)
             elif message[0] == "status":
                 capture_status = message[1]
             elif message[0] == "finished":
                 finished = True
+        editor.sync(state.config_result)
         if not closing and (state.cleanup_error or capture_status):
             status.set(state.cleanup_error or capture_status)
         elif last_time is not None and not closing and not state.error:
@@ -226,6 +253,7 @@ def run_preview(config_file, hz=5.0, duration=None, snapshot=None):
         with open(snapshot, "xb") as destination:
             last_picture.save(destination, format="PNG")
     result = {"captures": state.captures, "missing_bundles": state.misses,
+              "config_updates": state.config_updates,
               "elapsed_s": time.monotonic()-start, "last_frame": last_frame,
               "error": state.error, "cleanup_error": state.cleanup_error}
     if state.error or state.cleanup_error:

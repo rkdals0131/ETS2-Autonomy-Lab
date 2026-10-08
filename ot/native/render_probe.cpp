@@ -407,7 +407,7 @@ json RenderProbe::capture(const std::string& action) {
     if(action=="arm" && !hook_.enabled()) throw std::runtime_error("Enable the render probe before arming capture");
     if(action=="arm") {
         for(auto* camera:cameras()) {
-            const auto phase=camera->command("status").at("phase");
+            const auto phase=camera->command("status",0,false).at("phase");
             if(phase=="armed" || phase=="waiting_gpu") throw std::runtime_error("A camera capture is already pending");
         }
         bundle_frame_=0;
@@ -419,7 +419,7 @@ json RenderProbe::capture_views(const std::string& action,Transport* publisher,b
     if(action=="arm") {
         if(!hook_.enabled()) throw std::runtime_error("Enable the render probe before arming capture");
         for(auto* camera:cameras()) {
-            const auto phase=camera->command("status").at("phase");
+            const auto phase=camera->command("status",0,false).at("phase");
             if(phase=="armed" || phase=="waiting_gpu") throw std::runtime_error("A camera capture is already pending");
         }
         // Skip the interval already in progress so every requested view has a

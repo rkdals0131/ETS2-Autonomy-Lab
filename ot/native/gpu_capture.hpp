@@ -40,7 +40,7 @@ private:
     std::mutex mutex_;
     const std::string camera_;
     json metadata_=json::object(),geometry_pass_,color_pass_,geometry_gpu_;
-    Phase phase_=Phase::idle;
+    std::atomic<Phase> phase_{Phase::idle};
     std::array<Image,3> images_; // attributes0, attributes3, color
     Image geometry_depth_;
     uint32_t depth_pixel_bytes_=0;

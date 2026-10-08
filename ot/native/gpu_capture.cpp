@@ -80,8 +80,13 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool
 void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
                          uint64_t binding_sequence,uint64_t sdk_frame,uint64_t render_frame,
                          uint64_t observation_session,const json* pass) noexcept {
-    std::unique_lock lock(mutex_,std::try_to_lock);
-    if(!lock || (phase_!=Phase::armed && phase_!=Phase::waiting_gpu)) return;
+    const auto phase=phase_.load(std::memory_order_relaxed);
+    if(phase!=Phase::armed && phase!=Phase::waiting_gpu) return;
+    // A status query must not make us skip the binding that ends a camera
+    // pass. Idle/ready samples skip the lock (including during file saving);
+    // pending captures serialize with the command worker and recheck state.
+    std::lock_guard lock(mutex_);
+    if(phase_!=Phase::armed && phase_!=Phase::waiting_gpu) return;
     try {
         ++bindings_seen_;
         if(GetTickCount64()-request_started_>30000) throw std::runtime_error("Camera capture timed out after 30 seconds");

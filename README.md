@@ -6,9 +6,9 @@ RenderDoc 실행 설정은 `research/ets2-mirrors.cap.example`을 `research/ets2
 
 게임 파일·추출 자산, 공식 SDK 원본, 다운로드한 도구·참고 저장소, 원시 메모리 기록·RenderDoc 캡처·GPU 배열, 빌드 결과와 로컬 백업은 Git에서 제외합니다. 문서의 `research/live/`·`research/findings/` 자료 링크 일부는 로컬 실험 자료를 가리키며 공개 저장소에는 없습니다. 빌드에는 별도 ETS2 설치와 [공식 SDK](https://modding.scssoft.com/wiki/Documentation/Engine/SDK)가 필요합니다. 의존 코드의 라이선스와 고정 revision은 [THIRD_PARTY](ot/THIRD_PARTY.md), 빌드 방법은 [ot 사용법](ot/README.md)에 있습니다. 문서·스크립트의 Windows 경로는 원래 연구 PC 기준이므로 자신의 설치 경로에 맞춰야 합니다.
 
-**2026-10-08 구현 상태:** **카메라 6개의 위치·방향·FOV를 독립적으로 지정하고 같은 Present 구간의 영상을 확보했습니다.** 0.11.0에서는 여섯 RGB·깊이 버퍼를 640×360으로 통일하고 실시간 미리보기를 추가했습니다. `ot\preview.cmd`로 실행하며, 첫 실측은 약 10.3초에 6뷰 묶음 45개·누락 0개입니다. 샤시 상대 배치와 월드 고정을 지원하며 기존 미러 슬롯 0–5를 전용합니다. 메타로더로 게임 콘솔 없이 기능 DLL을 교체합니다. 다음 우선순위는 배치 조절과 주행 중 사용성입니다. [미리보기 실행 방법](ot/README.md#6뷰-실시간-미리보기), [전체 M0–M6 계획](docs/13_game_operating_table.md)을 참고하세요.
+**2026-10-08 구현 상태:** **카메라 6개의 위치·방향·FOV를 독립적으로 지정하고 같은 Present 구간의 영상을 확보했습니다.** 0.12.0에서는 `ot\preview.cmd` 창에서 XYZ·각도·FOV를 직접 바꾸고 배치를 저장합니다. 실제 편집 두 번을 포함한 약 20.3초 실행에서 640×360 6뷰 묶음 94개·누락 0개였습니다. 샤시 상대 배치와 월드 고정을 지원하며 기존 미러 슬롯 0–5를 전용합니다. 메타로더로 게임 콘솔 없이 기능 DLL을 교체합니다. 다음 우선순위는 주행·고개 조작 중 사용성과 가시성 누락입니다. [배치 조절 방법](ot/README.md#화면을-보며-카메라-배치-조절), [전체 M0–M6 계획](docs/13_game_operating_table.md)을 참고하세요.
 
-![실시간 미리보기의 실제 6카메라 영상](docs/images/surround-preview-0.11.0.png)
+![미리보기에서 첫 카메라와 마지막 카메라를 수정한 실제 영상](docs/images/camera-editor-0.12.0.png)
 
 2026년 10월 8일 기준. RTX 3060 Ti와 FHD 모니터 한 대에서 ETS2 운전석 화면을 유지하고, 차체에 고정한 4~6개 카메라로 BEV와 E2E 자율주행을 실험하기 위한 작업 문서입니다.
 
