@@ -23,6 +23,11 @@ def main():
     rig = sub.add_parser("camera_rig", help="Place up to six cameras; +X right, +Y up, -Z forward")
     rig.add_argument("mode", choices=("status", "apply", "off"), default="status", nargs="?")
     rig.add_argument("--config", help="JSON containing views with slot, basis, position, quaternion_wxyz and FOVs")
+    preview = sub.add_parser("preview", help="Live camera mosaic; closes with Tier 0 restored (NumPy, Pillow, Tk)")
+    preview.add_argument("--config", required=True)
+    preview.add_argument("--hz", type=float, default=5.0)
+    preview.add_argument("--duration", type=float, help="Automatically close after this many seconds")
+    preview.add_argument("--snapshot", help="Save the last displayed mosaic to a new PNG on exit")
     sub.add_parser("capture_mirror5", help="One requested mirror5 GPU readback").add_argument(
         "action", choices=("arm", "status", "save", "cancel"), default="status", nargs="?")
     sub.add_parser("capture_mirrors", help="Request mirror 0/1/2/5 in one Present interval").add_argument(
@@ -51,6 +56,13 @@ def main():
         if args.command == "reconstruct":
             from .reconstruction import save_reconstruction
             result = save_reconstruction(args.directory, args.output, args.depth_source)
+        elif args.command == "preview":
+            if not math.isfinite(args.hz) or args.hz <= 0:
+                parser.error("--hz must be finite and positive")
+            if args.duration is not None and (not math.isfinite(args.duration) or args.duration <= 0):
+                parser.error("--duration must be finite and positive")
+            from .preview import run_preview
+            result = run_preview(args.config, args.hz, args.duration, args.snapshot)
         elif args.command == "project_boxes":
             from .projection import save_box_comparison
             result = save_box_comparison(args.directory, args.objects, args.output, pose_source=args.pose)

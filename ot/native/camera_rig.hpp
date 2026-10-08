@@ -14,6 +14,7 @@ public:
     void select(safetyhook::Context& context) noexcept;
     void begin(safetyhook::Context& context) noexcept;
     void end() noexcept;
+    void dimensions(safetyhook::Context& context) noexcept;
     uint32_t in_flight() const noexcept { return in_flight_.load(); }
     uint32_t mask() const noexcept { auto c=configuration_.load();return c?c->mask:0; }
 private:
@@ -22,6 +23,7 @@ private:
         std::array<double,3> position{};
         std::array<double,4> rotation{};
         float hfov{},vfov{};
+        std::array<uint32_t,2> resolution{};
     };
     struct Configuration { std::array<View,6> views;uint32_t mask=0; };
     std::atomic<std::shared_ptr<const Configuration>> configuration_;

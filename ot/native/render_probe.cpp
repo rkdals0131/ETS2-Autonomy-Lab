@@ -15,6 +15,8 @@ constexpr uintptr_t present_hook_rva=0x2BFEDA;
 constexpr uintptr_t compile_begin_rva=0x2B1B40,compile_end_rva=0x2B266A;
 constexpr uintptr_t draw_batch_rva=0x2E6243;
 constexpr uintptr_t rig_select_rva=0x5389CD,rig_begin_rva=0x538B11,rig_end_rva=0x538CE3;
+constexpr uintptr_t rig_dimensions_rva=0x1610250;
+constexpr std::array<uint8_t,17> rig_dimensions_signature={0x48,0x83,0xEC,0x58,0xF3,0x0F,0x10,0x0D,0x3C,0xC2,0xF0,0,0x0F,0x57,0xC0,0x8B,0xC2};
 constexpr std::array<uint8_t,12> rig_select_signature={0x44,0x39,0xA9,0xC0,0x0A,0,0,0x76,0x05,0x83,0xFF,0x02};
 constexpr std::array<uint8_t,13> rig_begin_signature={0xBA,1,0,0,0,0x49,0x8B,0xCF,0xE8,0x42,0xAD,0xF5,0xFF};
 constexpr std::array<uint8_t,16> rig_end_signature={0x4C,0x8B,0xBC,0x24,0x28,0x02,0,0,0x45,0x33,0xED,0xFF,0xC5,0x83,0xFD,0x09};
@@ -56,7 +58,7 @@ uintptr_t find_target(std::span<const uint8_t> bytes_to_find,size_t adjustment,u
         throw std::runtime_error("Render hook signature does not resolve to the inspected call site");
     return found;
 }
-struct CodeRanges { std::array<std::pair<uintptr_t,uintptr_t>,17> ranges; };
+struct CodeRanges { std::array<std::pair<uintptr_t,uintptr_t>,19> ranges; };
 bool contains(const CodeRanges& ranges,DWORD64 ip) noexcept {
     for(const auto& [begin,end]:ranges.ranges) if(ip>=begin && ip<end) return true;
     return false;
@@ -141,10 +143,11 @@ void RenderProbe::enable(bool vehicle_metadata) {
             throw std::runtime_error("Cannot create draw binding observer");
         }
         draw_batch_hook_=std::move(*draw_result);
-        const std::array<std::tuple<safetyhook::MidHook*,uintptr_t,safetyhook::MidHookFn>,3> rig_hooks={{
+        const std::array<std::tuple<safetyhook::MidHook*,uintptr_t,safetyhook::MidHookFn>,4> rig_hooks={{
             {&rig_select_hook_,find_target(rig_select_signature,0,rig_select_rva),&rig_select_callback},
             {&rig_begin_hook_,find_target(rig_begin_signature,0,rig_begin_rva),&rig_begin_callback},
-            {&rig_end_hook_,find_target(rig_end_signature,0,rig_end_rva),&rig_end_callback}}};
+            {&rig_end_hook_,find_target(rig_end_signature,0,rig_end_rva),&rig_end_callback},
+            {&rig_dimensions_hook_,find_target(rig_dimensions_signature,0,rig_dimensions_rva),&rig_dimensions_callback}}};
         for(const auto& [destination,address,function]:rig_hooks) {
             auto rig_result=safetyhook::MidHook::create(address,function,safetyhook::MidHook::StartDisabled);
             if(!rig_result) {
@@ -307,6 +310,11 @@ void RenderProbe::rig_begin_callback(safetyhook::Context& context) noexcept {
 void RenderProbe::rig_end_callback(safetyhook::Context&) noexcept {
     ++callbacks;
     if(auto* self=observer.load()) self->rig_.end();
+    --callbacks;
+}
+void RenderProbe::rig_dimensions_callback(safetyhook::Context& context) noexcept {
+    ++callbacks;
+    if(auto* self=observer.load();self && self->accepting_.load()) self->rig_.dimensions(context);
     --callbacks;
 }
 json RenderProbe::camera_rig(const json& request) {
@@ -506,7 +514,8 @@ json RenderProbe::status() {
              {"timing",draw_batch_timing_.snapshot()}},
             {{"name","camera.sensor_selection"},{"tier",2},{"rva",rig_select_rva},{"enabled",rig_select_hook_.enabled()}},
             {{"name","camera.sensor_submission_begin"},{"tier",2},{"rva",rig_begin_rva},{"enabled",rig_begin_hook_.enabled()}},
-            {{"name","camera.sensor_submission_end"},{"tier",2},{"rva",rig_end_rva},{"enabled",rig_end_hook_.enabled()}}})},
+            {{"name","camera.sensor_submission_end"},{"tier",2},{"rva",rig_end_rva},{"enabled",rig_end_hook_.enabled()}},
+            {{"name","camera.sensor_dimensions"},{"tier",2},{"rva",rig_dimensions_rva},{"enabled",rig_dimensions_hook_.enabled()}}})},
         {"last_error",last_error_},{"render_coherent",false},{"capture",gpu_.command("status")},
         {"recent_bindings",entries}};
 }

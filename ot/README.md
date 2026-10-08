@@ -1,7 +1,30 @@
-# ot 0.10.0 — 자유 배치 6카메라
+# ot 0.11.0 — 자유 배치 6카메라와 실시간 미리보기
 
 > **확정:** 기존 미러 슬롯 0–5를 임의 위치·회전·FOV의 센서로 전용했습니다. 서로 다른 샤시 상대 위치의 여섯 영상을 같은 Present 구간 27에서 수집했습니다. 월드 고정 카메라도 동작합니다.
-> **다음:** 센서 해상도 통일과 실시간 미리보기, 주행 중 갱신 및 메인 카메라 기준 가시성·LOD의 누락 해결. 저장 경로 최적화보다 실제 카메라 사용성을 우선합니다.
+> **0.11.0:** 여섯 RGB·깊이 버퍼를 각각 640×360으로 맞추고 공유 메모리로 실시간 표시했습니다. 약 10.3초에 완전한 6뷰 묶음 45개, 누락 0개였습니다.
+> **다음:** 배치를 바꾸며 보는 사용성과 주행 중 갱신, 메인 카메라 기준 가시성·LOD의 누락 해결. 장시간 주행과 성능 비교는 남아 있습니다.
+
+### 6뷰 실시간 미리보기
+
+일반 DX11 게임의 운전석에서 프로젝트 루트의 다음 명령을 실행합니다. Python 3.13의 NumPy·Pillow·Tk를 사용하며 연구 PC에는 설치되어 있습니다. 아래 리그 사용 절의 권한 설정이 필요합니다.
+
+```powershell
+.\ot\preview.cmd
+# 10초 후 자동 종료하고 마지막 표시 영상을 새 PNG에 저장
+.\ot\preview.cmd --duration 10 --snapshot six-views.png
+# 다른 카메라 배치 파일 사용
+.\ot\ot.cmd preview --config .\ot\presets\surround-six.json --hz 5
+```
+
+창에서 여섯 영상을 함께 보고 공통 노출(EV)을 바꾸거나 PNG로 저장할 수 있습니다. 창을 닫으면 수집을 멈추고 `panic`으로 기본 미러·Tier 0으로 돌아갑니다. F11도 리그를 끕니다. 미리보기용 임시 이미지 파일은 만들지 않으며, 원시 RGB·깊이·재질 묶음은 `OT_Bundles`에서 읽습니다. 별도 창이므로 게임 화면을 가릴 수 있습니다.
+
+[surround-preview.json](presets/surround-preview.json)은 6방향 샤시 리그에 16:9 FOV와 `base_resolution: [320, 180]`을 지정합니다. 이 값은 **게임의 미러 렌더 배율을 적용하기 전 크기**입니다. 연구 PC의 미러 배율 2×2에서 실제 RGB·깊이 버퍼는 모두 640×360이었습니다. 메인 화면 스케일링과 별개이며 게임 설정은 변경하지 않습니다. 실제 크기는 각 영상 제목에 표시합니다.
+
+![실시간 미리보기에서 마지막으로 표시한 실제 6뷰](../docs/images/surround-preview-0.11.0.png)
+
+5 Hz를 요청한 첫 실행은 시작·종료 시간을 포함해 10.2906초 동안 완전한 묶음 45개를 수집했습니다. 누락·수집 오류·종료 오류는 0개였습니다. 이 값은 미리보기 수집 속도이며 게임 렌더 FPS가 아닙니다. 아직 GPU staging ring을 사용하지 않으므로 고해상도·고주파 수집 성능을 보장하지 않습니다. 로컬 실행 결과는 `research/live/2026-10-08-camera-rig/preview-first.stdout.txt`와 `preview-first.png`입니다.
+
+해상도는 미러 그래프가 context 크기를 전달하는 호출의 인자만 바꿉니다. 새 관측 지점은 `0x1610250`, 대상 호출의 복귀 주소는 `0x4D46B8`이며 원본 drawable과 설정은 유지합니다. 실제 6뷰가 렌더되는 상태에서 새 hook을 포함한 아홉 hook의 메타로더 해제·재로딩도 완료했습니다. 재로딩 후 리그 꺼짐·Tier 0·hook 0이며, 원본 기록은 로컬 `resolution-active-unload.json`입니다.
 
 ### 자유 배치 리그 사용
 
@@ -18,7 +41,7 @@
 .\ot\ot.cmd panic
 ```
 
-`camera_rig apply`는 probe와 Tier 2 리그를 켭니다. `camera_rig off`는 기본 미러로 복귀하고 관측 hook은 유지합니다. `panic` 또는 F11은 리그와 여덟 hook을 모두 끕니다. `capture_mirrors`는 arm 때 설정된 리그 슬롯을 묶으며, 리그가 없으면 기존 0·1·2·5를 요청합니다.
+`camera_rig apply`는 probe와 Tier 2 리그를 켭니다. `camera_rig off`는 기본 미러로 복귀하고 관측 hook은 유지합니다. `panic` 또는 F11은 리그와 아홉 hook을 모두 끕니다. `capture_mirrors`는 arm 때 설정된 리그 슬롯을 묶으며, 리그가 없으면 기존 0·1·2·5를 요청합니다.
 
 [surround-six.json](presets/surround-six.json)의 각 view에서 다음을 바꿉니다.
 
@@ -26,7 +49,8 @@
 - `basis`: `chassis`는 렌더 보간된 본체 기준, `world`는 절대 월드 좌표입니다. 캐빈 서스펜션과 운전석 시점은 상대 배치의 입력에 사용하지 않습니다.
 - `position`: XYZ. 샤시 기준 +X 오른쪽, +Y 위, -Z 앞입니다. 단위는 게임 길이 단위입니다.
 - `quaternion_wxyz`: 카메라에서 기준 좌표계로의 회전. 단위 회전은 -Z를 봅니다. yaw·pitch·roll을 함께 지정할 수 있습니다.
-- `hfov_deg`, `vfov_deg`: 가로·세로 FOV. 현재 출력 크기는 기존 미러 크기이므로 두 FOV와 원시 화면 비율을 별도로 취급합니다.
+- `hfov_deg`, `vfov_deg`: 가로·세로 FOV. 정사각 픽셀을 원하면 `tan(hfov/2) / tan(vfov/2)`와 출력 가로/세로 비율을 맞춥니다.
+- `base_resolution`: 선택적인 `[width, height]`. 생략하면 기존 미러 크기를 사용하며 지정하면 게임 미러 배율을 적용하기 전 기본 크기를 바꿉니다.
 
 ![독립 배치한 여섯 카메라의 실제 RGB](../docs/images/surround-six-0.10.0.png)
 

@@ -65,6 +65,12 @@ json CameraRig::configure(const json& request) {
         view.hfov=item.at("hfov_deg").get<float>();view.vfov=item.at("vfov_deg").get<float>();
         if(!(view.hfov>0 && view.hfov<179 && view.vfov>0 && view.vfov<179))
             throw std::runtime_error("Camera FOV must be between 0 and 179 degrees");
+        if(item.contains("base_resolution")) {
+            const auto size=item.at("base_resolution").get<std::array<int,2>>();
+            if(size[0]<1 || size[1]<1 || size[0]>16384 || size[1]>16384)
+                throw std::runtime_error("Camera resolution exceeds the D3D11 texture dimension range");
+            view.resolution={static_cast<uint32_t>(size[0]),static_cast<uint32_t>(size[1])};
+        }
         view.enabled=true;config->mask|=1u<<slot;
     }
     if(!config->mask) throw std::runtime_error("Camera rig needs at least one view");
@@ -78,7 +84,8 @@ json CameraRig::status() {
         if(config && config->views[slot].enabled) {
             const auto& v=config->views[slot];
             view.update({{"basis",v.chassis?"chassis":"world"},{"position",v.position},
-                {"quaternion_wxyz",v.rotation},{"hfov_deg",v.hfov},{"vfov_deg",v.vfov}});
+                {"quaternion_wxyz",v.rotation},{"hfov_deg",v.hfov},{"vfov_deg",v.vfov},
+                {"base_resolution",v.resolution}});
         }
         views.push_back(std::move(view));
     }
@@ -124,5 +131,15 @@ void CameraRig::begin(safetyhook::Context& context) noexcept {
 }
 void CameraRig::end() noexcept {
     if(submission.owner==this) {submission.owner=nullptr;--in_flight_;}
+}
+void CameraRig::dimensions(safetyhook::Context& context) noexcept {
+    uintptr_t caller{};
+    if(!read_memory(context.rsp,caller) ||
+       caller!=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))+0x4d46b8) return;
+    const auto slot=static_cast<uint32_t>(context.rdi);
+    const auto config=configuration_.load();
+    if(!config || slot>=6 || !config->views[slot].enabled) return;
+    const auto& size=config->views[slot].resolution;
+    if(size[0]) {context.rdx=size[0];context.r8=size[1];}
 }
 }
