@@ -18,8 +18,8 @@ public:
     void sdk_frame(uint64_t frame) noexcept { sdk_frame_.store(frame, std::memory_order_relaxed); }
     json status();
     json frames(uint64_t after_id=0);
-    json capture(const std::string& action);
-    json capture_views(const std::string& action,Transport* publisher=nullptr,bool metadata=true);
+    json capture(const std::string& action,const CaptureOptions& options={});
+    json capture_views(const std::string& action,Transport* publisher=nullptr,bool metadata=true,const CaptureOptions& options={});
     json camera_rig(const json& request);
     ~RenderProbe();
 private:

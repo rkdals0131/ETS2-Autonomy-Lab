@@ -1,10 +1,11 @@
-# ot 0.13.0 — 자유 배치 리그와 선택적 영상 관측
+# ot 0.14.0 — 자유 배치 6뷰와 경량 RGB-D 수집
 
 > **확정:** 기존 미러 슬롯 0–5를 임의 위치·회전·FOV의 센서로 전용했습니다. 서로 다른 샤시 상대 위치의 여섯 영상을 같은 Present 구간 27에서 수집했습니다. 월드 고정 카메라도 동작합니다.
 > **0.11.0:** 여섯 RGB·깊이 버퍼를 각각 640×360으로 맞추고 공유 메모리로 실시간 표시했습니다. 약 10.3초에 완전한 6뷰 묶음 45개, 누락 0개였습니다.
 > **0.12.0:** 미리보기 창에서 XYZ·yaw/pitch/roll·FOV를 바꾸고 배치를 JSON으로 저장합니다. 실제 편집 2회를 포함한 20.3초 실행에서 6뷰 묶음 94개·누락 0개였습니다.
 > **0.12.1:** 미러 출력이 없는 pass의 문자열·JSON 생성을 생략합니다. 같은 코드 경로의 짧은 관측에서 compile-begin 평균 15.29 → 10.40µs, 이후 6뷰 12묶음 모두 완료했습니다. 게임 전경 FPS 비교 결과는 아직 없습니다.
 > **0.13.0:** 카메라 배치만 유지하는 4-hook 모드를 추가했습니다. 배치를 유지하면서 영상 관측을 켜고 끌 수 있으며, 전환 직후 6뷰 5묶음 모두 완료했습니다. Present 기록에 실제 게임 전경 여부도 포함합니다.
+> **0.14.0:** GPU에서 RGBA8·R32F로 변환하는 `rgbd8` 형식을 추가했습니다. 640×360 6뷰 픽셀 전송량은 44.24 → 11.06 MB로 75% 감소했습니다. 같은 프레임의 원본과 경량 깊이·복원 좌표를 대조했습니다.
 > **다음:** 주행·고개 조작 중 리그 유지와 메인 카메라 기준 가시성·LOD의 누락 해결. 장시간 주행과 성능 비교는 남아 있습니다.
 
 ### 화면을 보며 카메라 배치 조절
@@ -65,6 +66,38 @@
 NPZ에는 `xyz_world`, `rgb_linear`, `camera_index`, `camera_origins_world`, `observed`, `height_above_camera_mean`, `center_world_xyz`, `game_units_per_pixel`, `metadata_json`을 저장합니다. 원시 점은 표시 반경 밖도 보존합니다. `observed=false`는 관측하지 못한 영역이며 장애물 부재를 뜻하지 않습니다. RGB 노출 조정은 PNG에만 적용합니다.
 
 기존 640×360 6뷰의 Present 구간 14에서 **1,201,153점**을 합쳤습니다. 반경 40·800×800 격자 중 124,405칸에 관측 점이 있었습니다. 파일 입력의 기존 복원 결과와 공유 바이트 입력의 결과, stride 2와 원본 픽셀 부분집합의 월드 좌표 차이는 이 표본에서 0이었습니다. [실제 출력](../docs/images/six-world-birdseye.png). 새 캡처를 주장하는 결과가 아니며 원본은 로컬 `six-resolution-first.json`, 변환 결과는 `six-world-points.npz`입니다.
+
+### 경량 RGB-D 형식
+
+```powershell
+# 첫 원본 묶음으로 공통 노출을 맞춘 뒤 경량 수집으로 전환
+.\ot\preview.cmd --format rgbd8
+# 노출을 직접 고정할 때; 841.55는 이번 저녁 도로 표본에서 얻은 값
+.\ot\preview.cmd --format rgbd8 --color-gain 841.55
+# 이미 활성화된 리그에서 한 묶음 요청
+.\ot\ot.cmd capture_mirrors arm --format rgbd8 --color-gain 841.55
+.\ot\ot.cmd capture_mirrors status
+# ready 이후 기존 save 또는 publish / BundleReader / save_bundle 사용
+.\ot\ot.cmd capture_mirrors publish
+```
+
+| 형식 | 픽셀 내용 | 640×360 6뷰 픽셀 크기 |
+| --- | --- | --- |
+| `raw` (기본) | 기존 color·attributes0·attributes3·DSV 원본 | 현재 DSV 형식에서 44,236,800 B |
+| `rgbd8` | RGBA8 색상 + R32F 깊이 | 11,059,200 B |
+| `raw+rgbd8` | 같은 프레임의 두 형식; 변환 대조용 | 55,296,000 B |
+
+RGBA8의 alpha는 255입니다. 색상은 음수·비유한 성분을 0으로 처리하고 공통 `color_gain` → Reinhard → sRGB를 적용합니다. `*_color_ldr.bin`의 metadata에 적용한 `linear_gain`을 저장합니다. 양자화·톤매핑된 색상이며 원본 HDR을 복구하는 형식은 아닙니다. 단일 캡처 API의 기본 gain은 1입니다. 미리보기에서 gain을 생략하면 첫 완전한 원본 묶음의 공통 밝기 표본으로 한 번 정하고 이후 고정합니다. 첫 보정 묶음의 전송량은 원본과 같습니다.
+
+`*_depth_f32.bin`은 **viewport 변환 후 DSV 값**을 보존한 R32F입니다. 축 방향 거리나 미터를 직접 저장하지 않습니다. attributes Z가 0/비유한, 재질 bit 16, viewport 밖, 깊이 범위 밖인 픽셀은 GPU에서 NaN으로 만듭니다. 같은 pass의 projection·viewport·pose는 계속 전달하므로 `reconstruct`·`birdseye`·`project_boxes`가 기존 식으로 카메라/월드 좌표를 복원합니다. 경량 형식에는 원본 재질 배열이나 shader-adjusted attributes 깊이가 없으며 `material_bits` 출력도 생략합니다. 복원의 `rgb_linear`는 이 형식에서 톤매핑 후 선형 색상이고, metadata `color_encoding=linear_reinhard`로 원본 `linear_hdr`와 구분합니다.
+
+원본 render target은 유지하고 private GPU copy를 compute shader 입력으로 사용합니다. 변경한 CS shader·SRV·UAV·constant buffer 범위는 즉시 복원합니다. UAV counter는 [D3D11의 유지 값](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-cssetunorderedaccessviews)을 사용합니다. HLSL은 Windows SDK의 `fxc`로 빌드 때 컴파일하며 런타임 컴파일은 없습니다.
+
+실제 6뷰 대조에서 유효 마스크 불일치 0, 유효 DSV 값 차이 0, 복원 월드 좌표 차이 0이었습니다. 이는 변환 경로의 보존 결과이며 실제 장면의 깊이 정확도 보증은 아닙니다. gain 1 및 841.55에서 CPU 색상 변환과 최대 1/255 차이였습니다. 경량 수집 32회 요청 중 첫 리그 시작의 슬롯 3·4 누락 1회, 이후 31묶음 완료(전체 3.65초); 완전한 묶음당 전송 payload는 약 11.09 MB였습니다. 별도 미리보기 worker는 자동 노출 보정을 포함해 4초 동안 15묶음·누락/오류 0회였습니다. pending 상태의 payload unload/load와 원본 형식 재수집도 확인했습니다.
+
+![경량 형식에서 표시한 실제 6뷰](../docs/images/six-rgbd8-0.14.0.png)
+
+이번 계측은 백그라운드이며 고정 10 Hz·장시간 주행 결과가 아닙니다. staging·compute 자원은 아직 표본마다 생성합니다. `OT_Bundles` 슬롯은 첫 발행 크기로 정해지므로, 경량 묶음으로 시작한 세션에서 더 큰 원본 묶음을 발행하려면 reader를 닫고 payload를 reload해야 합니다. 실제 결과는 로컬 `research/live/2026-10-08-camera-rig/rgbd-compact-run.json`, `rgbd-first-comparison.json`, `rgbd-reconstruction-comparison.json`, `rgbd-color-gain-comparison.json`, `rgbd-preview-auto.json`에 있습니다.
 
 ### 미러 pass만 자세히 관측
 

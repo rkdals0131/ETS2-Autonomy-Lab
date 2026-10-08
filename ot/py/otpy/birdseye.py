@@ -31,9 +31,13 @@ def draw_birdseye(cloud, radius=40.0, pixels=800, exposure_ev=0.0):
     heights = np.full(pixels*pixels, np.nan, dtype=np.float32)
     heights[pixel_indices] = points[winners, 1]-center[1]
     rgb = np.maximum(np.nan_to_num(cloud["rgb_linear"][winners].astype(np.float32)), 0)
-    white = max(float(np.percentile(rgb, 99)), 1e-7) if rgb.size else 1.0
-    rgb *= 2**exposure_ev/white
-    rgb /= 1+rgb
+    if cloud["metadata"].get("color_encoding", "linear_hdr") == "linear_hdr":
+        white = max(float(np.percentile(rgb, 99)), 1e-7) if rgb.size else 1.0
+        rgb *= 2**exposure_ev/white
+        rgb /= 1+rgb
+    else:
+        gain = 2**exposure_ev
+        rgb = gain*rgb/(1+(gain-1)*rgb)
     rgb = np.where(rgb <= .0031308, 12.92*rgb, 1.055*rgb**(1/2.4)-.055)
     raster = np.full((pixels*pixels, 3), (18, 26, 35), dtype=np.uint8)
     raster[pixel_indices] = np.uint8(np.clip(rgb, 0, 1)*255)

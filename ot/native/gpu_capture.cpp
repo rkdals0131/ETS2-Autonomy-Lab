@@ -33,6 +33,7 @@ void check(HRESULT result,const char* operation) {
 }
 
 void GpuCapture::release_gpu() {
+    packed_.release_gpu();
     for(auto& image:images_) {image.source.Reset();image.staging.Reset();}
     geometry_depth_.source.Reset();geometry_depth_.staging.Reset();
     for(auto& constants:geometry_constants_) constants.staging.Reset();
@@ -57,12 +58,13 @@ json GpuCapture::status(bool metadata) const {
     if(metadata) result["metadata"]=metadata_;
     return result;
 }
-json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool metadata) {
+json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool metadata,const CaptureOptions& options) {
     std::lock_guard lock(mutex_);
     if(action=="arm") {
         if(phase_==Phase::armed || phase_==Phase::waiting_gpu)
             throw std::runtime_error("A camera capture is already pending");
         release_gpu();
+        options_=options;packed_.clear();
         for(auto& image:images_) image.pixels.clear();
         geometry_depth_.pixels.clear();
         for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
@@ -175,16 +177,25 @@ void GpuCapture::geometry_constants(ID3D11DeviceContext* context,uint64_t bindin
         if(desc.SampleDesc.Count!=1 || desc.MipLevels!=1 || desc.ArraySize!=1 ||
            desc.Width!=attributes.Width || desc.Height!=attributes.Height)
             throw std::runtime_error("Unsupported or unaligned geometry depth texture");
-        staging.Usage=D3D11_USAGE_STAGING;staging.BindFlags=0;
-        staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;staging.MiscFlags=0;
-        check(device->CreateTexture2D(&staging,nullptr,&depth.staging),"CreateTexture2D(depth staging)");
-        depth.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*depth_pixel_bytes_);
-        context->CopyResource(depth.staging.Get(),depth.source.Get());
-        geometry_gpu_["depth_texture"]={{"file",camera_+"_geometry_depth.bin"},
-            {"width",desc.Width},{"height",desc.Height},{"row_bytes",desc.Width*depth_pixel_bytes_},
-            {"format",layout},{"source_dxgi_format",static_cast<unsigned>(desc.Format)},
-            {"resource",reinterpret_cast<uintptr_t>(depth.source.Get())}};
+        if(options_.raw()) {
+            staging.Usage=D3D11_USAGE_STAGING;staging.BindFlags=0;
+            staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;staging.MiscFlags=0;
+            check(device->CreateTexture2D(&staging,nullptr,&depth.staging),"CreateTexture2D(depth staging)");
+            depth.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*depth_pixel_bytes_);
+            context->CopyResource(depth.staging.Get(),depth.source.Get());
+            geometry_gpu_["depth_texture"]={{"file",camera_+"_geometry_depth.bin"},
+                {"width",desc.Width},{"height",desc.Height},{"row_bytes",desc.Width*depth_pixel_bytes_},
+                {"format",layout},{"source_dxgi_format",static_cast<unsigned>(desc.Format)},
+                {"resource",reinterpret_cast<uintptr_t>(depth.source.Get())}};
+        }
+        if(options_.packed()) {
+            if(viewport_count!=1 || !(viewports[0].Width>0 && viewports[0].Height>0 && viewports[0].MaxDepth>viewports[0].MinDepth))
+                throw std::runtime_error("RGB-D packing requires one valid geometry viewport");
+            packed_.depth(context1.Get(),depth.source.Get(),images_[0].source.Get(),images_[1].source.Get(),viewports[0],camera_);
+            geometry_gpu_["packed_depth_texture"]=packed_.images[0].description;
+        }
     }
+    if(options_.packed() && !dsv) throw std::runtime_error("RGB-D packing requires a geometry depth buffer");
     for(size_t stage=0;stage<geometry_constants_.size();++stage) {
         auto& sample=geometry_constants_[stage];
         Com<ID3D11Buffer> source;UINT first{},count{};
@@ -267,19 +278,28 @@ void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t 
         if(desc.Format!=formats[i] || desc.SampleDesc.Count!=1 || desc.MipLevels!=1 || desc.ArraySize!=1 ||
            desc.Width!=images_[0].desc.Width || desc.Height!=images_[0].desc.Height)
             throw std::runtime_error("Unsupported or unaligned camera texture descriptors");
-        desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;desc.MiscFlags=0;
-        check(device->CreateTexture2D(&desc,nullptr,&image.staging),"CreateTexture2D(staging)");
-        image.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*8);
-        descriptions.push_back({{"file",camera_+"_"+names[i]+".bin"},
-            {"width",desc.Width},{"height",desc.Height},{"format",i==1?"R16G16B16A16_UINT":"R16G16B16A16_FLOAT"},
-            {"resource",reinterpret_cast<uintptr_t>(image.source.Get())},{"row_bytes",desc.Width*8}});
+        if(options_.raw()) {
+            desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;desc.MiscFlags=0;
+            check(device->CreateTexture2D(&desc,nullptr,&image.staging),"CreateTexture2D(staging)");
+            image.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*8);
+            descriptions.push_back({{"file",camera_+"_"+names[i]+".bin"},
+                {"width",desc.Width},{"height",desc.Height},{"format",i==1?"R16G16B16A16_UINT":"R16G16B16A16_FLOAT"},
+                {"resource",reinterpret_cast<uintptr_t>(image.source.Get())},{"row_bytes",desc.Width*8}});
+        }
+    }
+    if(options_.packed()) {
+        if(!packed_.images[0].staging) throw std::runtime_error("RGB-D geometry depth was not captured");
+        Com<ID3D11DeviceContext1> context1;
+        check(context->QueryInterface(IID_PPV_ARGS(&context1)),"QueryInterface(DeviceContext1)");
+        packed_.color(context1.Get(),images_[2].source.Get(),options_.color_gain,camera_);
+        for(const auto& image:packed_.images) descriptions.push_back(image.description);
     }
     D3D11_QUERY_DESC query{D3D11_QUERY_EVENT,0};
     check(device->CreateQuery(&query,&completion_),"CreateQuery(EVENT)");
-    for(auto& image:images_) context->CopyResource(image.staging.Get(),image.source.Get());
+    for(auto& image:images_) if(image.staging) context->CopyResource(image.staging.Get(),image.source.Get());
     context->End(completion_.Get());
     ++sequence_;
-    metadata_={{"capture_sequence",sequence_},{"camera",camera_},{"phase","leaving_camera_composition"},
+    metadata_={{"capture_sequence",sequence_},{"camera",camera_},{"capture_format",options_.format},{"phase","leaving_camera_composition"},
         {"geometry_pass",geometry_pass_},{"color_pass",color_pass_},
         {"geometry_gpu",geometry_gpu_},
         {"render_frame_id",render_frame},{"frame_id_source","Present return intervals"},
@@ -300,15 +320,17 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
     std::array<D3D11_MAPPED_SUBRESOURCE,3> mapped{};
     size_t count=0;
     for(;count<images_.size();++count) {
+        if(!images_[count].staging) continue;
         const auto result=context->Map(images_[count].staging.Get(),0,D3D11_MAP_READ,
                                        D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped[count]);
         if(result==DXGI_ERROR_WAS_STILL_DRAWING || FAILED(result)) {
-            for(size_t i=0;i<count;++i) context->Unmap(images_[i].staging.Get(),0);
+            for(size_t i=0;i<count;++i) if(images_[i].staging) context->Unmap(images_[i].staging.Get(),0);
             if(result==DXGI_ERROR_WAS_STILL_DRAWING) return;
             check(result,"Map(staging)");
         }
     }
     for(size_t i=0;i<images_.size();++i) {
+        if(!images_[i].staging) continue;
         auto& image=images_[i];const auto row=static_cast<size_t>(image.desc.Width)*8;
         for(unsigned y=0;y<image.desc.Height;++y)
             std::memcpy(image.pixels.data()+y*row,static_cast<uint8_t*>(mapped[i].pData)+y*mapped[i].RowPitch,row);
@@ -326,6 +348,7 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
                 static_cast<const uint8_t*>(mapped_depth.pData)+y*mapped_depth.RowPitch,row);
         context->Unmap(geometry_depth_.staging.Get(),0);
     }
+    if(options_.packed() && !packed_.collect(context)) return;
     json constants_json=json::array();
     for(auto& sample:geometry_constants_) {
         if(sample.staging) {
@@ -362,8 +385,10 @@ void GpuCapture::append_bundle(json& views,std::vector<BundleBlob>& blobs) {
     std::lock_guard lock(mutex_);
     if(phase_!=Phase::ready) throw std::runtime_error("Camera CPU sample is not complete");
     views.push_back({{"camera",camera_},{"metadata",metadata_}});
-    for(size_t i=0;i<images_.size();++i)
+    for(size_t i=0;i<images_.size();++i) if(!images_[i].pixels.empty())
         blobs.push_back({camera_,metadata_.at("images")[i].at("file").get<std::string>(),images_[i].pixels.data(),images_[i].pixels.size()});
+    for(const auto& image:packed_.images) if(!image.pixels.empty())
+        blobs.push_back({camera_,image.description.at("file").get<std::string>(),image.pixels.data(),image.pixels.size()});
     if(!geometry_depth_.pixels.empty())
         blobs.push_back({camera_,metadata_.at("geometry_gpu").at("depth_texture").at("file").get<std::string>(),
             geometry_depth_.pixels.data(),geometry_depth_.pixels.size()});
@@ -379,10 +404,16 @@ json GpuCapture::save() {
     const auto directory=log_directory()/(camera_+"-"+std::to_string(GetTickCount64()));
     if(!fs::create_directory(directory)) throw std::runtime_error("Capture output directory already exists");
     for(size_t i=0;i<images_.size();++i) {
+        if(images_[i].pixels.empty()) continue;
         std::ofstream output(directory/metadata_["images"][i]["file"].get<std::string>(),std::ios::binary);
         output.exceptions(std::ios::badbit|std::ios::failbit);
         output.write(reinterpret_cast<const char*>(images_[i].pixels.data()),images_[i].pixels.size());
         output.close();
+    }
+    for(const auto& image:packed_.images) if(!image.pixels.empty()) {
+        std::ofstream output(directory/image.description.at("file").get<std::string>(),std::ios::binary);
+        output.exceptions(std::ios::badbit|std::ios::failbit);
+        output.write(reinterpret_cast<const char*>(image.pixels.data()),image.pixels.size());output.close();
     }
     for(const auto& sample:geometry_constants_) if(!sample.bytes.empty()) {
         std::ofstream output(directory/sample.description.at("file").get<std::string>(),std::ios::binary);

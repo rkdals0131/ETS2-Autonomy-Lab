@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from .color import read_color
 
 
 def reconstruct_capture(directory, depth_source="geometry"):
@@ -41,8 +42,10 @@ def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, colo
     camera = meta["geometry_pass"]["camera_at_compile"]
     name = meta["camera"]
     descriptors = {item["file"]: item for item in meta["images"]}
-    attributes_info = descriptors[name + "_attributes0.bin"]
-    height, width = attributes_info["height"], attributes_info["width"]
+    attributes_info = descriptors.get(name + "_attributes0.bin")
+    packed = attributes_info is None
+    dimensions = descriptors[name + "_depth_f32.bin"] if packed else attributes_info
+    height, width = dimensions["height"], dimensions["width"]
     if height <= 0 or width <= 0:
         raise ValueError("Image dimensions must be positive")
 
@@ -54,11 +57,20 @@ def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, colo
             raise ValueError("Unsupported or unaligned image: " + info["file"])
         return read_data(info["file"], dtype).reshape(height, width, channels)[::stride, ::stride]
 
-    attributes = read_image(attributes_info, "R16G16B16A16_FLOAT", "<f2", 4)
-    flags = read_image(descriptors[name + "_attributes3.bin"], "R16G16B16A16_UINT", "<u2", 4)
-    bits = (((flags[..., 3] >> 13) & 7) | ((flags[..., 2] & 3) << 3)).astype(np.uint8)
-    z = attributes[..., 3].astype(np.float64)
-    valid = np.isfinite(z) & (z != 0) & ((bits & 16) == 0)
+    if packed:
+        if depth_source != "geometry":
+            raise ValueError("Compact RGB-D does not contain shader-adjusted attributes depth")
+        info = meta["geometry_gpu"]["packed_depth_texture"]
+        if info["encoding"] != "viewport_depth_nan_invalid":
+            raise ValueError("Unsupported packed depth encoding")
+        depth = read_image(info, "R32_FLOAT", "<f4", 1)[..., 0].astype(np.float64)
+        valid = np.isfinite(depth)
+    else:
+        attributes = read_image(attributes_info, "R16G16B16A16_FLOAT", "<f2", 4)
+        flags = read_image(descriptors[name + "_attributes3.bin"], "R16G16B16A16_UINT", "<u2", 4)
+        bits = (((flags[..., 3] >> 13) & 7) | ((flags[..., 2] & 3) << 3)).astype(np.uint8)
+        z = attributes[..., 3].astype(np.float64)
+        valid = np.isfinite(z) & (z != 0) & ((bits & 16) == 0)
 
     rotation = np.asarray(camera["camera_rotation_row_major"], dtype=np.float64).reshape(4, 4)[:3, :3]
     origin = np.asarray(camera["camera_world_xyz"], dtype=np.float64).reshape(3)
@@ -81,7 +93,7 @@ def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, colo
     v = (y + 0.5 - vp["y"]) / vp["height"]
     valid &= (u >= 0) & (u < 1) & (v >= 0) & (v < 1)
 
-    if depth_source == "geometry":
+    if depth_source == "geometry" and not packed:
         info = meta["geometry_gpu"]["depth_texture"]
         fmt = info["format"]
         if fmt == "D32_FLOAT_S8X24_UINT":
@@ -94,6 +106,7 @@ def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, colo
             depth = (raw & 0xFFFFFF).astype(np.float64) / 0xFFFFFF
         else:
             raise ValueError("Unsupported depth format: " + fmt)
+    if depth_source == "geometry":
         ndc_z = (depth - vp["min_depth"]) / (vp["max_depth"] - vp["min_depth"])
         valid &= np.isfinite(ndc_z) & (ndc_z >= 0) & (ndc_z <= 1)
         # Prism's captured projection is GL-style. The observed DX11 correction
@@ -111,10 +124,12 @@ def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, colo
     valid &= np.isfinite(xyz).all(axis=-1) & (xyz[..., 2] < 0)
     xyz[~valid] = np.nan
     world = xyz @ np.linalg.inv(rotation).T + origin
-    arrays = {"xyz_camera": xyz.astype(np.float32), "xyz_world": world,
-              "valid": valid, "material_bits": bits}
+    arrays = {"xyz_camera": xyz.astype(np.float32), "xyz_world": world, "valid": valid}
+    if not packed:
+        arrays["material_bits"] = bits
+    color_encoding = None
     if color:
-        arrays["rgb_linear"] = read_image(descriptors[name+"_color.bin"], "R16G16B16A16_FLOAT", "<f2", 4)[..., :3]
+        arrays["rgb_linear"], color_encoding = read_color(meta, read_data, stride, expected_size=(height, width))
     description = {
         "camera": name, "render_frame_id": meta["render_frame_id"],
         "observation_session_qpc": meta["observation_session_qpc"],
@@ -124,6 +139,7 @@ def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, colo
         "invalid_points": "NaN; zero/nonfinite attributes Z, bit 16, invalid depth or outside viewport",
         "valid_points": int(valid.sum()), "width": width, "height": height, "pixel_stride": stride,
         "camera_world_xyz": origin.tolist(),
+        "color_encoding": color_encoding,
     }
     return arrays, description
 
@@ -152,6 +168,7 @@ def reconstruct_bundle(bundle, *, stride=1):
             "camera_index": np.concatenate(sources), "camera_origins_world": np.asarray(origins),
             "metadata": {"render_frame_id": frame, "observation_session_qpc": session,
                          "depth_source": "geometry", "world_units": descriptions[0]["world_units"],
+                         "color_encoding": descriptions[0]["color_encoding"],
                          "cameras": [v["camera"] for v in views], "views": descriptions,
                          "missing_views": bundle["manifest"].get("missing_views", [])}}
 

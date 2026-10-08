@@ -13,6 +13,7 @@ from tkinter import filedialog
 from .client import Client
 from .bundles import BundleReader
 from .rig_editor import RigEditor
+from .color import read_color
 
 
 def _latest(output, message):
@@ -41,22 +42,20 @@ class Mosaic:
         decoded = []
         for view in bundle["manifest"]["views"]:
             name, meta = view["camera"], view["metadata"]
-            desc = next(d for d in meta["images"] if d["file"] == name + "_color.bin")
-            if desc["format"] != "R16G16B16A16_FLOAT":
-                raise ValueError("Preview requires RGBA16F RGB readback")
-            width, height = desc["width"], desc["height"]
-            rgb = np.frombuffer(files[name, desc["file"]], dtype="<f2").reshape(height, width, 4)[..., :3]
+            rgb, encoding = read_color(meta, lambda filename, dtype: np.frombuffer(files[name, filename], dtype=dtype))
+            height, width = rgb.shape[:2]
             projection = meta["geometry_pass"]["camera_at_compile"]["projection_row_major"]
             aspect = abs(projection[5] / projection[0])
-            decoded.append((name, rgb, width, height, aspect))
+            decoded.append((name, rgb, width, height, aspect, encoding))
         # One common exposure across cameras; sparse samples keep preview work
         # independent of the full RGB/depth recording cost.
-        samples = np.concatenate([rgb[::16, ::16].ravel() for _, rgb, *_ in decoded])
-        target = max(float(np.nanpercentile(samples, 99)), 1e-7)
-        self.white = target if self.white is None else .9*self.white + .1*target
+        samples = [rgb[::16, ::16].ravel().astype(np.float32) for _, rgb, *_, encoding in decoded if encoding == "linear_hdr"]
+        if samples:
+            target = max(float(np.nanpercentile(np.concatenate(samples), 99)), 1e-7)
+            self.white = target if self.white is None else .9*self.white + .1*target
         canvas = Image.new("RGB", (1456, 650), "#111820")
         drawing = ImageDraw.Draw(canvas)
-        for index, (name, rgb, width, height, aspect) in enumerate(decoded):
+        for index, (name, rgb, width, height, aspect, encoding) in enumerate(decoded):
             x, y = 8 + (index % 3)*484, 8 + (index // 3)*321
             title = f"{self.names.get(name, name)}  |  {name}  |  {width} x {height}"
             drawing.text((x+4, y+4), title, font=self.font, fill="#e3eef8")
@@ -66,8 +65,15 @@ class Mosaic:
             out_height = max(1, min(280, round(out_width/aspect)))
             small = np.stack([np.asarray(Image.fromarray(rgb[..., channel].astype(np.float32)).resize(
                 (out_width, out_height), Image.Resampling.BILINEAR)) for channel in range(3)], axis=-1)
-            small = np.maximum(np.nan_to_num(small), 0) * (2.0**exposure_ev / self.white)
-            small /= 1.0 + small
+            small = np.maximum(np.nan_to_num(small), 0)
+            if encoding == "linear_hdr":
+                small *= 2.0**exposure_ev / self.white
+                small /= 1.0 + small
+            else:
+                # Exposure adjustment within the existing Reinhard display
+                # curve; highlights quantized to white remain white.
+                gain = 2.0**exposure_ev
+                small = gain*small/(1+(gain-1)*small)
             small = np.where(small <= .0031308, 12.92*small, 1.055*small**(1/2.4)-.055)
             display = Image.fromarray(np.uint8(np.clip(small, 0, 1)*255))
             canvas.paste(display, (x+(476-out_width)//2, y+34+(280-out_height)//2))
@@ -86,7 +92,7 @@ class PreviewState:
     config_updates: int = 0
 
 
-def _capture(config, hz, stop, output, state, updates):
+def _capture(config, hz, stop, output, state, updates, capture_format="raw", color_gain=None):
     client, reader = Client(timeout=3), None
     try:
         client.tier(1)
@@ -114,7 +120,9 @@ def _capture(config, hz, stop, output, state, updates):
                     state.applied_config = settings
                     state.config_result = (settings, "")
                     state.config_updates += 1
-            client.request("capture_mirrors", action="arm", metadata=False)
+            calibrating = capture_format == "rgbd8" and color_gain is None
+            client.request("capture_mirrors", action="arm", metadata=False,
+                           format="raw" if calibrating else capture_format, color_gain=color_gain or 1.0)
             deadline = time.monotonic()+3
             while not stop.is_set():
                 capture = client.request("capture_mirrors", metadata=False)
@@ -143,6 +151,10 @@ def _capture(config, hz, stop, output, state, updates):
             if not publication["published"] or bundle is None:
                 raise RuntimeError("Camera bundle queue did not deliver the requested frame")
             picture = mosaic.draw(bundle, state.exposure_ev)
+            if calibrating:
+                # One shared exposure from the first complete raw bundle.
+                # Keep it fixed thereafter so cameras/frames remain comparable.
+                color_gain = 1.0/mosaic.white
             state.captures += 1
             # Only decoded pictures cross to Tk; raw bundles are released here.
             _latest(output, ("frame", picture, bundle["manifest"]["render_frame_id"], time.monotonic()))
@@ -160,7 +172,7 @@ def _capture(config, hz, stop, output, state, updates):
         _latest(output, ("finished",))
 
 
-def run_preview(config_file, hz=5.0, duration=None, snapshot=None):
+def run_preview(config_file, hz=5.0, duration=None, snapshot=None, capture_format="raw", color_gain=None):
     with open(config_file, encoding="utf-8") as stream:
         config = json.load(stream)
     root = tk.Tk()
@@ -205,7 +217,7 @@ def run_preview(config_file, hz=5.0, duration=None, snapshot=None):
     exposure.pack(side="right", padx=15)
     root.protocol("WM_DELETE_WINDOW", close)
     root.bind("<F11>", lambda event: close())
-    worker = threading.Thread(target=_capture, args=(config, hz, stop, messages, state, updates), name="ot-preview-capture")
+    worker = threading.Thread(target=_capture, args=(config, hz, stop, messages, state, updates, capture_format, color_gain), name="ot-preview-capture")
 
     def tick():
         nonlocal finished, last_picture, last_frame, last_time, image_reference, capture_status

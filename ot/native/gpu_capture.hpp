@@ -1,16 +1,23 @@
 #pragma once
 #include "ot.hpp"
+#include "gpu_pack.hpp"
 #include <array>
 #include <d3d11_1.h>
 #include <wrl/client.h>
 
 namespace ot {
+struct CaptureOptions {
+    std::string format="raw";
+    float color_gain=1;
+    bool raw() const {return format!="rgbd8";}
+    bool packed() const {return format!="raw";}
+};
 // One requested camera sample. All context calls run on the game's render
 // thread; file I/O runs only in the existing command worker.
 class GpuCapture {
 public:
     explicit GpuCapture(std::string camera):camera_(std::move(camera)) {}
-    json command(const std::string& action,uint64_t requested_frame=0,bool metadata=true);
+    json command(const std::string& action,uint64_t requested_frame=0,bool metadata=true,const CaptureOptions& options={});
     void cancel() noexcept;
     void append_bundle(json& views,std::vector<BundleBlob>& blobs);
     void observe(ID3D11DeviceContext* context, uint32_t count, const uintptr_t* targets,
@@ -42,6 +49,8 @@ private:
     json metadata_=json::object(),geometry_pass_,color_pass_,geometry_gpu_;
     std::atomic<Phase> phase_{Phase::idle};
     std::array<Image,3> images_; // attributes0, attributes3, color
+    CaptureOptions options_;
+    GpuPack packed_;
     Image geometry_depth_;
     uint32_t depth_pixel_bytes_=0;
     std::array<Constants,2> geometry_constants_; // VS/PS slot 0 at G-buffer exit

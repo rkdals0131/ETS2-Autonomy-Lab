@@ -241,7 +241,16 @@ json Runtime::command(const json& request) {
         const auto action=request.value("action",std::string("status"));
         if(action=="arm" && (tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_))
             throw std::runtime_error("Mirror5 capture requires the permitted Tier 1 render probe");
-        return cmd=="capture_mirrors"?render_probe_->capture_views(action,transport_.get(),request.value("metadata",true)):render_probe_->capture(action);
+        CaptureOptions options;
+        if(action=="arm") {
+            options.format=request.value("format",std::string("raw"));
+            options.color_gain=request.value("color_gain",1.0f);
+            if(options.format!="raw" && options.format!="rgbd8" && options.format!="raw+rgbd8")
+                throw std::runtime_error("Capture format must be raw, rgbd8 or raw+rgbd8");
+            if(!std::isfinite(options.color_gain) || options.color_gain<=0)
+                throw std::runtime_error("Color gain must be finite and positive");
+        }
+        return cmd=="capture_mirrors"?render_probe_->capture_views(action,transport_.get(),request.value("metadata",true),options):render_probe_->capture(action,options);
     }
     if(cmd=="render_probe") {
         std::lock_guard lock(control_);

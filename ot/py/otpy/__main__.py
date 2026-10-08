@@ -33,10 +33,15 @@ def main():
     preview.add_argument("--hz", type=float, default=5.0)
     preview.add_argument("--duration", type=float, help="Automatically close after this many seconds")
     preview.add_argument("--snapshot", help="Save the last displayed mosaic to a new PNG on exit")
+    preview.add_argument("--format", choices=("raw", "rgbd8"), default="raw")
+    preview.add_argument("--color-gain", type=float, help="Fixed GPU gain; omitted: calibrate once from a raw bundle")
     sub.add_parser("capture_mirror5", help="One requested mirror5 GPU readback").add_argument(
         "action", choices=("arm", "status", "save", "cancel"), default="status", nargs="?")
-    sub.add_parser("capture_mirrors", help="Request mirror 0/1/2/5 in one Present interval").add_argument(
+    capture = sub.add_parser("capture_mirrors", help="Request the rig's cameras (or mirror 0/1/2/5) in one Present interval")
+    capture.add_argument(
         "action", choices=("arm", "status", "save", "save_partial", "publish", "publish_partial", "cancel"), default="status", nargs="?")
+    capture.add_argument("--format", choices=("raw", "rgbd8", "raw+rgbd8"), default="raw", help="With arm: output pixel format")
+    capture.add_argument("--color-gain", type=float, default=1.0, help="With arm: linear gain before GPU Reinhard/sRGB packing")
     record = sub.add_parser("record_mirror5", help="Record bounded mirror5 samples; restores Tier 0 on exit")
     record.add_argument("--hz", type=float, default=10.0)
     record.add_argument("--duration", type=float, required=True)
@@ -76,7 +81,9 @@ def main():
             if args.duration is not None and (not math.isfinite(args.duration) or args.duration <= 0):
                 parser.error("--duration must be finite and positive")
             from .preview import run_preview
-            result = run_preview(args.config, args.hz, args.duration, args.snapshot)
+            if args.color_gain is not None and (not math.isfinite(args.color_gain) or args.color_gain <= 0):
+                parser.error("--color-gain must be finite and positive")
+            result = run_preview(args.config, args.hz, args.duration, args.snapshot, args.format, args.color_gain)
         elif args.command == "project_boxes":
             from .projection import save_box_comparison
             result = save_box_comparison(args.directory, args.objects, args.output, pose_source=args.pose)
@@ -138,7 +145,13 @@ def main():
             else:
                 result = client.request("camera_rig", **({"enabled": False} if args.mode == "off" else {}))
         elif args.command in ("capture_mirror5", "capture_mirrors"):
-            result = client.request(args.command, action=args.action)
+            options = {}
+            if args.command == "capture_mirrors":
+                if args.action == "arm":
+                    options = {"format": args.format, "color_gain": args.color_gain}
+                elif args.format != "raw" or args.color_gain != 1.0:
+                    parser.error("--format and --color-gain require capture_mirrors arm")
+            result = client.request(args.command, action=args.action, **options)
         else:
             result = client.request(args.command)
         print(json.dumps(result, ensure_ascii=False, indent=2))

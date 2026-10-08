@@ -449,7 +449,7 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     ++records_written_;
     ReleaseSRWLockExclusive(&records_lock_);
 }
-json RenderProbe::capture(const std::string& action) {
+json RenderProbe::capture(const std::string& action,const CaptureOptions& options) {
     std::lock_guard lock(control_);
     if(action=="arm" && !hook_.enabled()) throw std::runtime_error("Capture requires render_probe observe mode");
     if(action=="arm") {
@@ -459,9 +459,9 @@ json RenderProbe::capture(const std::string& action) {
         }
         bundle_frame_=0;
     }
-    return gpu_.command(action);
+    return gpu_.command(action,0,true,options);
 }
-json RenderProbe::capture_views(const std::string& action,Transport* publisher,bool metadata) {
+json RenderProbe::capture_views(const std::string& action,Transport* publisher,bool metadata,const CaptureOptions& options) {
     std::lock_guard lock(control_);
     if(action=="arm") {
         if(!hook_.enabled()) throw std::runtime_error("Capture requires render_probe observe mode");
@@ -474,7 +474,7 @@ json RenderProbe::capture_views(const std::string& action,Transport* publisher,b
         bundle_mask_=rig_.mask();if(!bundle_mask_) bundle_mask_=0x27;
         bundle_frame_=presents_.load()+2;
         published_bundle_=nullptr;
-        try {for(auto* camera:capture_cameras()) camera->command("arm",bundle_frame_);}
+        try {for(auto* camera:capture_cameras()) camera->command("arm",bundle_frame_,true,options);}
         catch(...) {for(auto* camera:cameras()) camera->cancel();bundle_frame_=0;throw;}
     } else if(action=="cancel") {
         for(auto* camera:cameras()) camera->cancel();
