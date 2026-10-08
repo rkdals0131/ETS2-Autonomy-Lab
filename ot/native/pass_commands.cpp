@@ -1,5 +1,7 @@
 #include "pass_commands.hpp"
+#include "build_identity.hpp"
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace ot {
@@ -21,6 +23,62 @@ std::string string_at(uintptr_t address) {
     if(!address || !copy_memory(address,value.data(),value.size())) return {};
     auto end=std::find(value.begin(),value.end(),'\0');
     return end==value.end()?std::string{}:std::string(value.begin(),end);
+}
+template<size_t N> std::array<float,N> floats_at(uintptr_t address) {
+    auto values=read<std::array<float,N>>(address);
+    for(auto x:values) if(!std::isfinite(x))
+        throw std::runtime_error("Nonfinite pass camera value");
+    return values;
+}
+json camera_at_compile(uintptr_t pass,uintptr_t base) {
+    json result={{"available",false},{"sample_phase","dx11_compile_pass_begin"},
+        {"qpc",qpc_now()},{"scope","pass_base_state; per-draw overrides not inspected"}};
+    try {
+        static const json s=json::parse(OT_SCHEMA).at("render_pass_camera");
+        const auto offset=[&](const char* key){return s.at(key).get<uintptr_t>();};
+        const auto callback=read<uintptr_t>(pass+offset("callback_offset"));
+        if(!callback || read<uintptr_t>(callback)!=base+offset("wrapper_vtable_rva"))
+            throw std::runtime_error("Unsupported surface pass callback");
+        const auto inner=read<uintptr_t>(callback+offset("inner_callback_offset"));
+        if(!inner || read<uintptr_t>(inner)!=base+offset("inner_vtable_rva"))
+            throw std::runtime_error("Unsupported surface pass work layout");
+        const auto work=read<uintptr_t>(pass+offset("work_offset"));
+        if(!work) throw std::runtime_error("Surface pass work is absent");
+        const auto id=read<uint16_t>(work+offset("batch_id_offset"));
+        const auto pool=array(base+offset("batch_pool_rva"));
+        if(id>=pool.size) throw std::runtime_error("Surface pass component batch is absent");
+        const auto batch=pool.data+id*offset("batch_stride");
+        const auto components=array(batch);
+        uintptr_t camera{},deferred{};
+        for(uint64_t i=0;i<components.size;++i) {
+            const auto component=read<uintptr_t>(components.data+i*sizeof(uintptr_t));
+            if(!component) continue;
+            const auto type=read<uintptr_t>(component);
+            if(type==base+offset("camera_vtable_rva")) camera=component;
+            if(type==base+offset("deferred_vtable_rva")) deferred=component;
+        }
+        if(!camera || !deferred) throw std::runtime_error("Pass camera or deferred state is absent");
+        const auto local=floats_at<3>(camera+offset("position_offset"));
+        const auto cells=read<std::array<int16_t,2>>(camera+offset("cell_offset"));
+        const auto scale=s.at("cell_scale").get<double>();
+        result.update({{"work_address",work},{"component_batch_id",id},
+            {"component_mask",read<uint32_t>(batch+offset("batch_mask_offset"))},
+            {"camera_address",camera},{"deferred_state_address",deferred},
+            {"viewport_depth",floats_at<2>(work+offset("viewport_depth_offset"))},
+            {"viewport_mode",read<uint32_t>(work+offset("viewport_mode_offset"))},
+            {"viewport_rect_raw",floats_at<4>(work+offset("viewport_rect_offset"))},
+            {"projection_row_major",floats_at<16>(work+offset("projection_offset"))},
+            {"projection_modifier",floats_at<4>(work+offset("projection_modifier_offset"))},
+            {"projection_modifier_flag",read<uint8_t>(work+offset("projection_modifier_flag_offset"))},
+            {"camera_rotation_row_major",floats_at<16>(camera+offset("rotation_offset"))},
+            {"camera_local_xyz",local},{"camera_cell_xz",cells},
+            {"camera_world_xyz",std::array<double,3>{local[0]+scale*cells[0],local[1],local[2]+scale*cells[1]}},
+            {"world_units","game_length_units"},
+            {"ray",floats_at<4>(deferred+offset("ray_offset"))},
+            {"deferred_dimensions",floats_at<4>(deferred+offset("dimensions_offset"))}});
+        result["available"]=true;
+    } catch(const std::exception& e) {result["error"]=e.what();}
+    return result;
 }
 }
 std::vector<PassCommands::Block> PassCommands::blocks(uintptr_t output) {
@@ -63,6 +121,11 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input) {
                         {"pool_id_at_compile",read<uint16_t>(image+0x740)}});
                 }
             }
+            const bool mirror_surface=std::any_of(links.begin(),links.end(),[](const json& image) {
+                return image.at("name")=="attributes_0" &&
+                    image.at("namespace").get_ref<const std::string&>().starts_with("mirror");
+            });
+            if(mirror_surface) result["camera_at_compile"]=camera_at_compile(pass,base);
             result["linked_images"]=std::move(links);
             return std::make_shared<const json>(std::move(result));
         }

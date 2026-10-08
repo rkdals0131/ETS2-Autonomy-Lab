@@ -1,8 +1,20 @@
-# ot 0.7.3 — 상주 로더·SDK·네 미러 GPU 캡처
+# ot 0.8.0 — 상주 로더·네 미러 영상·pass 카메라 상수
 
-> **확정:** SDK/IPC·내부 자차 pose 대조. 0.5.0 mirror5 5초·50표본·10 Hz 기록. 0.6.1은 미러 0·1·2·5를 같은 Present 구간에서 3묶음 수집하고 네 hook의 패닉 복원을 확인. RenderDoc 4뷰 픽셀·상수·카메라 점군.
+> **확정:** SDK/IPC·내부 자차 pose 대조. mirror5 10 Hz 기록·네 미러 같은 Present 구간 수집. 0.8.0은 명령 구간을 통해 영상과 pass 기본 카메라 상태를 연결. 콘솔 없는 기능 DLL 교체, hook 시간 계측·내부 읽기 비용 감소도 실측.
 > **미확정:** DLL 영상과 최종 카메라 상수 연결·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
-> **다음:** pass별 카메라 자세·투영·ray 상수를 영상에 연결합니다.
+> **다음:** 개별 draw의 최종 GPU 상수와 pass 기본 상태 대조, 월드 정합·주행 및 연속 데이터 전달.
+
+### 0.8.0 — 영상에 pass 기본 카메라 상태 연결
+
+컴파일 시작 hook에서 미러 surface pass의 작업 자료와 component batch를 읽어 `geometry_pass.camera_at_compile`에 저장합니다. 해당 JSON은 컴파일된 명령 구간과 함께 보존되며 실제 OM binding과 GPU 복사 metadata까지 전달됩니다. 나중에 주소를 다시 읽거나 외부 관측 시각이 가까운 자료를 결합하지 않습니다. 알려진 defattr callback·component 타입의 layout만 해석하며 주소·offset은 컴파일된 `render_pass_camera` 스키마에 있습니다.
+
+내용은 CPU 투영행렬·viewport 깊이/원시 사각형·추가 투영 보정 값, 기본 카메라 회전·local/cell/world 위치, ray float4·렌더 크기와 QPC입니다. `sample_phase`는 `dx11_compile_pass_begin`이며 **pass의 기본 상태**입니다. 개별 draw의 component override나 특수 shader를 모두 확인한 최종 GPU 상태가 아닙니다. `available=false`이면 `error`를 함께 남기고 픽셀 자료는 그대로 보존합니다.
+
+일반 DX11 PID 24748의 Present 구간 54에서 네 영상과 네 기본 카메라를 확보했습니다. 컴파일 시각은 각 GPU 복사 제출보다 3.036–11.042 ms 앞섰습니다. ray 값은 네 뷰 모두 이전 RenderDoc 프레임 3160의 fog 상수와 정확히 같았고, CPU 투영을 DX11 기본 보정한 행렬과 이전 geometry VS에서 분리한 투영행렬의 최대 차이는 9.71e-8 미만이었습니다. 현재 ray와 투영의 세 pixel-center 표본 왕복 오차는 0.000013 pixel 미만입니다. 이는 좌표 규약·고정 투영의 대조이며 **서로 다른 프레임의 카메라 자세나 최종 GPU 상수를 검증한 결과가 아닙니다.**
+
+Z·ray로 카메라 점군을 만들고 기본 카메라 회전의 역행렬과 world 원점으로 변환한 NPY도 저장했습니다. [네 뷰 RGB/Z](../research/live/2026-10-08-render-probe/0.8.0-pass-world/rgb-depth.png), [기본 카메라 기반 월드 점군](../research/live/2026-10-08-render-probe/0.8.0-pass-world/world-pass-base.png)에서 차고 벽·바닥 형태를 확인했습니다. 이 월드 점군은 draw override·AI 박스·미터 정확도를 아직 대조하지 않은 중간 결과입니다.
+
+활성화 후 준비가 끝난 구간의 바인딩 7,916회는 연결 실패·오류가 0이었습니다. 캡처 뒤 패닉 및 로더 재로딩으로 hook·GPU 자원을 정리했고 Tier 0·상주 로더 0.7.0·기능 모듈 0.8.0으로 돌아왔습니다. 원본은 `research/live/2026-10-08-render-probe/0.8.0-pass-camera.json`, 비교값은 `0.8.0-camera-comparison.json`입니다.
 
 ### 0.7.2–0.7.3 — 프로세스 내부 읽기와 pass 조회 비용 감소
 
