@@ -36,6 +36,7 @@ void GpuCapture::release_gpu() {
     for(auto& image:images_) {image.source.Reset();image.staging.Reset();}
     geometry_depth_.source.Reset();geometry_depth_.staging.Reset();
     for(auto& constants:geometry_constants_) constants.staging.Reset();
+    for(auto& constants:vehicle_constants_) constants.staging.Reset();
     completion_.Reset();context_.Reset();
 }
 void GpuCapture::cancel() noexcept {
@@ -63,6 +64,7 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame) {
         for(auto& image:images_) image.pixels.clear();
         geometry_depth_.pixels.clear();
         for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
+        vehicle_constants_.clear();
         metadata_=json::object();error_.clear();last_label_.clear();saved_.clear();
         geometry_binding_=geometry_sdk_=gpu_polls_=bindings_seen_=0;
         geometry_pass_=color_pass_=geometry_gpu_=nullptr;requested_frame_=requested_frame;
@@ -122,6 +124,7 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
             context_=context;geometry_binding_=binding_sequence;geometry_sdk_=sdk_frame;geometry_frame_=render_frame;
             geometry_pass_=*pass;geometry_gpu_=nullptr;geometry_depth_.pixels.clear();
             for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
+            vehicle_constants_.clear();
         } else if(count==1 && images_[0].source && context==context_.Get() && label==camera_+"/composition_raw") {
             images_[2].source=std::move(next);color_pass_=*pass;
         }
@@ -202,6 +205,46 @@ void GpuCapture::geometry_constants(ID3D11DeviceContext* context,uint64_t bindin
     }
     // The existing image completion query is inserted later on this context,
     // so it also covers these buffer copies without an additional GPU wait.
+    vehicle_constants(context,device.Get());
+}
+void GpuCapture::vehicle_constants(ID3D11DeviceContext* context,ID3D11Device* device) {
+    if(!geometry_pass_.contains("vehicles_at_compile")) return;
+    geometry_gpu_["vehicle_constants_scope"]="draw-batch VS slot 0 ranges copied at G-buffer exit; per-draw execution not hooked";
+    geometry_gpu_["vehicle_constants_truncated_for_read_budget"]=false;
+    for(const auto& vehicle:geometry_pass_.at("vehicles_at_compile").at("vehicles")) {
+        for(const auto& draw:vehicle.at("draws")) {
+            const auto& bound=draw.at("vs_cb0");
+            if(!bound.at("known").get<bool>() || !bound.at("source_buffer").get<uintptr_t>()) continue;
+            if(vehicle_constants_.size()>=64) {
+                geometry_gpu_["vehicle_constants_truncated_for_read_budget"]=true;return;
+            }
+            // The engine keeps these draw resources alive through command
+            // execution. Acquire our reference while still inside that pass.
+            Com<ID3D11Buffer> source=reinterpret_cast<ID3D11Buffer*>(bound.at("source_buffer").get<uintptr_t>());
+            D3D11_BUFFER_DESC desc{};source->GetDesc(&desc);
+            if(!(desc.BindFlags&D3D11_BIND_CONSTANT_BUFFER))
+                throw std::runtime_error("Vehicle draw references a non-constant buffer");
+            const uint64_t offset=bound.at("first_constant").get<uint32_t>()*uint64_t{16};
+            const uint64_t size=bound.at("num_constants").get<uint32_t>()*uint64_t{16};
+            const auto bytes=offset<desc.ByteWidth?std::min<uint64_t>(size,desc.ByteWidth-offset):0;
+            if(bytes>65536) throw std::runtime_error("Vehicle constant range exceeds the D3D11 shader limit");
+            Constants sample;
+            sample.description=bound;
+            sample.description.update({{"stage","vs"},{"slot",0},{"actor_address",vehicle.at("actor_address")},
+                {"geometry_address",draw.at("geometry_address")},{"draw_item_index",draw.at("draw_item_index")},
+                {"source_byte_width",desc.ByteWidth},{"source_byte_offset",offset},{"copied_bytes",bytes}});
+            if(bytes) {
+                D3D11_BUFFER_DESC staging{};staging.ByteWidth=static_cast<UINT>(bytes);
+                staging.Usage=D3D11_USAGE_STAGING;staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+                check(device->CreateBuffer(&staging,nullptr,&sample.staging),"CreateBuffer(vehicle constant staging)");
+                sample.bytes.resize(static_cast<size_t>(bytes));
+                sample.description["file"]=camera_+"_vehicle_"+std::to_string(vehicle_constants_.size())+"_vs_cb0.bin";
+                D3D11_BOX box{static_cast<UINT>(offset),0,0,static_cast<UINT>(offset+bytes),1,1};
+                context->CopySubresourceRegion(sample.staging.Get(),0,0,0,0,source.Get(),0,&box);
+            }
+            vehicle_constants_.push_back(std::move(sample));
+        }
+    }
 }
 void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t sdk_frame,
                         uint64_t render_frame,uint64_t observation_session) {
@@ -290,6 +333,20 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
         if(!sample.description.is_null()) constants_json.push_back(sample.description);
     }
     if(!metadata_["geometry_gpu"].is_null()) metadata_["geometry_gpu"]["constant_buffers"]=std::move(constants_json);
+    json vehicle_json=json::array();
+    for(auto& sample:vehicle_constants_) {
+        if(sample.staging) {
+            D3D11_MAPPED_SUBRESOURCE mapped_buffer{};
+            const auto result=context->Map(sample.staging.Get(),0,D3D11_MAP_READ,D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped_buffer);
+            if(result==DXGI_ERROR_WAS_STILL_DRAWING) return;
+            check(result,"Map(vehicle constant staging)");
+            std::memcpy(sample.bytes.data(),mapped_buffer.pData,sample.bytes.size());
+            context->Unmap(sample.staging.Get(),0);
+        }
+        vehicle_json.push_back(sample.description);
+    }
+    if(geometry_pass_.contains("vehicles_at_compile"))
+        metadata_["geometry_gpu"]["vehicle_constant_buffers"]=std::move(vehicle_json);
     metadata_["readback_ready_qpc"]=qpc_now();
     metadata_["readback_cpu_ticks"]=qpc_now()-cpu_begin;
     release_gpu();phase_=Phase::ready;
@@ -307,6 +364,12 @@ json GpuCapture::save() {
         output.close();
     }
     for(const auto& sample:geometry_constants_) if(!sample.bytes.empty()) {
+        std::ofstream output(directory/sample.description.at("file").get<std::string>(),std::ios::binary);
+        output.exceptions(std::ios::badbit|std::ios::failbit);
+        output.write(reinterpret_cast<const char*>(sample.bytes.data()),sample.bytes.size());
+        output.close();
+    }
+    for(const auto& sample:vehicle_constants_) if(!sample.bytes.empty()) {
         std::ofstream output(directory/sample.description.at("file").get<std::string>(),std::ios::binary);
         output.exceptions(std::ios::badbit|std::ios::failbit);
         output.write(reinterpret_cast<const char*>(sample.bytes.data()),sample.bytes.size());

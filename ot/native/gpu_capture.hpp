@@ -32,6 +32,7 @@ private:
                 uint64_t render_frame, uint64_t observation_session);
     void collect(ID3D11DeviceContext* context);
     void geometry_constants(ID3D11DeviceContext* context,uint64_t binding_sequence);
+    void vehicle_constants(ID3D11DeviceContext* context,ID3D11Device* device);
     void release_gpu();
     json status() const;
     json save();
@@ -43,6 +44,7 @@ private:
     Image geometry_depth_;
     uint32_t depth_pixel_bytes_=0;
     std::array<Constants,2> geometry_constants_; // VS/PS slot 0 at G-buffer exit
+    std::vector<Constants> vehicle_constants_; // VS slot 0 of matched vehicle draw items
     Com<ID3D11Query> completion_;
     Com<ID3D11DeviceContext> context_;
     uint64_t sequence_=0,request_started_=0,geometry_binding_=0,geometry_sdk_=0;

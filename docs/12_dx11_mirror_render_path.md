@@ -1166,4 +1166,32 @@ point_world = P_m + R_m × (point_actor_local − d)
 | 연속 구간 16 / AI `0x2968e6c4348` | 21 → 21 | 0 → 0 | 0.09413 |
 | 연속 구간 49 / 같은 AI | 30 → 32 | 0 → 0 | 0.29107 |
 
-[실제 RGB 위 두 방식의 박스](../research/live/2026-10-08-object-projection/origin/projections/model-box-comparison.png)에서 주차 트럭의 겹침을 확인했다. AI는 두 표본 모두 더 가까운 깊이에 가려졌다. 이 자료로 움직이는 차량의 정확도 향상을 주장하지 않는다. 최종 draw가 사용한 GPU 모델 상수와 compile 시점 성분의 일치 여부가 다음 과제다. 원시 disassembly와 출력 JSON은 `research/live/2026-10-08-object-projection/origin/`에 있다.
+[실제 RGB 위 두 방식의 박스](../research/live/2026-10-08-object-projection/origin/projections/model-box-comparison.png)에서 주차 트럭의 겹침을 확인했다. AI는 두 표본 모두 더 가까운 깊이에 가려졌다. 이 자료로 움직이는 차량의 정확도 향상을 주장하지 않는다. 원시 disassembly와 출력 JSON은 `research/live/2026-10-08-object-projection/origin/`에 있다. 차량 draw의 GPU 상수는 다음 후속 실험에서 연결했다.
+
+### 차량 draw와 GPU 상수 구간의 연결
+
+0.8.4는 준비된 차량 geometry `Q`와 **실제 DX11 상수 버퍼·구간**을 연결한다. compile 시점에는 uniform 계산이 이미 끝나 있으므로 별도의 준비 지점 `0x2E6243`을 관측한다. 추가 hook도 기존 패닉·스택 drain·언로드 경로에 포함한다.
+
+1. `0x2E5FF0`은 선택된 draw item(24 bytes, `+0x10 = Q`)마다 `0x2E5040`으로 uniform을 계산한다. 이어 renderer virtual `+0x278 → 0x2B6B20`이 48-byte 결과를 만든다.
+2. 결과는 여섯 shader stage의 바인딩 packet 포인터다. packet의 `+4`에서 bits 4–7은 변경된 constant-buffer slot mask이고, bits 20–23은 stage다. header 뒤에는 선택된 buffer 포인터, 시작 constant, 길이 배열이 차례로 놓인다. `0x2B78D0`의 stage 0은 `VSSetConstantBuffers1`로 전달된다. 시작·길이는 16-byte 단위다.
+3. packet은 앞 draw와 **달라진 바인딩만** 담는다. 따라서 각 준비 묶음의 모든 항목을 순서대로 읽어 VS slot 0을 복원한 뒤, pass compile에서 차량 `Q` 목록과 결합한다. 텍스처 크기나 모델의 근접 위치로 추정하지 않는다.
+4. 뒤따르는 `0x2E6345..0x2E635D`가 opcode 1의 40-byte draw 명령에 결과 포인터를 쓴다. compile의 `0x2B1D43 → 0x2BAB30 → 0x2BA530`은 이 packet들을 DX11 binding 명령으로 변환한다. 현재 관측은 이 명령 생성 경로까지이며 개별 `Draw*` 실행을 hook하지 않는다.
+5. 해당 미러의 G-buffer 종료 관측에서 연결된 VS 구간을 staging buffer로 복사하고, 기존 영상 완료 query 뒤에 읽는다. 모델·geometry·draw index와 원본 구간, 파일명을 함께 저장한다. 뷰당 상수 수집 예산은 64항목이며 초과 여부를 metadata에 표시한다.
+
+일반 DX11에서 첫 묶음의 mirror0/1/2/5는 각각 **6/4/6/0개 draw**를 수집했다. AI 6개와 주차 차량 10개의 draw이며, 동일 차량의 여러 geometry 또는 여러 제출도 별개 항목으로 보존한다. 각 VS 구간은 256 bytes여서 총 4 KiB가 추가됐다. 차량이 없는 mirror5는 빈 배열이다. metadata 읽기 오류·관측 예산 초과는 없었다.
+
+관측된 버퍼의 `float4[0..3]`은 model-view, `[4..7]`은 D3D 보정 model-view-projection, `[8..11]`은 보정 전 model-view-projection이었다. 아래는 compile 시점에 읽은 모델·카메라 행렬로 계산한 값과 실제 GPU 원본의 비교다. 비교 과정은 이 layout을 보인 표본에 한정하며, 결과를 런타임의 bit-exact 통과 조건으로 사용하지 않는다.
+
+| 첫 묶음 16개 draw의 비교 | 최대 절대 차이 |
+| --- | ---: |
+| model-view 회전 계수 | 4.35×10⁻⁸ |
+| model-view 이동 계수 | 1.49×10⁻⁵ 게임 길이 단위 |
+| D3D 보정 MVP 계수 | 1.49×10⁻⁵ |
+| 보정 전 MVP 계수 | 2.60×10⁻⁵ |
+| 기준점 보정한 actor 박스 꼭짓점의 화면 투영 | **0.0000188 px** |
+
+이 결과는 해당 draw 구간의 GPU 변환과 CPU 모델/카메라 관측이 수치상 일치함을 보여 준다. RGB에서 AI를 분할한 결과, 박스 안의 픽셀이 그 차량이라는 증명, 모든 재질의 정점 변형 검증은 아니다. 다음 영상 정합은 이 변환을 기준으로 실제 가림·LOD·geometry 범위를 구별한다.
+
+별도의 짧은 관측에서 새 callback 본문은 4,915회, 평균 3.09 µs·최대 270.1 µs였다. 이는 묶음 단위의 CPU 관측 비용이며 프레임 전체의 hook 비용·주행 성능은 아니다. 패닉 후 활성 hook 0, 메타로더 교체에서 worker·매핑과 다섯 hook의 임시 코드 해제, Tier 0 재시작을 확인했다. 정적 근거는 `research/live/2026-10-08-object-projection/draw/`, 실행 자료와 수치 비교는 같은 상위 폴더의 `0.8.4/first-capture.json`, `first-transform-comparison.json`, `draw-observation.json`에 있다.
+
+최종 빌드의 두 번째 묶음은 뷰별 5/5/3/0개, 총 13개 draw였고 GPU/CPU 박스 꼭짓점 투영 차이는 최대 0.0000217 px였다. `--vehicles`를 생략한 관측에서는 차량 metadata와 draw 관측 본문 실행이 모두 0이었다. 패닉 뒤 다섯 hook 지점의 EXE 원본 바이트 복원, 기능 DLL 부재, 상주 로더·FFB 유지까지 직접 확인하고 0.8.4를 Tier 0으로 재로딩했다. SDK 9채널도 다시 수신했다. `final-build-capture.json`, `final-transform-comparison.json`에 두 번째 묶음을 보존한다.

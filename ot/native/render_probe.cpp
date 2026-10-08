@@ -13,6 +13,10 @@ std::atomic<uint32_t> callbacks{};
 constexpr uintptr_t hook_rva=0x2B3193;
 constexpr uintptr_t present_hook_rva=0x2BFEDA;
 constexpr uintptr_t compile_begin_rva=0x2B1B40,compile_end_rva=0x2B266A;
+constexpr uintptr_t draw_batch_rva=0x2E6243;
+constexpr std::array<uint8_t,25> draw_batch_signature={
+    0x8B,0x4C,0x24,0x40,0x4C,0x8D,0x05,0x02,0x4B,0xF3,0x01,
+    0x48,0x8B,0x5D,0x7F,0xFF,0xC1,0x8B,0xC1,0x89,0x4C,0x24,0x40,0x48,0x3B};
 constexpr std::array<uint8_t,24> compile_begin_signature={
     0x4D,0x8B,0x3A,0x49,0x8B,0x4F,0x10,0x48,0x85,0xC9,0x0F,0x84,
     0x1A,0x0B,0x00,0x00,0x4D,0x8B,0x7F,0x08,0x48,0x8D,0x0C,0x49};
@@ -48,7 +52,7 @@ uintptr_t find_target(std::span<const uint8_t> bytes_to_find,size_t adjustment,u
         throw std::runtime_error("Render hook signature does not resolve to the inspected call site");
     return found;
 }
-struct CodeRanges { std::array<std::pair<uintptr_t,uintptr_t>,9> ranges; };
+struct CodeRanges { std::array<std::pair<uintptr_t,uintptr_t>,11> ranges; };
 bool contains(const CodeRanges& ranges,DWORD64 ip) noexcept {
     for(const auto& [begin,end]:ranges.ranges) if(ip>=begin && ip<end) return true;
     return false;
@@ -96,6 +100,7 @@ void RenderProbe::enable(bool vehicle_metadata) {
         const auto present_target=find_target(present_signature,0,present_hook_rva);
         const auto compile_begin_target=find_target(compile_begin_signature,0,compile_begin_rva);
         const auto compile_end_target=find_target(compile_end_signature,0,compile_end_rva);
+        const auto draw_batch_target=find_target(draw_batch_signature,0,draw_batch_rva);
         if(!module_reference_) {
             if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
                                   reinterpret_cast<LPCWSTR>(&callback),&module_reference_))
@@ -126,6 +131,12 @@ void RenderProbe::enable(bool vehicle_metadata) {
             throw std::runtime_error("Cannot create command compilation end observer");
         }
         compile_end_hook_=std::move(*compile_end_result);
+        auto draw_result=safetyhook::MidHook::create(draw_batch_target,&draw_batch_callback,safetyhook::MidHook::StartDisabled);
+        if(!draw_result) {
+            for(auto* hook:hookset()) hook->reset();
+            throw std::runtime_error("Cannot create draw binding observer");
+        }
+        draw_batch_hook_=std::move(*draw_result);
         // A suspended external callee must not have a return address in a
         // trampoline without unwind metadata. Check the instructions themselves.
         ZydisDecoder decoder{};
@@ -256,6 +267,18 @@ void RenderProbe::compile_end_callback(safetyhook::Context& context) noexcept {
         const auto start=qpc_now();
         self->pass_commands_.end(context.rbp);
         self->compile_end_timing_.add(qpc_now()-start);
+    }
+    callbacks.fetch_sub(1);
+}
+void RenderProbe::draw_batch_callback(safetyhook::Context& context) noexcept {
+    callbacks.fetch_add(1);
+    if(auto* self=observer.load();self && self->accepting_.load() && self->vehicle_metadata_.load()) {
+        const auto start=qpc_now();
+        uintptr_t work{},input{},items{};
+        if(read_memory(context.rbp+0x5F,work) && read_memory(work+0xF0,input) &&
+           read_memory(context.rbp-0x39,items))
+            self->pass_commands_.draw_batch(input,items,context.r15,static_cast<uint32_t>(context.rsi));
+        self->draw_batch_timing_.add(qpc_now()-start);
     }
     callbacks.fetch_sub(1);
 }
@@ -396,7 +419,9 @@ json RenderProbe::status() {
             {{"name","dx11.compile_pass_begin"},{"tier",1},{"rva",compile_begin_rva},{"enabled",compile_begin_hook_.enabled()},
              {"timing",compile_begin_timing_.snapshot()}},
             {{"name","dx11.compile_pass_end"},{"tier",1},{"rva",compile_end_rva},{"enabled",compile_end_hook_.enabled()},
-             {"timing",compile_end_timing_.snapshot()}}})},
+             {"timing",compile_end_timing_.snapshot()}},
+            {{"name","dx11.prepare_draw_bindings"},{"tier",1},{"rva",draw_batch_rva},{"enabled",draw_batch_hook_.enabled()},
+             {"timing",draw_batch_timing_.snapshot()}}})},
         {"last_error",last_error_},{"render_coherent",false},{"capture",gpu_.command("status")},
         {"recent_bindings",entries}};
 }

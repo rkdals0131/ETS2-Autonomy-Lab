@@ -1,8 +1,22 @@
-# ot 0.8.3 — 네 미러 영상·깊이·차량 모델 자세
+# ot 0.8.4 — 네 미러 영상·깊이·차량 draw 상수
 
 > **확정:** SDK/IPC·내부 자차 pose 대조. mirror5 10 Hz 기록·네 미러 같은 Present 구간 수집. 0.8.0은 명령 구간을 통해 영상과 pass 기본 카메라 상태를 연결. 콘솔 없는 기능 DLL 교체, hook 시간 계측·내부 읽기 비용 감소도 실측.
 > **남은 검증:** draw별 상수 변경 범위·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
 > **다음:** draw별 변경 범위·월드 정합·AI 박스 대조, 주행 및 연속 데이터 전달.
+
+### 0.8.4 — 차량별 GPU 변환 상수
+
+`render_probe on --vehicles`로 수집하면 차량의 draw 목록과 **VS slot 0 상수 버퍼 원본**도 저장합니다. 메타로더 API로 기능 DLL을 교체했으며, 일반 DX11에서 첫 네 뷰의 차량 draw 16개(AI 6·주차 차량 10)를 읽었습니다. CPU 모델·카메라 자세로 계산한 박스 꼭짓점과 GPU 변환 행렬의 투영 차이는 최대 **0.0000188 px**였습니다. 이는 이 표본의 변환 대조이며 AI 픽셀 식별이나 모든 shader의 정합 결과는 아닙니다.
+
+- `geometry_pass.vehicles_at_compile.vehicles[].draws`: 해당 모델 geometry에 연결된 draw 항목과 VS 상수 구간입니다. 빈 배열은 관측된 연결이 없다는 뜻입니다.
+- `geometry_gpu.vehicle_constant_buffers`: actor·geometry·draw index, 원본 buffer, 16-byte 단위의 시작/길이와 저장 파일을 연결합니다. 원본은 `mirror*_vehicle_*_vs_cb0.bin`입니다.
+- 상수는 G-buffer를 떠날 때 그 draw가 참조한 구간만 GPU staging에 복사합니다. 기존 이미지 완료 query로 함께 회수하고 파일 저장은 명령 worker가 담당합니다.
+- 새 관측 지점 `0x2E6243`은 렌더 준비의 묶음 단위로 호출됩니다. 앞 draw의 바인딩을 재사용하는 경우도 순서대로 복원합니다. 최종 `Draw*` 실행을 개별 hook한 것은 아닙니다.
+- draw 관측은 `--vehicles`에서만 수행합니다. 다섯 hook 모두 패닉에서 꺼지고 메타로더 unload에서 해제됩니다. 기본 Tier 0은 SDK만 수신합니다.
+
+첫 표본은 뷰별 draw 6/4/6/0개, 추가 상수 데이터 합계 4 KiB였으며 읽기 오류와 관측 예산 초과는 없었습니다. 짧은 관측에서 새 callback 본문은 묶음당 평균 3.09 µs, 최대 270.1 µs였습니다. 전체 hook·GPU 비용이나 주행 성능 측정값은 아닙니다. 근거와 해석은 [차량 draw 상수 경로](../docs/12_dx11_mirror_render_path.md#차량-draw와-gpu-상수-구간의-연결)에 있으며 실행 원본은 로컬 `research/live/2026-10-08-object-projection/0.8.4/`에 보존합니다.
+
+최종 빌드로 두 번째 묶음의 13개 draw도 대조했습니다. 두 묶음 29개 draw의 최대 투영 차이는 0.0000217 px였습니다. 차량 수집을 끈 기본 동작, 다섯 hook의 코드 복원과 완전한 DLL 해제, FFB 유지·SDK 9채널 재수신을 확인했습니다.
 
 ### 0.8.3 — 미러 pass의 차량 렌더 모델 관측
 
@@ -21,7 +35,7 @@
 
 최종 빌드에서도 옵션을 끈 네 뷰 수집이 완료됐고 차량 필드는 생성되지 않았습니다. 같은 hook을 유지하며 옵션을 켠 다음 묶음에는 모델 2·4·5·0개가 들어왔고 오류·생략은 없었습니다. 패닉 후 hook·callback 수 0, 옵션 꺼짐, 로더를 통한 완전한 core 교체·재로딩과 SDK/FFB 유지도 확인했습니다. 최종 표본은 `final-build-capture.json`입니다.
 
-actor와 model 원점은 같지 않습니다. 첫 표본에서 모델 기준점 보정을 뺀 잔차는 AI에서 약 0.029–0.108 게임 단위, 주차 차량에서 약 0.006–0.033단위였습니다. 이 잔차 전체를 보간 오차라고 단정하지 않습니다. 후속 코드 추적으로 actor 박스가 모델 박스에 같은 기준점 이동량을 더한 값임을 확인했습니다. `project_boxes --pose model`은 `P_model + R_model × (actor_local_point − offset)`으로 투영합니다. 기본값 `--pose actor`는 기존 simulation 관측값을 사용합니다. [변환 근거와 실제 비교](../docs/12_dx11_mirror_render_path.md#actor-박스를-렌더-모델-자세로-옮기는-변환)를 참고하세요. 최종 GPU draw 상수와의 대조는 남아 있습니다. 실행 자료는 `research/live/2026-10-08-object-projection/0.8.3/` 및 `origin/`에 있습니다.
+actor와 model 원점은 같지 않습니다. 첫 표본에서 모델 기준점 보정을 뺀 잔차는 AI에서 약 0.029–0.108 게임 단위, 주차 차량에서 약 0.006–0.033단위였습니다. 이 잔차 전체를 보간 오차라고 단정하지 않습니다. 후속 코드 추적으로 actor 박스가 모델 박스에 같은 기준점 이동량을 더한 값임을 확인했습니다. `project_boxes --pose model`은 `P_model + R_model × (actor_local_point − offset)`으로 투영합니다. 기본값 `--pose actor`는 기존 simulation 관측값을 사용합니다. [변환 근거와 실제 비교](../docs/12_dx11_mirror_render_path.md#actor-박스를-렌더-모델-자세로-옮기는-변환)를 참고하세요. 후속 0.8.4의 GPU 상수 대조는 위 절에 정리했습니다. 이 단계의 실행 자료는 `research/live/2026-10-08-object-projection/0.8.3/` 및 `origin/`에 있습니다.
 
 ### 오프라인 객체 박스 투영과 가림 판정
 

@@ -35,6 +35,7 @@ private:
     static void present_callback(safetyhook::Context& context) noexcept;
     static void compile_begin_callback(safetyhook::Context& context) noexcept;
     static void compile_end_callback(safetyhook::Context& context) noexcept;
+    static void draw_batch_callback(safetyhook::Context& context) noexcept;
     struct Timing {
         std::atomic<uint64_t> count{0},total{0},maximum{0};
         // Bucket 0 includes 0 and 1 tick; bucket k contains [2^k, 2^(k+1)).
@@ -43,6 +44,7 @@ private:
         json snapshot() const;
     };
     Timing bind_timing_,present_timing_,compile_begin_timing_,compile_end_timing_;
+    Timing draw_batch_timing_;
     void present(HRESULT result) noexcept;
     void observe(const safetyhook::Context& context) noexcept;
     bool quiescent() noexcept;
@@ -56,8 +58,9 @@ private:
     safetyhook::MidHook hook_;
     safetyhook::MidHook present_hook_;
     safetyhook::MidHook compile_begin_hook_,compile_end_hook_;
-    std::array<safetyhook::MidHook*,4> hookset() noexcept {
-        return {&hook_,&present_hook_,&compile_begin_hook_,&compile_end_hook_};
+    safetyhook::MidHook draw_batch_hook_;
+    std::array<safetyhook::MidHook*,5> hookset() noexcept {
+        return {&hook_,&present_hook_,&compile_begin_hook_,&compile_end_hook_,&draw_batch_hook_};
     }
     PassCommands pass_commands_;
     struct PresentRecord { uint64_t id,qpc,sdk_frame;HRESULT result;DWORD thread; };

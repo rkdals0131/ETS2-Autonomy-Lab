@@ -1,6 +1,7 @@
 #include "pass_commands.hpp"
 #include "build_identity.hpp"
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <stdexcept>
 #include <unordered_set>
@@ -202,6 +203,40 @@ json vehicles_at_compile(uintptr_t work,uintptr_t base) {
     return result;
 }
 }
+void PassCommands::draw_batch(uintptr_t input,uintptr_t items,uintptr_t bindings,uint32_t count) noexcept {
+    // 2B6B20 emits delta binding packets for each item. Consume every packet
+    // in this chunk, including non-vehicle draws, to preserve inherited slots.
+    std::lock_guard lock(draws_mutex_);
+    try {
+        if(!draws_.contains(input) && draws_.size()>=1024)
+            throw std::runtime_error("Draw observation input budget exceeded");
+        auto& batch=draws_[input];
+        Draw state{};
+        const auto observed=std::min<uint32_t>(count,8192);
+        batch.truncated=batch.truncated || count>observed;
+        for(uint32_t i=0;i<observed;++i) {
+            // Stage 0 is VS: 2B78D0 dispatches it to VSSetConstantBuffers1.
+            const auto packet=read<uintptr_t>(bindings+static_cast<size_t>(i)*48);
+            if(packet) {
+                const auto flags=read<uint32_t>(packet+4);
+                const auto mask=(flags>>4)&15;
+                if(mask&1) {
+                    const auto n=std::popcount(mask);
+                    state.buffer=read<uintptr_t>(packet+8);
+                    state.first=read<uint32_t>(packet+8+n*8);
+                    state.count=read<uint32_t>(packet+8+n*12);
+                    state.known=true;
+                }
+            }
+            if(batch.draws.size()>=8192) {batch.truncated=true;break;}
+            state.geometry=read<uintptr_t>(items+static_cast<size_t>(i)*24+16);
+            state.qpc=qpc_now();
+            batch.draws.push_back(state);
+        }
+    } catch(const std::exception& e) {
+        if(auto found=draws_.find(input);found!=draws_.end()) found->second.error=e.what();
+    } catch(...) {}
+}
 std::vector<PassCommands::Block> PassCommands::blocks(uintptr_t output) {
     const auto header=array(output+0x18);
     std::vector<Block> result(header.size);
@@ -213,6 +248,13 @@ std::vector<PassCommands::Block> PassCommands::blocks(uintptr_t output) {
     return result;
 }
 std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles) {
+    DrawBatch draw_batch;
+    {
+        std::lock_guard lock(draws_mutex_);
+        if(auto found=draws_.find(input);found!=draws_.end()) {
+            draw_batch=std::move(found->second);draws_.erase(found);
+        }
+    }
     const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     // The input command buffer is embedded at pass+0x2E8. The constructor
     // stores its graph index at +0x1F8; confirm membership in the live array
@@ -248,8 +290,25 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
             });
             if(mirror_surface) {
                 auto camera=camera_at_compile(pass,base);
-                if(vehicles && camera.at("available").get<bool>())
+                if(vehicles && camera.at("available").get<bool>()) {
                     result["vehicles_at_compile"]=vehicles_at_compile(camera.at("work_address").get<uintptr_t>(),base);
+                    auto& observation=result["vehicles_at_compile"];
+                    observation["draw_bindings"]={{"sample_phase","after_dx11_draw_binding_preparation"},
+                        {"scope","emitted draw batch VS slot 0; final draw execution not hooked"},
+                        {"observed_draw_items",draw_batch.draws.size()},
+                        {"truncated_for_read_budget",draw_batch.truncated},{"error",draw_batch.error}};
+                    for(auto& vehicle:observation["vehicles"]) {
+                        auto& draws=vehicle["draws"]=json::array();
+                        const auto geometry=vehicle.at("geometry_addresses").get<std::vector<uintptr_t>>();
+                        for(size_t i=0;i<draw_batch.draws.size();++i) {
+                            const auto& d=draw_batch.draws[i];
+                            if(std::find(geometry.begin(),geometry.end(),d.geometry)==geometry.end()) continue;
+                            draws.push_back({{"draw_item_index",i},{"geometry_address",d.geometry},{"qpc",d.qpc},
+                                {"vs_cb0",{{"known",d.known},{"source_buffer",d.buffer},
+                                    {"first_constant",d.first},{"num_constants",d.count}}}});
+                        }
+                    }
+                }
                 result["camera_at_compile"]=std::move(camera);
             }
             result["linked_images"]=std::move(links);
@@ -270,6 +329,7 @@ void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16
         if(empty) compiled_.erase(id);
         pending_.insert_or_assign(frame,Pending{output,id,std::move(before),std::move(pass)});
     } catch(const std::exception& e) {
+        {std::lock_guard lock(draws_mutex_);draws_.erase(input);}
         std::lock_guard lock(mutex_);++errors_;error_=e.what();
         pending_.erase(frame);compiled_.erase(id);
     }
@@ -307,6 +367,7 @@ std::shared_ptr<const json> PassCommands::lookup(uint16_t id,uintptr_t token) no
     ++unmatched_;return {};
 }
 void PassCommands::clear() {
+    {std::lock_guard lock(draws_mutex_);draws_.clear();}
     std::lock_guard lock(mutex_);pending_.clear();compiled_.clear();
     inputs_=named_=matches_=unmatched_=errors_=0;error_.clear();
 }
