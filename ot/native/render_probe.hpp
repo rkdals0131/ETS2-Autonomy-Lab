@@ -35,6 +35,14 @@ private:
     static void present_callback(safetyhook::Context& context) noexcept;
     static void compile_begin_callback(safetyhook::Context& context) noexcept;
     static void compile_end_callback(safetyhook::Context& context) noexcept;
+    struct Timing {
+        std::atomic<uint64_t> count{0},total{0},maximum{0};
+        // Bucket 0 includes 0 and 1 tick; bucket k contains [2^k, 2^(k+1)).
+        std::array<std::atomic<uint64_t>,64> buckets{};
+        void add(uint64_t ticks) noexcept;
+        json snapshot() const;
+    };
+    Timing bind_timing_,present_timing_,compile_begin_timing_,compile_end_timing_;
     void present(HRESULT result) noexcept;
     void observe(const safetyhook::Context& context) noexcept;
     bool quiescent() noexcept;

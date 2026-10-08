@@ -1,6 +1,7 @@
 #include "render_probe.hpp"
 #include <tlhelp32.h>
 #include <algorithm>
+#include <bit>
 #include <span>
 #include <stdexcept>
 #include <Zydis.h>
@@ -218,29 +219,57 @@ bool RenderProbe::close() noexcept {
 }
 void RenderProbe::callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load()) self->observe(context);
+    if(auto* self=observer.load();self && self->accepting_.load()) {
+        const auto start=qpc_now();
+        self->observe(context);
+        self->bind_timing_.add(qpc_now()-start);
+    }
     callbacks.fetch_sub(1);
 }
 void RenderProbe::present_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load())
+    if(auto* self=observer.load();self && self->accepting_.load()) {
+        const auto start=qpc_now();
         self->present(static_cast<HRESULT>(context.rax));
+        self->present_timing_.add(qpc_now()-start);
+    }
     callbacks.fetch_sub(1);
 }
 void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
     if(auto* self=observer.load();self && self->accepting_.load()) {
+        const auto start=qpc_now();
         uintptr_t input{},output{};uint16_t id{};
         if(read_memory(context.r10,input) && read_memory(context.rsp+0x58,output) &&
            read_memory(context.rbp+0x240,id))
             self->pass_commands_.begin(context.rbp,input,output,id);
+        self->compile_begin_timing_.add(qpc_now()-start);
     }
     callbacks.fetch_sub(1);
 }
 void RenderProbe::compile_end_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load()) self->pass_commands_.end(context.rbp);
+    if(auto* self=observer.load();self && self->accepting_.load()) {
+        const auto start=qpc_now();
+        self->pass_commands_.end(context.rbp);
+        self->compile_end_timing_.add(qpc_now()-start);
+    }
     callbacks.fetch_sub(1);
+}
+void RenderProbe::Timing::add(uint64_t ticks) noexcept {
+    total.fetch_add(ticks,std::memory_order_relaxed);
+    auto previous=maximum.load(std::memory_order_relaxed);
+    while(previous<ticks && !maximum.compare_exchange_weak(previous,ticks,std::memory_order_relaxed)) {}
+    const auto bucket=ticks?std::bit_width(ticks)-1:0;
+    buckets[bucket].fetch_add(1,std::memory_order_relaxed);
+    count.fetch_add(1,std::memory_order_relaxed);
+}
+json RenderProbe::Timing::snapshot() const {
+    json histogram=json::array();
+    for(const auto& bucket:buckets) histogram.push_back(bucket.load(std::memory_order_relaxed));
+    return {{"samples",count.load(std::memory_order_relaxed)},
+        {"total_ticks",total.load(std::memory_order_relaxed)},
+        {"max_ticks",maximum.load(std::memory_order_relaxed)},{"log2_tick_buckets",histogram}};
 }
 void RenderProbe::present(HRESULT result) noexcept {
     PresentRecord record{presents_.fetch_add(1)+1,qpc_now(),sdk_frame_.load(),result,GetCurrentThreadId()};
@@ -352,13 +381,18 @@ json RenderProbe::status() {
     const auto all=hookset();
     return {{"active",std::count_if(all.begin(),all.end(),[](auto* h){return h->enabled();})},
         {"callbacks_in_flight",callbacks.load()},
+        {"qpc_frequency",qpc_frequency()},
+        {"timing_scope","callback_body_elapsed; cumulative per module; excludes detour and counter bookkeeping"},
         {"pass_commands",pass_commands_.status()},
         {"hooks",json::array({{{"name","dx11.omset_before_bind"},{"tier",1},{"rva",hook_rva},
-            {"enabled",hook_.enabled()},{"calls",calls_.load()},{"missed_records",missed_.load()}},
+            {"enabled",hook_.enabled()},{"calls",calls_.load()},{"missed_records",missed_.load()},
+            {"timing",bind_timing_.snapshot()}},
             {{"name","dxgi.present_return"},{"tier",1},{"rva",present_hook_rva},{"enabled",present_hook_.enabled()},
-             {"calls",presents_.load()}},
-            {{"name","dx11.compile_pass_begin"},{"tier",1},{"rva",compile_begin_rva},{"enabled",compile_begin_hook_.enabled()}},
-            {{"name","dx11.compile_pass_end"},{"tier",1},{"rva",compile_end_rva},{"enabled",compile_end_hook_.enabled()}}})},
+             {"calls",presents_.load()},{"timing",present_timing_.snapshot()}},
+            {{"name","dx11.compile_pass_begin"},{"tier",1},{"rva",compile_begin_rva},{"enabled",compile_begin_hook_.enabled()},
+             {"timing",compile_begin_timing_.snapshot()}},
+            {{"name","dx11.compile_pass_end"},{"tier",1},{"rva",compile_end_rva},{"enabled",compile_end_hook_.enabled()},
+             {"timing",compile_end_timing_.snapshot()}}})},
         {"last_error",last_error_},{"render_coherent",false},{"capture",gpu_.command("status")},
         {"recent_bindings",entries}};
 }

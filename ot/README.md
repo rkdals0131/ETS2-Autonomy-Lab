@@ -1,8 +1,18 @@
-# ot 0.7.0 — 상주 로더·SDK·네 미러 GPU 캡처
+# ot 0.7.1 — 상주 로더·SDK·네 미러 GPU 캡처
 
 > **확정:** SDK/IPC·내부 자차 pose 대조. 0.5.0 mirror5 5초·50표본·10 Hz 기록. 0.6.1은 미러 0·1·2·5를 같은 Present 구간에서 3묶음 수집하고 네 hook의 패닉 복원을 확인. RenderDoc 4뷰 픽셀·상수·카메라 점군.
 > **미확정:** DLL 영상과 최종 카메라 상수 연결·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
 > **다음:** pass별 카메라 자세·투영·ray 상수를 영상에 연결합니다.
+
+### 0.7.1 — hook 본문 소요 시간
+
+`hooks`의 각 `timing`은 기능 DLL 수명 동안 누적한 QPC `samples`, `total_ticks`, `max_ticks`, `log2_tick_buckets`입니다. `qpc_frequency`로 나누면 초입니다. bucket 0은 0–1 tick, bucket k는 `[2^k, 2^(k+1))`입니다. 활성 중 조회는 근사 스냅샷이며 `panic` 후 진행 중 callback이 0이면 값이 고정됩니다. DLL을 교체하면 초기화됩니다.
+
+측정 구간은 허용된 callback의 본문입니다. 스레드가 기다리거나 선점된 시간도 포함하며 GPU 시간·순수 CPU 사용량은 아닙니다. detour의 레지스터 저장/복원, callback 진입 카운터, histogram 갱신 비용은 포함하지 않습니다. QPC 측정 자체의 작은 비용은 있습니다.
+
+PID 24748에서 기존 `ReadProcessMemory` 경로로 약 8초 관측했습니다. OM bind 21,124회 평균 2.901 µs, compile begin 47,286회 평균 50.224 µs, compile end 47,285회 평균 1.370 µs였습니다. compile begin 본문 누적 2,374.9 ms가 가장 컸습니다. pass 연결 오류·누락은 0이며 패닉 후 활성 hook·진행 callback은 0입니다. 원본은 `research/live/2026-10-08-render-probe/0.7.1-rpm-timing.json`입니다. 이 비교 조건은 메인 scale 1×1, 미러 scale 2×2, vsync 0, 비활성 FPS 제한 60입니다. 제한 없는 FPS 영향은 별도 측정이 필요합니다.
+
+상주 로더는 0.7.0을 유지한 채 ABI 1로 기능 DLL 0.7.1만 교체했습니다. 로더와 FFB 모듈은 유지됐고 기능 DLL의 실제 메모리 해제·재로딩을 확인했습니다.
 
 ### 0.7.0 상주 로더 — 실제 게임 전환·교체 확인
 
