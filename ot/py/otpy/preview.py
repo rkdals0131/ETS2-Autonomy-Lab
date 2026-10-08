@@ -204,6 +204,7 @@ def run_preview(config_file, hz=5.0, duration=None, snapshot=None):
                         bg="#111820", fg="white", highlightthickness=0, length=180)
     exposure.pack(side="right", padx=15)
     root.protocol("WM_DELETE_WINDOW", close)
+    root.bind("<F11>", lambda event: close())
     worker = threading.Thread(target=_capture, args=(config, hz, stop, messages, state, updates), name="ot-preview-capture")
 
     def tick():

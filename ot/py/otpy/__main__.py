@@ -20,9 +20,14 @@ def main():
     probe = sub.add_parser("render_probe", help="Inspect or switch the Tier 1 render-call observer")
     probe.add_argument("mode", choices=("on", "off", "status"), default="status", nargs="?")
     probe.add_argument("--vehicles", action="store_true", help="With on: read vehicle model metadata at mirror pass compilation")
+    probe.add_argument("--mode", dest="hook_mode", choices=("observe", "rig"), default="observe",
+                       help="observe: capture hooks; rig: only the four camera placement hooks")
+    probe.add_argument("--frames", action="store_true", help="With rig mode: also observe Present intervals")
     rig = sub.add_parser("camera_rig", help="Place up to six cameras; +X right, +Y up, -Z forward")
     rig.add_argument("mode", choices=("status", "apply", "off"), default="status", nargs="?")
     rig.add_argument("--config", help="JSON containing views with slot, basis, position, quaternion_wxyz and FOVs")
+    rig.add_argument("--rig-only", action="store_true", help="Apply without pass observation or GPU readback hooks")
+    rig.add_argument("--frames", action="store_true", help="With --rig-only: also observe Present intervals")
     preview = sub.add_parser("preview", help="Live camera mosaic; closes with Tier 0 restored (NumPy, Pillow, Tk)")
     preview.add_argument("--config", required=True)
     preview.add_argument("--hz", type=float, default=5.0)
@@ -104,19 +109,27 @@ def main():
             result = client.tier(args.value)
         elif args.command == "render_probe":
             options = {} if args.mode == "status" else {"enabled": args.mode == "on"}
+            if args.mode == "on":
+                options.update(mode=args.hook_mode, frame_timing=args.frames)
+            elif args.hook_mode != "observe" or args.frames:
+                parser.error("--mode and --frames require render_probe on")
             if args.vehicles:
                 if args.mode != "on":
                     parser.error("--vehicles requires render_probe on")
                 options["vehicle_metadata"] = True
             result = client.request("render_probe", **options)
         elif args.command == "camera_rig":
+            if (args.rig_only or args.frames) and args.mode != "apply":
+                parser.error("--rig-only and --frames require camera_rig apply")
+            if args.frames and not args.rig_only:
+                parser.error("--frames requires --rig-only; capture mode already observes frames")
             if args.mode == "apply":
                 if not args.config:
                     parser.error("camera_rig apply requires --config")
                 with open(args.config, encoding="utf-8") as source:
                     settings = json.load(source)
                 client.tier(1)
-                client.request("render_probe", enabled=True)
+                client.request("render_probe", enabled=True, mode="rig" if args.rig_only else "observe", frame_timing=args.frames)
                 try:
                     result = client.request("camera_rig", **settings)
                 except Exception:

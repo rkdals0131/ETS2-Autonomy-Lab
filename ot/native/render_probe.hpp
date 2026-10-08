@@ -10,7 +10,7 @@ namespace ot {
 class RenderProbe {
 public:
     RenderProbe()=default;
-    void enable(bool vehicle_metadata=false);
+    void enable(bool vehicle_metadata=false,const std::string& mode="observe",bool frame_timing=false);
     void disable() noexcept;
     // On failure the caller must retain this object and its module reference.
     // Code may still be returning through the hook; destruction would be unsafe.
@@ -54,12 +54,14 @@ private:
     void present(HRESULT result) noexcept;
     void observe(const safetyhook::Context& context) noexcept;
     bool quiescent() noexcept;
+    bool disable_locked(bool clear_rig);
     std::mutex control_;
     SRWLOCK records_lock_=SRWLOCK_INIT;
     std::array<Record,128> records_{};
     uint64_t records_written_=0;
     std::atomic<uint64_t> calls_{0},missed_{0},sdk_frame_{0};
     std::atomic<bool> accepting_{false};
+    std::atomic<bool> observing_{false};
     std::atomic<bool> vehicle_metadata_{false};
     safetyhook::MidHook hook_;
     safetyhook::MidHook present_hook_;
@@ -72,7 +74,7 @@ private:
             &rig_select_hook_,&rig_begin_hook_,&rig_end_hook_,&rig_dimensions_hook_};
     }
     PassCommands pass_commands_;
-    struct PresentRecord { uint64_t id,qpc,sdk_frame;HRESULT result;DWORD thread; };
+    struct PresentRecord { uint64_t id,qpc,sdk_frame;HRESULT result;DWORD thread;bool game_foreground; };
     SRWLOCK frames_lock_=SRWLOCK_INIT;
     std::array<PresentRecord,600> frames_{};
     uint64_t frames_written_=0;
@@ -82,6 +84,7 @@ private:
     HMODULE module_reference_{};
     uintptr_t module_begin_{},module_end_{};
     std::string last_error_;
+    std::string mode_="off";
     GpuCapture gpu_{"mirror5"},gpu0_{"mirror0"},gpu1_{"mirror1"},gpu2_{"mirror2"},gpu3_{"mirror3"},gpu4_{"mirror4"};
     uint64_t bundle_frame_=0;
     uint32_t bundle_mask_=0x27;

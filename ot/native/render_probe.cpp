@@ -94,11 +94,43 @@ RenderProbe::~RenderProbe() {
     for(auto* hook:hookset()) hook->reset();
     if(module_reference_) FreeLibrary(module_reference_);
 }
-void RenderProbe::enable(bool vehicle_metadata) {
+void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool frame_timing) {
     std::lock_guard lock(control_);
-    if(hook_.enabled()) {vehicle_metadata_=vehicle_metadata;return;}
+    if(mode!="observe" && mode!="rig") throw std::runtime_error("Render mode must be observe or rig");
+    if(mode=="rig" && vehicle_metadata) throw std::runtime_error("Vehicle metadata requires observe mode");
+    const auto selected=[&](const safetyhook::MidHook* hook) {
+        if(hook==&rig_select_hook_ || hook==&rig_begin_hook_ || hook==&rig_end_hook_ || hook==&rig_dimensions_hook_) return true;
+        if(mode=="observe") return hook!=&draw_batch_hook_ || vehicle_metadata;
+        return frame_timing && hook==&present_hook_;
+    };
+    const auto all=hookset();
+    if(accepting_ && std::all_of(all.begin(),all.end(),[&](auto* hook){return hook->enabled()==selected(hook);})) return;
     if(GetModuleHandleW(L"renderdoc.dll"))
         throw std::runtime_error("RenderDoc is loaded; restart ETS2 normally before enabling ot render hooks");
+    if(accepting_ && rig_select_hook_.enabled() && rig_begin_hook_.enabled() &&
+       rig_end_hook_.enabled() && rig_dimensions_hook_.enabled()) {
+        // Keep camera submission continuous while changing observation modes.
+        // Dropping the selection hook even briefly can omit sensor-only views
+        // from the engine's already queued render work.
+        observing_=false;
+        for(auto* hook:{&hook_,&present_hook_,&compile_begin_hook_,&compile_end_hook_,&draw_batch_hook_}) {
+            if(hook->enabled() && !hook->disable()) {
+                disable_locked(true);
+                throw std::runtime_error("Cannot disable previous observation hooks");
+            }
+        }
+        const auto deadline=GetTickCount64()+2000;
+        while(callbacks.load() && GetTickCount64()<deadline) Sleep(1);
+        if(callbacks.load()) {
+            disable_locked(true);
+            throw std::runtime_error("Previous observation callbacks did not drain");
+        }
+        for(auto* camera:cameras()) camera->cancel();
+        bundle_frame_=0;published_bundle_=nullptr;
+    } else if(!disable_locked(false)) {
+        rig_.clear();
+        throw std::runtime_error("Previous render mode did not drain: "+last_error_);
+    }
     if(!hook_) {
         if(observer.load() && observer.load()!=this)
             throw std::runtime_error("A previous render observer is retained; restart ETS2");
@@ -178,42 +210,53 @@ void RenderProbe::enable(bool vehicle_metadata) {
     frame_boundary_seen_=false;
     AcquireSRWLockExclusive(&frames_lock_);frames_written_=0;ReleaseSRWLockExclusive(&frames_lock_);
     missed_frames_=0;
+    AcquireSRWLockExclusive(&records_lock_);records_written_=0;ReleaseSRWLockExclusive(&records_lock_);
     pass_commands_.clear();
     vehicle_metadata_=vehicle_metadata;
-    accepting_=true;
     for(auto* hook:hookset()) {
+        if(!selected(hook) || hook->enabled()) continue;
         if(hook->enable()) continue;
-        accepting_=false;
-        vehicle_metadata_=false;
-        for(auto* rollback:hookset())
-            if(rollback->enabled() && !rollback->disable()) last_error_="Render hook rollback failed";
+        disable_locked(true);
         throw std::runtime_error("Render observer enable failed");
     }
+    // In particular, do not redirect a camera before the matching end hook
+    // is installed. Mode switches retain the rig configuration while drained.
+    mode_=mode;
+    observing_=true;
+    accepting_=true;
     last_error_.clear();
-    log("Render probe enabled at OMSetRenderTargets argument preparation");
+    log("Render mode enabled: "+mode+(frame_timing?" with frame timing":""));
 }
 void RenderProbe::disable() noexcept {
     try {
         std::lock_guard lock(control_);
-        accepting_=false;
-        rig_.clear();
-        vehicle_metadata_=false;
-        frame_boundary_seen_=false;
-        bool changed=false;
-        for(auto* hook:hookset()) if(hook!=&rig_end_hook_ && hook->enabled()) {
-            changed=true;
-            if(!hook->disable()) last_error_="Render observer disable failed";
-        }
-        if(changed) log("Render probe disable requested for all hook sites");
-        // The private source copy lives until the engine has copied its pose
-        // and frustum. Keep the end callback until these submissions finish.
-        const auto deadline=GetTickCount64()+2000;
-        while((callbacks.load() || rig_.in_flight()) && GetTickCount64()<deadline) Sleep(1);
-        if(!callbacks.load() && !rig_.in_flight()) {
-            if(rig_end_hook_.enabled() && !rig_end_hook_.disable()) last_error_="Camera submission end hook disable failed";
-        } else last_error_="Camera submission still draining; payload must stay loaded";
-        for(auto* camera:cameras()) camera->cancel();
+        disable_locked(true);
     } catch(...) { accepting_=false; }
+}
+bool RenderProbe::disable_locked(bool clear_rig) {
+    accepting_=false;
+    observing_=false;
+    if(clear_rig) rig_.clear();
+    vehicle_metadata_=false;
+    frame_boundary_seen_=false;
+    mode_="off";
+    last_error_.clear();
+    bool changed=false;
+    for(auto* hook:hookset()) if(hook!=&rig_end_hook_ && hook->enabled()) {
+        changed=true;
+        if(!hook->disable()) last_error_="Render observer disable failed";
+    }
+    if(changed) log("Render probe disable requested for all hook sites");
+    // The private source copy lives until the engine has copied its pose
+    // and frustum. Keep the end callback until these submissions finish.
+    const auto deadline=GetTickCount64()+2000;
+    while((callbacks.load() || rig_.in_flight()) && GetTickCount64()<deadline) Sleep(1);
+    if(!callbacks.load() && !rig_.in_flight()) {
+        if(rig_end_hook_.enabled() && !rig_end_hook_.disable()) last_error_="Camera submission end hook disable failed";
+    } else last_error_="Camera submission still draining; payload must stay loaded";
+    for(auto* camera:cameras()) camera->cancel();
+    bundle_frame_=0;published_bundle_=nullptr;
+    return last_error_.empty();
 }
 bool RenderProbe::quiescent() noexcept {
     if(callbacks.load() || rig_.in_flight()) return false;
@@ -260,7 +303,7 @@ bool RenderProbe::close() noexcept {
 }
 void RenderProbe::callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load()) {
+    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load()) {
         const auto start=qpc_now();
         self->observe(context);
         self->bind_timing_.add(qpc_now()-start);
@@ -269,7 +312,7 @@ void RenderProbe::callback(safetyhook::Context& context) noexcept {
 }
 void RenderProbe::present_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load()) {
+    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load()) {
         const auto start=qpc_now();
         self->present(static_cast<HRESULT>(context.rax));
         self->present_timing_.add(qpc_now()-start);
@@ -278,7 +321,7 @@ void RenderProbe::present_callback(safetyhook::Context& context) noexcept {
 }
 void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load()) {
+    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load()) {
         const auto start=qpc_now();
         uintptr_t input{},output{};uint16_t id{};
         if(read_memory(context.r10,input) && read_memory(context.rsp+0x58,output) &&
@@ -290,7 +333,7 @@ void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept 
 }
 void RenderProbe::compile_end_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load()) {
+    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load()) {
         const auto start=qpc_now();
         self->pass_commands_.end(context.rbp);
         self->compile_end_timing_.add(qpc_now()-start);
@@ -328,7 +371,7 @@ json RenderProbe::camera_rig(const json& request) {
 }
 void RenderProbe::draw_batch_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load() && self->vehicle_metadata_.load()) {
+    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load() && self->vehicle_metadata_.load()) {
         const auto start=qpc_now();
         uintptr_t work{},input{},items{};
         if(read_memory(context.rbp+0x5F,work) && read_memory(work+0xF0,input) &&
@@ -354,13 +397,17 @@ json RenderProbe::Timing::snapshot() const {
         {"max_ticks",maximum.load(std::memory_order_relaxed)},{"log2_tick_buckets",histogram}};
 }
 void RenderProbe::present(HRESULT result) noexcept {
-    PresentRecord record{presents_.fetch_add(1)+1,qpc_now(),sdk_frame_.load(),result,GetCurrentThreadId()};
+    DWORD foreground_pid{};
+    GetWindowThreadProcessId(GetForegroundWindow(),&foreground_pid);
+    PresentRecord record{presents_.fetch_add(1)+1,qpc_now(),sdk_frame_.load(),result,GetCurrentThreadId(),
+                         foreground_pid==GetCurrentProcessId()};
     frame_boundary_seen_=true;
     if(!TryAcquireSRWLockExclusive(&frames_lock_)) {missed_frames_.fetch_add(1);return;}
     frames_[frames_written_%frames_.size()]=record;++frames_written_;
     ReleaseSRWLockExclusive(&frames_lock_);
 }
 json RenderProbe::frames(uint64_t after_id) {
+    std::lock_guard lock(control_);
     std::array<PresentRecord,600> copy{};uint64_t written{};
     AcquireSRWLockShared(&frames_lock_);copy=frames_;written=frames_written_;ReleaseSRWLockShared(&frames_lock_);
     json records=json::array();
@@ -368,9 +415,9 @@ json RenderProbe::frames(uint64_t after_id) {
         const auto& record=copy[i%copy.size()];
         if(record.id<=after_id) continue;
         records.push_back({{"present_id",record.id},{"qpc",record.qpc},{"hresult",record.result},
-            {"sdk_frame_hint",record.sdk_frame},{"thread_id",record.thread}});
+            {"sdk_frame_hint",record.sdk_frame},{"thread_id",record.thread},{"game_foreground",record.game_foreground}});
     }
-    return {{"observation_session_qpc",observation_session_},{"qpc_frequency",qpc_frequency()},
+    return {{"enabled",present_hook_.enabled()},{"observation_session_qpc",observation_session_},{"qpc_frequency",qpc_frequency()},
         {"boundary_observed",frame_boundary_seen_.load()},{"present_calls",presents_.load()},
         {"missed_records",missed_frames_.load()},{"records",records}};
 }
@@ -404,7 +451,7 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
 }
 json RenderProbe::capture(const std::string& action) {
     std::lock_guard lock(control_);
-    if(action=="arm" && !hook_.enabled()) throw std::runtime_error("Enable the render probe before arming capture");
+    if(action=="arm" && !hook_.enabled()) throw std::runtime_error("Capture requires render_probe observe mode");
     if(action=="arm") {
         for(auto* camera:cameras()) {
             const auto phase=camera->command("status",0,false).at("phase");
@@ -417,7 +464,7 @@ json RenderProbe::capture(const std::string& action) {
 json RenderProbe::capture_views(const std::string& action,Transport* publisher,bool metadata) {
     std::lock_guard lock(control_);
     if(action=="arm") {
-        if(!hook_.enabled()) throw std::runtime_error("Enable the render probe before arming capture");
+        if(!hook_.enabled()) throw std::runtime_error("Capture requires render_probe observe mode");
         for(auto* camera:cameras()) {
             const auto phase=camera->command("status",0,false).at("phase");
             if(phase=="armed" || phase=="waiting_gpu") throw std::runtime_error("A camera capture is already pending");
@@ -495,6 +542,7 @@ json RenderProbe::status() {
     }
     const auto all=hookset();
     return {{"active",std::count_if(all.begin(),all.end(),[](auto* h){return h->enabled();})},
+        {"mode",mode_},{"frame_timing_enabled",present_hook_.enabled()},{"capture_enabled",hook_.enabled()},
         {"vehicle_metadata_enabled",vehicle_metadata_.load()},
         {"camera_rig",rig_.status()},
         {"callbacks_in_flight",callbacks.load()},

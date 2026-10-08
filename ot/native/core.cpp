@@ -249,7 +249,13 @@ json Runtime::command(const json& request) {
             if(request.at("enabled").get<bool>()) {
                 if(tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_)
                     throw std::runtime_error("Render probe requires Tier 1, matching EXE, singleplayer_research, allow_tier1 and allow_render_probe");
-                render_probe_->enable(request.value("vehicle_metadata",false));
+                try {
+                    render_probe_->enable(request.value("vehicle_metadata",false),
+                        request.value("mode",std::string("observe")),request.value("frame_timing",false));
+                } catch(...) {
+                    if(tier_==2 && !render_probe_->camera_rig(json::object()).at("enabled").get<bool>()) tier_=1;
+                    throw;
+                }
             } else {render_probe_->disable();if(tier_==2) tier_=1;}
         }
         return render_probe_->status();

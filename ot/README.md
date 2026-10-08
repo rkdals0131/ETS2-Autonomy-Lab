@@ -1,9 +1,10 @@
-# ot 0.12.1 — 화면을 보며 조절하는 6카메라 리그
+# ot 0.13.0 — 자유 배치 리그와 선택적 영상 관측
 
 > **확정:** 기존 미러 슬롯 0–5를 임의 위치·회전·FOV의 센서로 전용했습니다. 서로 다른 샤시 상대 위치의 여섯 영상을 같은 Present 구간 27에서 수집했습니다. 월드 고정 카메라도 동작합니다.
 > **0.11.0:** 여섯 RGB·깊이 버퍼를 각각 640×360으로 맞추고 공유 메모리로 실시간 표시했습니다. 약 10.3초에 완전한 6뷰 묶음 45개, 누락 0개였습니다.
 > **0.12.0:** 미리보기 창에서 XYZ·yaw/pitch/roll·FOV를 바꾸고 배치를 JSON으로 저장합니다. 실제 편집 2회를 포함한 20.3초 실행에서 6뷰 묶음 94개·누락 0개였습니다.
 > **0.12.1:** 미러 출력이 없는 pass의 문자열·JSON 생성을 생략합니다. 같은 코드 경로의 짧은 관측에서 compile-begin 평균 15.29 → 10.40µs, 이후 6뷰 12묶음 모두 완료했습니다. 게임 전경 FPS 비교 결과는 아직 없습니다.
+> **0.13.0:** 카메라 배치만 유지하는 4-hook 모드를 추가했습니다. 배치를 유지하면서 영상 관측을 켜고 끌 수 있으며, 전환 직후 6뷰 5묶음 모두 완료했습니다. Present 기록에 실제 게임 전경 여부도 포함합니다.
 > **다음:** 주행·고개 조작 중 리그 유지와 메인 카메라 기준 가시성·LOD의 누락 해결. 장시간 주행과 성능 비교는 남아 있습니다.
 
 ### 화면을 보며 카메라 배치 조절
@@ -39,7 +40,7 @@
 .\ot\ot.cmd preview --config .\ot\presets\surround-six.json --hz 5
 ```
 
-창에서 여섯 영상을 함께 보고 공통 노출(EV)을 바꾸거나 PNG로 저장할 수 있습니다. 창을 닫으면 수집을 멈추고 `panic`으로 기본 미러·Tier 0으로 돌아갑니다. F11도 리그를 끕니다. 미리보기용 임시 이미지 파일은 만들지 않으며, 원시 RGB·깊이·재질 묶음은 `OT_Bundles`에서 읽습니다. 별도 창이므로 게임 화면을 가릴 수 있습니다.
+창에서 여섯 영상을 함께 보고 공통 노출(EV)을 바꾸거나 PNG로 저장할 수 있습니다. 창을 닫으면 수집을 멈추고 `panic`으로 기본 미러·Tier 0으로 돌아갑니다. 게임이 전경이면 DLL의 F11이, 미리보기에 포커스가 있으면 창의 F11 종료 callback이 동작합니다. 다른 앱에 포커스가 있을 때의 전역 단축키는 아니며 물리 키 시험은 수행하지 않았습니다. 미리보기용 임시 이미지 파일은 만들지 않으며, 원시 RGB·깊이·재질 묶음은 `OT_Bundles`에서 읽습니다. 별도 창이므로 게임 화면을 가리거나 비활성 FPS 제한에 영향을 줄 수 있습니다.
 
 [surround-preview.json](presets/surround-preview.json)은 6방향 샤시 리그에 16:9 FOV와 `base_resolution: [320, 180]`을 지정합니다. 이 값은 **게임의 미러 렌더 배율을 적용하기 전 크기**입니다. 연구 PC의 미러 배율 2×2에서 실제 RGB·깊이 버퍼는 모두 640×360이었습니다. 메인 화면 스케일링과 별개이며 게임 설정은 변경하지 않습니다. 실제 크기는 각 영상 제목에 표시합니다.
 
@@ -69,7 +70,32 @@ NPZ에는 `xyz_world`, `rgb_linear`, `camera_index`, `camera_origins_world`, `ob
 
 0.12.1은 `pass+0xC0` 대신 연결된 **출력 이미지 namespace**를 먼저 읽습니다. 실제 미러 geometry pass의 namespace는 `deferred`, color pass는 `quad_drawer_t*`여서 pass namespace를 `mirror`로 제한하면 필요한 영상도 놓칩니다. 미러 출력이 없는 명령 구간은 이름 없이 계속 기록하여 재사용된 명령 buffer의 범위를 구별합니다.
 
-전·후 약 4초 관측에서 compile-begin 평균은 15.290 → 10.396µs, 초당 callback 본문 시간은 123.39 → 103.14ms였습니다. 호출 빈도도 8,070 → 9,921회/s로 달라졌으므로 평균 감소 약 32%를 게임 FPS 증가율로 해석하지 않습니다. 같은 세션의 전경 조건은 확인되지 않았습니다. 후속 12묶음의 여섯 카메라가 모두 ready였으며 원본은 로컬 `compile-before-filter.json`, `compile-after-filter.json`, `filtered-capture-results.json`입니다. 리그 전용 hook 모드 분리는 다음 작업입니다.
+전·후 약 4초 관측에서 compile-begin 평균은 15.290 → 10.396µs, 초당 callback 본문 시간은 123.39 → 103.14ms였습니다. 호출 빈도도 8,070 → 9,921회/s로 달라졌으므로 평균 감소 약 32%를 게임 FPS 증가율로 해석하지 않습니다. 같은 세션의 전경 조건은 확인되지 않았습니다. 후속 12묶음의 여섯 카메라가 모두 ready였으며 원본은 로컬 `compile-before-filter.json`, `compile-after-filter.json`, `filtered-capture-results.json`입니다.
+
+### 리그만 유지하고 필요할 때 수집
+
+```powershell
+# 카메라 배치 4개 hook만 활성화
+.\ot\ot.cmd camera_rig apply --config .\ot\presets\surround-preview.json --rig-only
+# 배치를 유지하며 Present 계측 추가: 5개
+.\ot\ot.cmd render_probe on --mode rig --frames
+.\ot\ot.cmd frames
+# 배치를 유지하며 영상 수집 모드: 8개
+.\ot\ot.cmd render_probe on
+.\ot\ot.cmd capture_mirrors arm
+.\ot\ot.cmd capture_mirrors status
+# 차량 draw 메타데이터도 필요하면 9개
+.\ot\ot.cmd render_probe on --vehicles
+# 관측과 진행 중 수집을 멈추고 배치만 유지
+.\ot\ot.cmd render_probe on --mode rig
+.\ot\ot.cmd panic
+```
+
+`rig` 모드는 카메라 선택·제출 begin/end·해상도 hook만 유지합니다. SDK 및 기존 Tier 1 내부 상태 읽기는 계속됩니다. 캡처 요청은 `observe`에서만 받습니다. 모드 변경 시 진행 중 캡처는 취소하지만 네 카메라 hook과 배치는 계속 유지합니다. 같은 모드·옵션을 다시 요청하면 진행 중 캡처도 유지합니다. 기본 모드는 기존 클라이언트와 호환되는 `observe`입니다.
+
+`frames.enabled`는 Present hook 상태, 각 record의 `game_foreground`는 해당 Present 시점의 전경 창이 게임 프로세스 소유인지 나타냅니다. 일시정지 여부나 GPU 사용률을 대신하는 값은 아닙니다. 리그만 켜고 계측하지 않으면 프레임 기록도 생성하지 않습니다.
+
+실제 게임에서 4 → 5 → 8 → 9 → 4 전환, 모든 슬롯의 갱신, 관측 callback 정지, 전환 직후 6뷰 5묶음 완료, 진행 중 캡처 취소 및 활성 리그 상태의 메타로더 unload/load를 확인했습니다. 마지막은 Tier 0·hook 0·리그 꺼짐입니다. 계측 표본 30개는 모두 백그라운드였으므로 전경 FPS 비교는 남아 있습니다. 원본은 로컬 `research/live/2026-10-08-camera-rig/rig-only-transition.json`입니다.
 
 ### 자유 배치 리그 사용
 
@@ -86,7 +112,7 @@ NPZ에는 `xyz_world`, `rgb_linear`, `camera_index`, `camera_origins_world`, `ob
 .\ot\ot.cmd panic
 ```
 
-`camera_rig apply`는 probe와 Tier 2 리그를 켭니다. `camera_rig off`는 기본 미러로 복귀하고 관측 hook은 유지합니다. `panic` 또는 F11은 리그와 아홉 hook을 모두 끕니다. `capture_mirrors`는 arm 때 설정된 리그 슬롯을 묶으며, 리그가 없으면 기존 0·1·2·5를 요청합니다.
+`camera_rig apply`는 probe와 Tier 2 리그를 켭니다. `camera_rig off`는 기본 미러로 복귀하고 선택된 render hook은 유지합니다. `panic` 또는 게임 전경의 F11은 리그와 활성 hook을 모두 끕니다. `capture_mirrors`는 arm 때 설정된 리그 슬롯을 묶으며, 리그가 없으면 기존 0·1·2·5를 요청합니다.
 
 [surround-six.json](presets/surround-six.json)의 각 view에서 다음을 바꿉니다.
 
