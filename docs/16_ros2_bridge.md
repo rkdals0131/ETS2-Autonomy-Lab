@@ -35,5 +35,28 @@ Local raw results: `research/live/2026-10-09-ros2/baseline-original/` (not in Gi
 
 ## Implementation status
 
-Foreground baseline complete. Bridge, ROS decoding, MCAP replay, GPU selective
-readback and ego-render correction remain to be implemented and verified.
+One-camera ROS transport, actual Jazzy CDR decoding and short MCAP recording work.
+249 camera samples in 24.98 seconds had matching RGB/depth/preview/info/frame/TF
+counts and stamps. The later 65-second receive-only run delivered 645 of each
+sensor message with no relay queue drops. Both Fast DDS participants mapped SHM
+segments; the 128 MiB XML profile was applied.
+
+Immediately after that connection, a 60-second foreground measurement gave
+34.42 FPS and 28.04 / 36.02 / 40.49 ms frame p50 / p95 / p99. Game CPU averaged
+155.1% and the native relay 24.0% (one logical core = 100%). Whole-system CPU was
+25.8%. All 2060 Present samples were foreground. This uses **one** rig camera and
+a ROS consumer without recording, so it is not directly comparable to the earlier
+four-camera recorder. Raw frames/CPU samples: `perf-one.json` in the local run directory.
+
+The GPU metric-depth path was compared against the existing Python reconstruction
+of the **same frame's original DSV**: 780,858 valid pixels, zero validity mismatches,
+absolute depth error median 0.00000191 m, p95 0.00001144 m, maximum 0.00006104 m.
+
+Core 0.19 adds per-camera color/depth/preview/metadata selection at bundle boundaries.
+Preview downsampling runs on the GPU. A live preview → RGB-D → no subscriptions →
+depth-only → no subscriptions sequence completed without capture errors; the arm
+counter stayed at 82 and later 122 during the unsubscribed intervals. Killing only
+the owned relay let the five-second lease expire and restored Tier 0 / zero hooks.
+
+GPU LiDAR, vehicle GT publication, complete cabin/base TF, MCAP replay/pause,
+reconnection, full-sensor performance and ego-render correction remain open.

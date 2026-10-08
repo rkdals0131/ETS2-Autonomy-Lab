@@ -561,6 +561,9 @@ json RenderProbe::stream(const json& request,Transport& publisher,const CaptureO
         auto mask=rig_.mask();if(!mask) mask=0x27;
         stream=std::make_shared<CaptureStream>(mask,options,hz,duration,presents_,observation_session_,publisher);
         stream_.store(stream);stream->start();
+    } else if(action=="update") {
+        if(!stream || !stream->running()) throw std::runtime_error("No capture stream to update");
+        stream->update(options);
     } else if(action=="stop") {
         if(stream) stream->stop();
     } else if(action!="status") throw std::runtime_error("Unknown capture stream action");

@@ -4,7 +4,7 @@ The first connection publishes captured RGB8, metric optical-depth 32FC1,
 CameraInfo, JPEG previews, render-camera TF, frame correspondence, `/clock`, SDK
 state and observed ego pose. Windows uses Fast-CDR 2.2.5 with explicit XCDRv1;
 Linux uses Jazzy GenericPublisher and the XML SHM transport profile. This is an
-incremental implementation: GPU subscription selection, LiDAR, vehicle GT,
+incremental implementation: LiDAR, vehicle GT,
 full base_link/cabin TF and automatic reconnection are still being added.
 
 ## Build
@@ -48,8 +48,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args --params-file "$REPO/bridge/
 
 Connect Foxglove to `ws://<WSL-eth0-IP>:8765`. The whitelist exposes previews,
 point clouds, GT, TF and state; full-resolution RGB/depth stays on ROS topics.
-The preview currently scales on the Windows CPU; GPU-only preview readback is
-pending. Sensor output is subscription-filtered, but GPU capture is not yet.
+Preview scales on the GPU. Subscriptions select full color, metric depth, preview
+and metadata readback separately; no sensor subscriptions means no new GPU captures.
+Changes apply at bundle boundaries and do not free in-flight resources.
 
 ## Record and replay
 

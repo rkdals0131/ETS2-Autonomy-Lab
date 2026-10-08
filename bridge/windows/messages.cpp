@@ -131,27 +131,29 @@ Packet sensor_messages(std::span<const uint8_t> input,const std::string& session
         const auto& vp=meta.at("geometry_gpu").at("viewports").at(0);
         const auto rotation=matrix(camera.at("camera_rotation_row_major"));const auto origin=camera.at("camera_world_xyz").get<V>();
         transforms.push_back({frame,mul(enu,origin),quaternion(mul(mul(enu,transpose(rotation)),optical))});
-        uint32_t width=0,height=0;
+        uint32_t width=meta.at("sensor_dimensions").at(0),height=meta.at("sensor_dimensions").at(1);
         for(const auto& desc:meta.at("images")) {
             const std::string file=desc.at("file");
-            const bool color=file==mirror+"_color_ldr.bin",depth=file==mirror+"_depth_f32.bin";
-            if(!color && !depth) continue;
-            width=desc.at("width");height=desc.at("height");const auto data=files.at(file);
+            const bool color=file==mirror+"_color_ldr.bin",depth=file==mirror+"_depth_f32.bin",preview=file==mirror+"_preview_ldr.bin";
+            if(!color && !depth && !preview) continue;
+            const uint32_t width=desc.at("width"),height=desc.at("height");const auto data=files.at(file);
             if(!width || !height || data.size()!=static_cast<size_t>(width)*height*4 || desc.at("row_bytes")!=width*4)
                 throw std::runtime_error("Invalid packed image dimensions");
             if(depth && desc.at("encoding")!="optical_depth_m_nan_invalid") throw std::runtime_error("ROS depth requires metric GPU output");
             const auto topic=base+(depth?"/depth/image_raw":"/image_raw");
-            if(demand.contains(topic)) {
+            if(!preview && demand.contains(topic)) {
                 Bytes rgb;if(color) {rgb.resize(static_cast<size_t>(width)*height*3);for(size_t i=0,j=0;i<data.size();i+=4,j+=3) std::memcpy(rgb.data()+j,data.data()+i,3);}
                 auto pixels=color?std::span<const uint8_t>(rgb):data;
                 add_message(packet,topic,cdr(pixels.size()+512,[&](Cdr& c){header(c,us,frame);c<<height<<width<<std::string(color?"rgb8":"32FC1")<<uint8_t{0}<<uint32_t(width*(color?3:4))<<uint32_t(pixels.size());c.serialize_array(pixels.data(),pixels.size());}));
             }
-            if(color && demand.contains(base+"/preview/image/compressed")) {
-                auto bytes=jpeg(data,width,height,width/2,height/2);
+            if(preview && demand.contains(base+"/preview/image/compressed")) {
+                auto bytes=jpeg(data,width,height,width,height);
                 add_message(packet,base+"/preview/image/compressed",cdr(bytes.size()+512,[&](Cdr& c){header(c,us,frame);c<<std::string("rgb8; jpeg compressed bgr8")<<uint32_t(bytes.size());c.serialize_array(bytes.data(),bytes.size());}));
-                add_message(packet,base+"/preview/camera_info",camera_info(us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5));
+                add_message(packet,base+"/preview/camera_info",camera_info(us,frame,width,height,camera.at("projection_row_major"),vp,.5));
             }
         }
+        if(demand.contains(base+"/preview/camera_info") && !demand.contains(base+"/preview/image/compressed"))
+            add_message(packet,base+"/preview/camera_info",camera_info(us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5));
         if(width && (demand.contains(base+"/camera_info") || demand.contains(base+"/image_raw") || demand.contains(base+"/depth/image_raw")))
             add_message(packet,base+"/camera_info",camera_info(us,frame,width,height,camera.at("projection_row_major"),vp,1));
     }

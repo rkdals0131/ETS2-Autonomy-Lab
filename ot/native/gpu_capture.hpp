@@ -9,8 +9,15 @@ namespace ot {
 struct CaptureOptions {
     std::string format="raw";
     float color_gain=1;
-    bool raw() const {return format=="raw" || format=="raw+rgbd8";}
-    bool metric() const {return format=="ros";}
+    bool selective=false;
+    std::array<uint8_t,6> outputs{3,3,3,3,3,3}; // color=1, depth=2, preview=4, lidar=8, metadata=16
+    uint8_t products=3;
+    bool color() const {return products&1;}
+    bool depth() const {return products&2;}
+    bool preview() const {return products&4;}
+    bool lidar() const {return products&8;}
+    bool raw() const {return format=="raw" || format=="raw+rgbd8" || format=="raw+ros";}
+    bool metric() const {return format=="ros" || format=="raw+ros";}
     bool packed() const {return format!="raw";}
 };
 // One requested camera sample. All context calls run on the game's render

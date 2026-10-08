@@ -300,11 +300,25 @@ json Runtime::command(const json& request) {
         if((action=="arm" || action=="start") && (tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_))
             throw std::runtime_error("Mirror5 capture requires the permitted Tier 1 render probe");
         CaptureOptions options;
-        if(action=="arm" || action=="start") {
+        if(action=="arm" || action=="start" || action=="update") {
             options.format=request.value("format",std::string(cmd=="stream"?"rgbd8":"raw"));
             options.color_gain=request.value("color_gain",1.0f);
-            if(options.format!="raw" && options.format!="rgbd8" && options.format!="raw+rgbd8" && options.format!="ros")
-                throw std::runtime_error("Capture format must be raw, rgbd8, raw+rgbd8 or ros");
+            if(request.contains("outputs")) {
+                if(!options.metric()) throw std::runtime_error("Output selection requires ROS capture format");
+                options.selective=true;options.outputs.fill(0);
+                for(const auto& entry:request.at("outputs").items()) {
+                    const auto& name=entry.key();
+                    if(name.size()!=7 || !name.starts_with("mirror") || name.back()<'0' || name.back()>'5')
+                        throw std::runtime_error("Invalid output camera");
+                    for(const auto& output:entry.value()) {
+                        uint8_t flag=output=="color"?1:output=="depth"?2:output=="preview"?4:output=="lidar"?8:output=="metadata"?16:0;
+                        if(!flag) throw std::runtime_error("Unknown sensor output");
+                        options.outputs[name.back()-'0']|=flag;
+                    }
+                }
+            }
+            if(options.format!="raw" && options.format!="rgbd8" && options.format!="raw+rgbd8" && options.format!="ros" && options.format!="raw+ros")
+                throw std::runtime_error("Capture format must be raw, rgbd8, raw+rgbd8 ros or raw+ros");
             if(!std::isfinite(options.color_gain) || options.color_gain<=0)
                 throw std::runtime_error("Color gain must be finite and positive");
         }

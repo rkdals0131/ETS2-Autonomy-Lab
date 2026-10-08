@@ -11,6 +11,7 @@ public:
     ~CaptureStream();
     void start();
     void stop() noexcept;
+    void update(const CaptureOptions& options) {pending_options_.store(std::make_shared<const CaptureOptions>(options));}
     bool running() const noexcept {return running_.load();}
     json status();
     void observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
@@ -19,12 +20,15 @@ private:
     struct Slot {
         std::atomic<bool> active{false};
         std::atomic<uint64_t> frame{0};
+        std::atomic<uint32_t> mask{0};
         std::vector<std::unique_ptr<GpuCapture>> cameras;
     };
     void run() noexcept;
     void finish_slot(Slot& slot);
     std::array<Slot,3> slots_;
     CaptureOptions options_;
+    std::atomic<std::shared_ptr<const CaptureOptions>> pending_options_;
+    std::vector<unsigned> camera_indices_;
     json names_=json::array();
     double hz_,duration_;
     const std::atomic<uint64_t>& presents_;

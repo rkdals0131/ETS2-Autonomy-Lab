@@ -210,15 +210,15 @@ void GpuCapture::geometry_constants(ID3D11DeviceContext* context,uint64_t bindin
                 {"format",layout},{"source_dxgi_format",static_cast<unsigned>(desc.Format)},
                 {"resource",reinterpret_cast<uintptr_t>(depth.source.Get())}};
         }
-        if(options_.packed()) {
+        if(options_.packed() && (options_.depth() || options_.lidar())) {
             if(viewport_count!=1 || !(viewports[0].Width>0 && viewports[0].Height>0 && viewports[0].MaxDepth>viewports[0].MinDepth))
                 throw std::runtime_error("RGB-D packing requires one valid geometry viewport");
-            packed_.depth(context1.Get(),depth.source.Get(),images_[0].source.Get(),images_[1].source.Get(),viewports[0],camera_,options_.metric()?&geometry_pass_.at("camera_at_compile").at("projection_row_major"):nullptr);
+            packed_.depth(context1.Get(),depth.source.Get(),images_[0].source.Get(),images_[1].source.Get(),viewports[0],camera_,options_.metric()?&geometry_pass_.at("camera_at_compile").at("projection_row_major"):nullptr,options_.depth());
             geometry_gpu_["packed_depth_texture"]=packed_.images[0].description;
         }
     }
     if(options_.packed() && !dsv) throw std::runtime_error("RGB-D packing requires a geometry depth buffer");
-    if(options_.metric()) return; // Production metadata uses the captured CPU pass; GPU constants remain a research output.
+    if(options_.metric() && !options_.raw()) return; // Production metadata uses the captured CPU pass; GPU constants remain a research output.
     for(size_t stage=0;stage<geometry_constants_.size();++stage) {
         auto& sample=geometry_constants_[stage];
         Com<ID3D11Buffer> source;UINT first{},count{};
@@ -312,11 +312,12 @@ void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t 
         }
     }
     if(options_.packed()) {
-        if(packed_.images[0].description.is_null()) throw std::runtime_error("RGB-D geometry depth was not captured");
+        if(options_.depth() && packed_.images[0].description.is_null()) throw std::runtime_error("RGB-D geometry depth was not captured");
         Com<ID3D11DeviceContext1> context1;
         check(context->QueryInterface(IID_PPV_ARGS(&context1)),"QueryInterface(DeviceContext1)");
-        packed_.color(context1.Get(),images_[2].source.Get(),options_.color_gain,camera_);
-        for(const auto& image:packed_.images) descriptions.push_back(image.description);
+        if(options_.color()) packed_.color(context1.Get(),images_[2].source.Get(),options_.color_gain,camera_);
+        if(options_.preview()) packed_.color(context1.Get(),images_[2].source.Get(),options_.color_gain,camera_,true);
+        for(const auto& image:packed_.images) if(!image.description.is_null()) descriptions.push_back(image.description);
     }
     D3D11_QUERY_DESC query{D3D11_QUERY_EVENT,0};
     if(!completion_) {check(device->CreateQuery(&query,&completion_),"CreateQuery(EVENT)");++allocations_;}
@@ -325,7 +326,7 @@ void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t 
     ++sequence_;
     metadata_={{"capture_sequence",sequence_},{"camera",camera_},{"capture_format",options_.format},{"phase","leaving_camera_composition"},
         {"geometry_pass",geometry_pass_},{"color_pass",color_pass_},
-        {"geometry_gpu",geometry_gpu_},
+        {"geometry_gpu",geometry_gpu_},{"sensor_dimensions",{images_[2].desc.Width,images_[2].desc.Height}},
         {"render_frame_id",render_frame},{"frame_id_source","Present return intervals"},
         {"observation_session_qpc",observation_session},{"qpc_frequency",qpc_frequency()},
         {"copy_submission_qpc",cpu_begin},{"copy_submission_cpu_ticks",qpc_now()-cpu_begin},

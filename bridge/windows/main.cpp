@@ -170,7 +170,7 @@ int main(int argc,char** argv) {
         struct Lease {std::string owner;~Lease(){try{command({{"cmd","lease"},{"action","release"},{"owner",owner}});}catch(const std::exception& e){std::cerr<<"Lease cleanup: "<<e.what()<<std::endl;}}} lease{session};
         command({{"cmd","tier"},{"value",1}});
         command({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true}});command(rig);
-        command({{"cmd","stream"},{"action","start"},{"format","ros"},{"hz",10},{"duration",duration},{"color_gain",config.value("color_gain",1.0)}});
+        command({{"cmd","stream"},{"action","start"},{"format","ros"},{"hz",10},{"duration",duration},{"color_gain",config.value("color_gain",1.0)},{"outputs",json::object()}});
         std::atomic<std::shared_ptr<const Demand>> demand{std::make_shared<const Demand>()};
         std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0},echo_ms{0};
         LatestQueue<Bytes> read_queue;LatestQueue<Packet> send_queue;
@@ -198,8 +198,25 @@ int main(int argc,char** argv) {
             Packet packet;if(send_queue.pop(packet)) {send_packet(bulk,packet.meta,packet.data);++sent;bytes_sent+=packet.data.size();heartbeat=ticks();}
             else {if(ticks()-heartbeat>250) {send_packet(bulk,{{"session",session}});heartbeat=ticks();}std::this_thread::sleep_for(2ms);}
         }});
-        const auto start=ticks();uint64_t heartbeat=0,report=0;
+        const auto start=ticks();uint64_t heartbeat=0,report=0;Demand previous_demand;
         while(workers.alive && !stopped && ticks()-start<duration*1000) {
+            const auto requested=demand.load();
+            if(*requested!=previous_demand) {
+                json outputs=json::object();
+                const std::map<int,std::string> camera_names{{0,"C_FN"},{1,"C_FW"},{2,"C_RL"},{5,"C_RR"}};
+                for(const auto& view:rig.at("views")) {
+                    const int slot=view.at("slot");const auto base_topic="/ets2/camera/"+camera_names.at(slot);
+                    auto selected=json::array();
+                    if(requested->contains(base_topic+"/image_raw")) selected.push_back("color");
+                    if(requested->contains(base_topic+"/depth/image_raw")) selected.push_back("depth");
+                    if(requested->contains(base_topic+"/preview/image/compressed")) selected.push_back("preview");
+                    if(requested->contains(base_topic+"/camera_info") || requested->contains(base_topic+"/preview/camera_info") ||
+                       requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/objects") || requested->contains("/tf") || requested->contains("/ets2/frame_info")) selected.push_back("metadata");
+                    if(!selected.empty()) outputs["mirror"+std::to_string(slot)]=selected;
+                }
+                command({{"cmd","stream"},{"action","update"},{"format","ros"},{"color_gain",config.value("color_gain",1.0)},{"outputs",outputs}});
+                previous_demand=*requested;
+            }
             if(ticks()-heartbeat>=500) {command({{"cmd","lease"},{"action","heartbeat"},{"owner",session}});heartbeat=ticks();}
             if(ticks()-report>=1000) {std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
                 {"queue_dropped",dropped.load()},{"status_echo_ms",echo_ms.load()}}.dump()<<std::endl;report=ticks();}

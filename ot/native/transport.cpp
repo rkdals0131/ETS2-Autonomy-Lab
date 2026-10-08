@@ -1,6 +1,7 @@
 #include "ot.hpp"
 #include <sddl.h>
 #include <array>
+#include <algorithm>
 #include <stdexcept>
 
 namespace ot {
@@ -149,7 +150,10 @@ json Transport::publish_bundle(json manifest,const std::vector<BundleBlob>& blob
     if(!bundles_) {
         // Allocate from the first real sample, rounded to a MiB. Do not touch
         // unused payload pages. Dimensions may shrink within this allocation.
-        bundle_capacity_=static_cast<uint32_t>((length+1048575)&~size_t{1048575});
+        // A live consumer can subscribe to full RGB-D after a preview-only sample.
+        // Reserve the bridge's maximum packet capacity up front; untouched pages
+        // remain untouched. Research captures larger than this still size normally.
+        bundle_capacity_=static_cast<uint32_t>(std::max<size_t>(64*1024*1024,(length+1048575)&~size_t{1048575}));
         const size_t bytes=sizeof(RingHeader)+bundle_slots*(sizeof(BundleSlot)+bundle_capacity_);
         SECURITY_ATTRIBUTES sa{sizeof(sa),security_,FALSE};
         bundle_mapping_.h=CreateFileMappingW(INVALID_HANDLE_VALUE,&sa,PAGE_READWRITE,0,

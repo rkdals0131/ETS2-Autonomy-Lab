@@ -46,7 +46,7 @@ void GpuPack::release_gpu() {
 }
 void GpuPack::depth(ID3D11DeviceContext1* context,ID3D11Texture2D* source,
                     ID3D11Texture2D* attributes,ID3D11Texture2D* material,
-                    const D3D11_VIEWPORT& vp,const std::string& camera,const json* projection) {
+                    const D3D11_VIEWPORT& vp,const std::string& camera,const json* projection,bool readback) {
     std::array<float,28> values{0,0,0,0,vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height,vp.MinDepth,vp.MaxDepth};
     if(projection) {
         const auto p=projection->get<std::array<float,16>>();
@@ -60,16 +60,17 @@ void GpuPack::depth(ID3D11DeviceContext1* context,ID3D11Texture2D* source,
         DirectX::XMStoreFloat4x4(&matrix,inverse);
         std::memcpy(values.data()+12,&matrix,sizeof(matrix));values[1]=1;
     }
-    dispatch(context,{source,attributes,material},values,true,camera);
+    dispatch(context,{source,attributes,material},values,0,camera,readback);
 }
-void GpuPack::color(ID3D11DeviceContext1* context,ID3D11Texture2D* source,float gain,const std::string& camera) {
-    dispatch(context,{source,nullptr,nullptr},{gain,0,0,0,0,0,0,0,0,0,0,0},false,camera);
+void GpuPack::color(ID3D11DeviceContext1* context,ID3D11Texture2D* source,float gain,const std::string& camera,bool preview) {
+    dispatch(context,{source,nullptr,nullptr},{gain,0,preview?2.0f:1.0f,0,0,0,0,0,0,0,0,0},preview?2:1,camera);
 }
 void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*,3> sources,
-                       const std::array<float,28>& values,bool depth,const std::string& camera) {
+                       const std::array<float,28>& values,unsigned kind,const std::string& camera,bool readback) {
+    const bool depth=kind==0;
     Com<ID3D11Device> device;context->GetDevice(&device);
     if(device_.Get()!=device.Get()) {release_gpu();device_=device;}
-    auto& work=work_[depth?0:1];
+    auto& work=work_[kind];
     auto& copies=work.copies;auto& views=work.views;
     D3D11_TEXTURE2D_DESC dimensions{};sources[0]->GetDesc(&dimensions);
     for(size_t i=0;i<sources.size();++i) {
@@ -101,10 +102,10 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
         }
         context->CopyResource(copies[i].Get(),sources[i]);
     }
-    auto desc=dimensions;desc.Format=depth?DXGI_FORMAT_R32_FLOAT:DXGI_FORMAT_R8G8B8A8_UNORM;
+    auto desc=dimensions;if(kind==2) {desc.Width/=2;desc.Height/=2;}desc.Format=depth?DXGI_FORMAT_R32_FLOAT:DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_UNORDERED_ACCESS;
     desc.CPUAccessFlags=desc.MiscFlags=0;
-    auto& image=images[depth?0:1];
+    auto& image=images[kind];
     if(!work.output || work.output_desc.Width!=desc.Width || work.output_desc.Height!=desc.Height) {
         work.output.Reset();work.uav.Reset();image.staging.Reset();
         check(device->CreateTexture2D(&desc,nullptr,&work.output),"CreateTexture2D(pack output)");++allocations_;
@@ -130,9 +131,10 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
         context->CSSetShader(work.shader.Get(),nullptr,0);
         context->Dispatch((desc.Width+7)/8,(desc.Height+7)/8,1);
     }
+    if(!readback) {image.description=nullptr;image.pixels.clear();return;}
     context->CopyResource(image.staging.Get(),work.output.Get());
     image.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*4);
-    image.description={{"file",camera+(depth?"_depth_f32.bin":"_color_ldr.bin")},
+    image.description={{"file",camera+(depth?"_depth_f32.bin":kind==2?"_preview_ldr.bin":"_color_ldr.bin")},
         {"width",desc.Width},{"height",desc.Height},{"row_bytes",desc.Width*4},
         {"format",depth?"R32_FLOAT":"R8G8B8A8_UNORM"},
         {"encoding",depth?(values[1]!=0?"optical_depth_m_nan_invalid":"viewport_depth_nan_invalid"):"srgb_reinhard"}};
@@ -140,6 +142,7 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
 }
 bool GpuPack::collect(ID3D11DeviceContext* context) {
     for(auto& image:images) {
+        if(image.description.is_null()) continue;
         D3D11_MAPPED_SUBRESOURCE mapped{};
         const auto hr=context->Map(image.staging.Get(),0,D3D11_MAP_READ,D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped);
         if(hr==DXGI_ERROR_WAS_STILL_DRAWING) return false;

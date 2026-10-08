@@ -36,7 +36,12 @@ void main(uint3 id : SV_DispatchThreadID) {
     }
     result[id.xy] = valid ? depth : asfloat(0x7fc00000);
 #else
-    float3 rgb = source.Load(pixel).rgb;
+    int scale = max(1, (int)controls.z);
+    int2 origin = int2(id.xy)*scale;
+    float3 rgb = 0;
+    for (int sy=0;sy<scale;++sy) for (int sx=0;sx<scale;++sx)
+        rgb += source.Load(int3(origin+int2(sx,sy),0)).rgb;
+    rgb /= scale*scale;
     rgb = float3(isfinite(rgb.x) ? max(rgb.x, 0) : 0,
                  isfinite(rgb.y) ? max(rgb.y, 0) : 0,
                  isfinite(rgb.z) ? max(rgb.z, 0) : 0) * controls.x;
