@@ -134,3 +134,18 @@ def save_bundle(bundle, directory):
     with open(directory / "bundle.json", "x", encoding="utf-8") as stream:
         json.dump({"sequence": bundle["sequence"], **manifest}, stream, ensure_ascii=False, indent=2)
     return directory
+
+
+def load_bundle(directory):
+    """Read a bundle saved by save_bundle into the same immutable byte interface."""
+    directory = Path(directory).resolve()
+    manifest = json.loads((directory / "bundle.json").read_text(encoding="utf-8"))
+    names = {_component(view["camera"]) for view in manifest["views"]}
+    files = []
+    for item in manifest["files"]:
+        camera, name = _component(item["camera"]), _component(item["file"])
+        path = (directory / camera / name).resolve()
+        if camera not in names or not path.is_relative_to(directory):
+            raise ValueError("Bundle image is outside its camera directory")
+        files.append({"camera": camera, "file": name, "data": path.read_bytes()})
+    return {"sequence": manifest["sequence"], "manifest": manifest, "files": files}

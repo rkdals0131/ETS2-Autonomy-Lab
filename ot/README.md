@@ -1,8 +1,9 @@
-# ot 0.12.0 — 화면을 보며 조절하는 6카메라 리그
+# ot 0.12.1 — 화면을 보며 조절하는 6카메라 리그
 
 > **확정:** 기존 미러 슬롯 0–5를 임의 위치·회전·FOV의 센서로 전용했습니다. 서로 다른 샤시 상대 위치의 여섯 영상을 같은 Present 구간 27에서 수집했습니다. 월드 고정 카메라도 동작합니다.
 > **0.11.0:** 여섯 RGB·깊이 버퍼를 각각 640×360으로 맞추고 공유 메모리로 실시간 표시했습니다. 약 10.3초에 완전한 6뷰 묶음 45개, 누락 0개였습니다.
 > **0.12.0:** 미리보기 창에서 XYZ·yaw/pitch/roll·FOV를 바꾸고 배치를 JSON으로 저장합니다. 실제 편집 2회를 포함한 20.3초 실행에서 6뷰 묶음 94개·누락 0개였습니다.
+> **0.12.1:** 미러 출력이 없는 pass의 문자열·JSON 생성을 생략합니다. 같은 코드 경로의 짧은 관측에서 compile-begin 평균 15.29 → 10.40µs, 이후 6뷰 12묶음 모두 완료했습니다. 게임 전경 FPS 비교 결과는 아직 없습니다.
 > **다음:** 주행·고개 조작 중 리그 유지와 메인 카메라 기준 가시성·LOD의 누락 해결. 장시간 주행과 성능 비교는 남아 있습니다.
 
 ### 화면을 보며 카메라 배치 조절
@@ -47,6 +48,28 @@
 5 Hz를 요청한 첫 실행은 시작·종료 시간을 포함해 10.2906초 동안 완전한 묶음 45개를 수집했습니다. 누락·수집 오류·종료 오류는 0개였습니다. 이 값은 미리보기 수집 속도이며 게임 렌더 FPS가 아닙니다. 아직 GPU staging ring을 사용하지 않으므로 고해상도·고주파 수집 성능을 보장하지 않습니다. 로컬 실행 결과는 `research/live/2026-10-08-camera-rig/preview-first.stdout.txt`와 `preview-first.png`입니다.
 
 해상도는 미러 그래프가 context 크기를 전달하는 호출의 인자만 바꿉니다. 새 관측 지점은 `0x1610250`, 대상 호출의 복귀 주소는 `0x4D46B8`이며 원본 drawable과 설정은 유지합니다. 실제 6뷰가 렌더되는 상태에서 새 hook을 포함한 아홉 hook의 메타로더 해제·재로딩도 완료했습니다. 재로딩 후 리그 꺼짐·Tier 0·hook 0이며, 원본 기록은 로컬 `resolution-active-unload.json`입니다.
+
+### 저장한 6뷰의 월드 점군과 위에서 본 관측 영역
+
+`otpy.bundles.save_bundle`로 저장한 묶음은 아래 명령으로 합칩니다. 게임에 연결하지 않는 오프라인 명령입니다.
+
+```powershell
+.\ot\ot.cmd birdseye .\capture-bundle --output observed.png --points world-points.npz
+# 원래 픽셀 중심을 두 칸 간격으로 표본화하고 반경 25만 표시
+.\ot\ot.cmd birdseye .\capture-bundle --output observed-small.png --stride 2 --radius 25
+```
+
+기존 DSV 복원을 그대로 사용하고 각 pass 카메라의 회전·월드 원점으로 합칩니다. 서로 다른 관측 세션 또는 Present 구간의 영상을 하나로 합치지 않습니다. PNG는 월드 +X 오른쪽·+Z 아래 방향이며 카메라 위치 평균을 중심으로 그립니다. 차량 heading에 정렬한 BEV나 주행 가능 영역 분류는 아닙니다. 같은 격자에서는 가장 높은 관측 점을 표시하고 빈칸을 보간하지 않습니다.
+
+NPZ에는 `xyz_world`, `rgb_linear`, `camera_index`, `camera_origins_world`, `observed`, `height_above_camera_mean`, `center_world_xyz`, `game_units_per_pixel`, `metadata_json`을 저장합니다. 원시 점은 표시 반경 밖도 보존합니다. `observed=false`는 관측하지 못한 영역이며 장애물 부재를 뜻하지 않습니다. RGB 노출 조정은 PNG에만 적용합니다.
+
+기존 640×360 6뷰의 Present 구간 14에서 **1,201,153점**을 합쳤습니다. 반경 40·800×800 격자 중 124,405칸에 관측 점이 있었습니다. 파일 입력의 기존 복원 결과와 공유 바이트 입력의 결과, stride 2와 원본 픽셀 부분집합의 월드 좌표 차이는 이 표본에서 0이었습니다. [실제 출력](../docs/images/six-world-birdseye.png). 새 캡처를 주장하는 결과가 아니며 원본은 로컬 `six-resolution-first.json`, 변환 결과는 `six-world-points.npz`입니다.
+
+### 미러 pass만 자세히 관측
+
+0.12.1은 `pass+0xC0` 대신 연결된 **출력 이미지 namespace**를 먼저 읽습니다. 실제 미러 geometry pass의 namespace는 `deferred`, color pass는 `quad_drawer_t*`여서 pass namespace를 `mirror`로 제한하면 필요한 영상도 놓칩니다. 미러 출력이 없는 명령 구간은 이름 없이 계속 기록하여 재사용된 명령 buffer의 범위를 구별합니다.
+
+전·후 약 4초 관측에서 compile-begin 평균은 15.290 → 10.396µs, 초당 callback 본문 시간은 123.39 → 103.14ms였습니다. 호출 빈도도 8,070 → 9,921회/s로 달라졌으므로 평균 감소 약 32%를 게임 FPS 증가율로 해석하지 않습니다. 같은 세션의 전경 조건은 확인되지 않았습니다. 후속 12묶음의 여섯 카메라가 모두 ready였으며 원본은 로컬 `compile-before-filter.json`, `compile-after-filter.json`, `filtered-capture-results.json`입니다. 리그 전용 hook 모드 분리는 다음 작업입니다.
 
 ### 자유 배치 리그 사용
 

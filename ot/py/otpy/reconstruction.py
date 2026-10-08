@@ -16,10 +16,28 @@ def reconstruct_capture(directory, depth_source="geometry"):
     Invalid points are NaN. Lengths retain game units; no metric calibration is
     inferred from agreement between two rendering paths.
     """
-    if depth_source not in ("geometry", "attributes"):
-        raise ValueError("depth_source must be geometry or attributes")
     directory = Path(directory).resolve()
     meta = json.loads((directory / "images.json").read_text(encoding="utf-8"))
+
+    def read_data(filename, dtype):
+        path = (directory / filename).resolve()
+        if not path.is_relative_to(directory):
+            raise ValueError("Image file is outside the capture directory")
+        return np.fromfile(path, dtype=dtype)
+
+    return reconstruct_view(meta, read_data, depth_source)
+
+
+def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, color=False):
+    """Decode one pass from files or immutable bundle bytes with the same math.
+
+    read_data(filename, dtype) returns the raw one-dimensional array. Stride
+    samples original pixel centers; it never changes intrinsics or downsizes Z.
+    """
+    if depth_source not in ("geometry", "attributes"):
+        raise ValueError("depth_source must be geometry or attributes")
+    if not isinstance(stride, int) or stride < 1:
+        raise ValueError("Pixel stride must be a positive integer")
     camera = meta["geometry_pass"]["camera_at_compile"]
     name = meta["camera"]
     descriptors = {item["file"]: item for item in meta["images"]}
@@ -34,10 +52,7 @@ def reconstruct_capture(directory, depth_source="geometry"):
         if (info["format"] != fmt or (info["height"], info["width"]) != (height, width)
                 or info["row_bytes"] != width * np.dtype(dtype).itemsize * channels):
             raise ValueError("Unsupported or unaligned image: " + info["file"])
-        path = (directory / info["file"]).resolve()
-        if not path.is_relative_to(directory):
-            raise ValueError("Image file is outside the capture directory")
-        return np.fromfile(path, dtype=dtype).reshape(height, width, channels)
+        return read_data(info["file"], dtype).reshape(height, width, channels)[::stride, ::stride]
 
     attributes = read_image(attributes_info, "R16G16B16A16_FLOAT", "<f2", 4)
     flags = read_image(descriptors[name + "_attributes3.bin"], "R16G16B16A16_UINT", "<u2", 4)
@@ -61,7 +76,7 @@ def reconstruct_capture(directory, depth_source="geometry"):
     if (not np.isfinite(viewport).all() or vp["width"] <= 0 or vp["height"] <= 0
             or vp["max_depth"] <= vp["min_depth"]):
         raise ValueError("Invalid captured geometry viewport")
-    y, x = np.mgrid[:height, :width]
+    y, x = np.mgrid[0:height:stride, 0:width:stride]
     u = (x + 0.5 - vp["x"]) / vp["width"]
     v = (y + 0.5 - vp["y"]) / vp["height"]
     valid &= (u >= 0) & (u < 1) & (v >= 0) & (v < 1)
@@ -87,7 +102,7 @@ def reconstruct_capture(directory, depth_source="geometry"):
         clip = np.stack((2 * u - 1, 1 - 2 * v, ndc_z, np.ones_like(u)), axis=-1)
         homogeneous = clip @ np.linalg.inv(correction @ projection).T
         valid &= np.isfinite(homogeneous).all(axis=-1) & (homogeneous[..., 3] != 0)
-        xyz = np.full((height, width, 3), np.nan)
+        xyz = np.full((*u.shape, 3), np.nan)
         np.divide(homogeneous[..., :3], homogeneous[..., 3:4], out=xyz, where=valid[..., None])
     else:
         # This is the game's deferred shading ray, including material-specific
@@ -98,6 +113,8 @@ def reconstruct_capture(directory, depth_source="geometry"):
     world = xyz @ np.linalg.inv(rotation).T + origin
     arrays = {"xyz_camera": xyz.astype(np.float32), "xyz_world": world,
               "valid": valid, "material_bits": bits}
+    if color:
+        arrays["rgb_linear"] = read_image(descriptors[name+"_color.bin"], "R16G16B16A16_FLOAT", "<f2", 4)[..., :3]
     description = {
         "camera": name, "render_frame_id": meta["render_frame_id"],
         "observation_session_qpc": meta["observation_session_qpc"],
@@ -105,10 +122,38 @@ def reconstruct_capture(directory, depth_source="geometry"):
         "camera_scope": camera["scope"], "world_units": camera["world_units"],
         "camera_convention": "negative Z forward; pixel rows preserved",
         "invalid_points": "NaN; zero/nonfinite attributes Z, bit 16, invalid depth or outside viewport",
-        "valid_points": int(valid.sum()), "width": width, "height": height,
+        "valid_points": int(valid.sum()), "width": width, "height": height, "pixel_stride": stride,
         "camera_world_xyz": origin.tolist(),
     }
     return arrays, description
+
+
+def reconstruct_bundle(bundle, *, stride=1):
+    """Merge observed RGB-D samples in game world coordinates, preserving sources."""
+    views = bundle["manifest"]["views"]
+    frame_keys = {(v["metadata"]["observation_session_qpc"], v["metadata"]["render_frame_id"]) for v in views}
+    if len(frame_keys) != 1:
+        raise ValueError("Point fusion requires views from one observation session and Present interval")
+    files = {(item["camera"], item["file"]): item["data"] for item in bundle["files"]}
+    xyz, rgb, sources, origins = [], [], [], []
+    descriptions = []
+    for index, view in enumerate(views):
+        name = view["camera"]
+        arrays, description = reconstruct_view(view["metadata"],
+            lambda filename, dtype: np.frombuffer(files[name, filename], dtype=dtype), stride=stride, color=True)
+        valid = arrays["valid"]
+        xyz.append(arrays["xyz_world"][valid])
+        rgb.append(arrays["rgb_linear"][valid])
+        sources.append(np.full(np.count_nonzero(valid), index, dtype=np.uint8))
+        origins.append(description["camera_world_xyz"])
+        descriptions.append(description)
+    session, frame = next(iter(frame_keys))
+    return {"xyz_world": np.concatenate(xyz), "rgb_linear": np.concatenate(rgb),
+            "camera_index": np.concatenate(sources), "camera_origins_world": np.asarray(origins),
+            "metadata": {"render_frame_id": frame, "observation_session_qpc": session,
+                         "depth_source": "geometry", "world_units": descriptions[0]["world_units"],
+                         "cameras": [v["camera"] for v in views], "views": descriptions,
+                         "missing_views": bundle["manifest"].get("missing_views", [])}}
 
 
 def save_reconstruction(directory, output, depth_source="geometry"):

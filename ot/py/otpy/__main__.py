@@ -40,6 +40,12 @@ def main():
     reconstruct.add_argument("directory", help="Capture directory containing images.json")
     reconstruct.add_argument("--output", required=True, help="New NPZ file; existing files are not overwritten")
     reconstruct.add_argument("--depth-source", choices=("geometry", "attributes"), default="geometry")
+    birdseye = sub.add_parser("birdseye", help="Fuse a saved same-frame RGB-D bundle into a world-axis top-down view")
+    birdseye.add_argument("directory", help="Bundle directory containing bundle.json")
+    birdseye.add_argument("--output", required=True, help="New PNG")
+    birdseye.add_argument("--points", help="Optional new NPZ with world points, colors, sources and observation grid")
+    birdseye.add_argument("--radius", type=float, default=40.0, help="Crop radius in game world units")
+    birdseye.add_argument("--stride", type=int, default=1, help="Sample every Nth source pixel without resizing depth")
     boxes = sub.add_parser("project_boxes", help="Offline actor box projection and DSV occlusion comparison (NumPy)")
     boxes.add_argument("directory", help="Capture directory containing images.json")
     boxes.add_argument("--objects", help="JSON actor records; default: actor observations in the capture's vehicle metadata")
@@ -56,6 +62,9 @@ def main():
         if args.command == "reconstruct":
             from .reconstruction import save_reconstruction
             result = save_reconstruction(args.directory, args.output, args.depth_source)
+        elif args.command == "birdseye":
+            from .birdseye import save_birdseye
+            result = save_birdseye(args.directory, args.output, radius=args.radius, stride=args.stride, points=args.points)
         elif args.command == "preview":
             if not math.isfinite(args.hz) or args.hz <= 0:
                 parser.error("--hz must be finite and positive")

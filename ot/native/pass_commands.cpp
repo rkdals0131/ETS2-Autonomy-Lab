@@ -267,10 +267,24 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
         const auto manager=base+0x304FC50+b*0x2A8;
         const auto passes=array(manager+0xF0);
         if(index<passes.size && read<uintptr_t>(passes.data+index*8)==pass) {
+            const auto images=array(manager);
+            const auto outputs=array(pass+0x658);
+            bool mirror_output=false;
+            for(uint64_t j=0;j<outputs.size;++j) {
+                const auto id=read<uint32_t>(outputs.data+j*8);
+                if(id>=images.size) continue;
+                const auto label=read<uintptr_t>(images.data+id*0x7F0+0xA8);
+                std::array<char,6> prefix{};
+                if(label && copy_memory(label,prefix.data(),prefix.size()) &&
+                   std::memcmp(prefix.data(),"mirror",prefix.size())==0) {mirror_output=true;break;}
+            }
+            // pass+0xC0 names the implementation (e.g. deferred or quad_drawer),
+            // not the camera. Filter on output image namespaces before building
+            // strings/JSON; begin/end still retain unnamed command intervals.
+            if(!mirror_output) return {};
             json result={{"pass_address",pass},{"command_buffer",input},{"graph_buffer",b},
                 {"pass_name",string_at(read<uintptr_t>(pass+0x20))},
                 {"pass_namespace",string_at(read<uintptr_t>(pass+0xC0))}};
-            const auto images=array(manager);
             json links=json::array();
             for(const auto offset:{0x658,0x6C0}) {
                 const auto refs=array(pass+offset);
