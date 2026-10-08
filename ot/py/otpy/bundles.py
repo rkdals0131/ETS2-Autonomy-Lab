@@ -1,8 +1,11 @@
 """OT_Bundles reader and Python-owned image recording (Windows x64)."""
 import ctypes as C
+from contextlib import ExitStack
+import io
 import json
 from pathlib import Path
 import struct
+import tarfile
 from zipfile import ZipFile, ZIP_STORED
 
 from .client import W, _api, _open_mapping, _map, _unmap, _close, _free_library, _wait
@@ -137,6 +140,14 @@ def save_bundle(bundle, directory):
     return directory
 
 
+def _archive_entries(bundle):
+    for item in bundle["files"]:
+        yield item["camera"] + "/" + item["file"], item["data"]
+    for view in bundle["manifest"]["views"]:
+        yield view["camera"] + "/images.json", json.dumps(view["metadata"], ensure_ascii=False).encode("utf-8")
+    yield "bundle.json", json.dumps({"sequence": bundle["sequence"], **bundle["manifest"]}, ensure_ascii=False).encode("utf-8")
+
+
 def save_bundle_archive(bundle, filename):
     """One uncompressed ZIP per frame avoids opening hundreds of small files.
 
@@ -144,36 +155,56 @@ def save_bundle_archive(bundle, filename):
     images.json and the binary files to existing per-camera tools.
     """
     with ZipFile(filename, "x", compression=ZIP_STORED) as archive:
-        for item in bundle["files"]:
-            archive.writestr(item["camera"] + "/" + item["file"], item["data"])
-        for view in bundle["manifest"]["views"]:
-            archive.writestr(view["camera"] + "/images.json", json.dumps(view["metadata"], ensure_ascii=False))
-        archive.writestr("bundle.json", json.dumps(
-            {"sequence": bundle["sequence"], **bundle["manifest"]}, ensure_ascii=False))
+        for name, data in _archive_entries(bundle):
+            archive.writestr(name, data)
+    return Path(filename)
+
+
+def save_bundle_zstd(bundle, filename):
+    """Lossless TAR + Zstandard level 1, retaining the existing capture files."""
+    import zstandard
+    compressor = zstandard.ZstdCompressor(level=1, write_checksum=True)
+    with open(filename, "xb") as output, compressor.stream_writer(output) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w|") as archive:
+            for name, data in _archive_entries(bundle):
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
     return Path(filename)
 
 
 def load_bundle(directory):
-    """Read a bundle saved by save_bundle into the same immutable byte interface."""
+    """Read directory, ZIP or TAR.ZST as the same immutable raw-byte bundle."""
     directory = Path(directory).resolve()
-    if directory.is_file():
-        with ZipFile(directory) as archive:
-            manifest = json.loads(archive.read("bundle.json"))
-            names = {_component(view["camera"]) for view in manifest["views"]}
-            files = []
-            for item in manifest["files"]:
-                camera, name = _component(item["camera"]), _component(item["file"])
-                if camera not in names:
-                    raise ValueError("Bundle image is outside its camera directory")
-                files.append({"camera": camera, "file": name, "data": archive.read(camera + "/" + name)})
-            return {"sequence": manifest["sequence"], "manifest": manifest, "files": files}
-    manifest = json.loads((directory / "bundle.json").read_text(encoding="utf-8"))
-    names = {_component(view["camera"]) for view in manifest["views"]}
-    files = []
-    for item in manifest["files"]:
-        camera, name = _component(item["camera"]), _component(item["file"])
-        path = (directory / camera / name).resolve()
-        if camera not in names or not path.is_relative_to(directory):
-            raise ValueError("Bundle image is outside its camera directory")
-        files.append({"camera": camera, "file": name, "data": path.read_bytes()})
-    return {"sequence": manifest["sequence"], "manifest": manifest, "files": files}
+    with ExitStack() as resources:
+        if directory.is_file() and directory.name.endswith(".tar.zst"):
+            import zstandard
+            decompressor = zstandard.ZstdDecompressor().decompressobj()
+            try:
+                raw = decompressor.decompress(directory.read_bytes())
+            except zstandard.ZstdError as error:
+                raise ValueError("Invalid Zstandard capture: " + str(error)) from error
+            if not decompressor.eof:
+                raise ValueError("Incomplete Zstandard capture frame")
+            archive = resources.enter_context(tarfile.open(fileobj=io.BytesIO(raw), mode="r:"))
+            # Read member bytes without extracting paths or following links.
+            contents = {member.name: archive.extractfile(member).read() for member in archive if member.isfile()}
+            read = contents.__getitem__
+        elif directory.is_file():
+            archive = resources.enter_context(ZipFile(directory))
+            read = archive.read
+        else:
+            def read(name):
+                path = (directory / name).resolve()
+                if not path.is_relative_to(directory):
+                    raise ValueError("Bundle image is outside the capture directory")
+                return path.read_bytes()
+        manifest = json.loads(read("bundle.json"))
+        names = {_component(view["camera"]) for view in manifest["views"]}
+        files = []
+        for item in manifest["files"]:
+            camera, name = _component(item["camera"]), _component(item["file"])
+            if camera not in names:
+                raise ValueError("Bundle image is outside its camera directory")
+            files.append({"camera": camera, "file": name, "data": read(camera + "/" + name)})
+        return {"sequence": manifest["sequence"], "manifest": manifest, "files": files}

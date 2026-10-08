@@ -1,9 +1,11 @@
 """Bounded native RGB-D stream, recorded through OT_Bundles without a UI."""
 import json
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 
-from .bundles import BundleReader, save_bundle_archive
+from .bundles import BundleReader, save_bundle_archive, save_bundle_zstd
 from .rig_layout import resolve_layout
 
 
@@ -38,12 +40,20 @@ def calibrate_gain(client):
         return 1.0/max(float(np.nanpercentile(np.concatenate(samples), 99)), 1e-7)
 
 
-def record_bundles(client, config_file, hz, duration, output, capture_format="rgbd8", color_gain=None, vehicles=False):
+def record_bundles(client, config_file, hz, duration, output, capture_format="rgbd8", color_gain=None, vehicles=False,
+                   archive_format="zstd", workers=2):
+    save, suffix = {"zip": (save_bundle_archive, ".zip"), "zstd": (save_bundle_zstd, ".tar.zst")}[archive_format]
+    if archive_format == "zstd":
+        try:
+            import zstandard
+        except ImportError as error:
+            raise ImportError("Zstandard recording requires ot/requirements-recording.txt; use --archive zip without it") from error
     config = resolve_layout(json.loads(Path(config_file).read_text(encoding="utf-8")), client)
     directory = Path(output).resolve()
     directory.mkdir()  # Never append to or overwrite an earlier recording.
     report = {"config": config, "requested_hz": hz, "duration_s": duration,
-              "format": capture_format, "vehicle_metadata": vehicles, "saved": 0, "binary_bytes": 0}
+              "format": capture_format, "vehicle_metadata": vehicles, "saved": 0, "binary_bytes": 0,
+              "archive": archive_format, "writer_workers": workers, "archive_bytes": 0}
     reader = None
     started = False
     failure = None
@@ -64,30 +74,56 @@ def record_bundles(client, config_file, hz, duration, output, capture_format="rg
         # publication proceed in the DLL even while Python is writing files.
         next_status = 0
         with open(directory / "index.jsonl", "x", encoding="utf-8") as index:
-            while True:
-                now = time.monotonic()
-                if now >= next_status:
-                    status = client.request("stream")
-                    next_status = now+.5
-                if reader is None and client.request("bundles")["enabled"]:
-                    reader = BundleReader()
-                bundle = reader.read_next() if reader is not None else None
-                if bundle is not None:
-                    manifest = bundle["manifest"]
-                    if manifest.get("stream_id") != report["stream_id"]:
-                        continue  # A queued sample from a preceding capture.
-                    name = f"frame-{manifest['render_frame_id']:08d}.zip"
-                    save_bundle_archive(bundle, directory / name)
-                    size = sum(len(item["data"]) for item in bundle["files"])
-                    report["saved"] += 1
-                    report["binary_bytes"] += size
-                    index.write(json.dumps({"bundle": name, "sequence": bundle["sequence"],
-                                            "render_frame_id": manifest["render_frame_id"], "binary_bytes": size})+"\n")
-                    index.flush()
-                elif not status["running"]:
-                    break
-                else:
-                    time.sleep(.002)
+            pending = deque()
+
+            def finish():
+                future, entry = pending.popleft()
+                path = future.result()
+                entry["archive_bytes"] = path.stat().st_size
+                report["saved"] += 1
+                report["binary_bytes"] += entry["binary_bytes"]
+                report["archive_bytes"] += entry["archive_bytes"]
+                index.write(json.dumps(entry)+"\n")
+                index.flush()
+
+            try:
+                # Independent frames compress in C on separate threads. At
+                # most `workers` immutable bundles are held; a slow disk
+                # applies backpressure to the existing native drop queue.
+                with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ot-bundle-writer") as writers:
+                    while True:
+                        while pending and (pending[0][0].done() or len(pending) >= workers):
+                            finish()
+                        now = time.monotonic()
+                        if now >= next_status:
+                            status = client.request("stream")
+                            next_status = now+.5
+                        if reader is None and client.request("bundles")["enabled"]:
+                            reader = BundleReader()
+                        bundle = reader.read_next() if reader is not None else None
+                        if bundle is not None:
+                            manifest = bundle["manifest"]
+                            if manifest.get("stream_id") != report["stream_id"]:
+                                continue  # A queued sample from a preceding capture.
+                            name = f"frame-{manifest['render_frame_id']:08d}" + suffix
+                            entry = {"bundle": name, "sequence": bundle["sequence"],
+                                     "render_frame_id": manifest["render_frame_id"],
+                                     "binary_bytes": sum(len(item["data"]) for item in bundle["files"])}
+                            pending.append((writers.submit(save, bundle, directory / name), entry))
+                        elif not status["running"]:
+                            break
+                        else:
+                            time.sleep(.002)
+            finally:
+                # Executor exit joins every owned writer, including on Ctrl+C
+                # or a pipe error. Index successful writes before closing it.
+                while pending:
+                    try:
+                        finish()
+                    except Exception as error:
+                        report.setdefault("write_errors", []).append(str(error))
+            if report.get("write_errors"):
+                raise RuntimeError("Bundle writes failed: " + "; ".join(report["write_errors"]))
         report["stream"] = status
         if status.get("reason") == "error":
             raise RuntimeError(status["last_error"])
@@ -116,4 +152,5 @@ def record_bundles(client, config_file, hz, duration, output, capture_format="rg
         if cleanup_errors and failure is None:
             raise RuntimeError("Recording cleanup failed: " + "; ".join(cleanup_errors))
     return {"directory": str(directory), "saved": report["saved"], "binary_bytes": report["binary_bytes"],
+            "archive_bytes": report["archive_bytes"], "archive": archive_format,
             "color_gain": color_gain, "stream": report["stream"], "cleanup": report["cleanup"]}

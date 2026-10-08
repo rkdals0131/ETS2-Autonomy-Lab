@@ -9,6 +9,7 @@
 > **0.15.0:** 기본 리그를 고속도로용 전방 협각·광각과 좌우 포드 4뷰로 변경했습니다. SDK 바퀴 구성으로 후축 기준 장착 좌표를 변환합니다. 같은 해상도에서 GPU 복사·변환 자원을 재사용하며 실제 4뷰 수집·크기/형식 전환을 확인했습니다.
 > **0.16.0:** 현재 FH5의 모델 외판·미러 하우징에 장착점을 맞췄습니다. `basis: cabin`은 운전자 고개 회전 전의 캐빈 parent를 사용해 서스펜션 운동을 따릅니다. 실제 4뷰 수집과 종료 복구를 확인했습니다.
 > **0.17.0:** 3슬롯 GPU ring과 native 수집 worker를 추가했습니다. 차량 메타데이터를 포함한 4뷰 RGB-D를 5초·50묶음·실측 10.006 Hz로 Python에 저장했고 누락은 0개였습니다. 수집 중 패닉·payload unload도 확인했습니다.
+> **무손실 기록:** Python에 Zstandard 압축·2개 저장 worker를 추가했습니다. 후속 실제 5초·50묶음을 누락 없이 629MB에 저장했습니다(원시 바이너리 대비 약 45.5% 절감). 기존 core 0.17.0을 그대로 사용합니다.
 > **다음:** 전경 성능 비교, 트레일러 가림·주행 중 가시성 누락과 장시간 저장량 절감. 가상 LiDAR·레이더와 주행보조 모델은 후속 구현입니다.
 
 ### Phase 1 고속도로 4뷰
@@ -56,13 +57,22 @@
 
 미리보기 창 없이 기록하며 포커스를 바꾸지 않습니다. 게임이 실제로 렌더링 중이어야 합니다. 새 출력 디렉터리를 지정합니다.
 
+압축 기록은 Python 선택 의존성 `zstandard`를 사용합니다. 이 PC에는 `ot/.venv`에 설치했습니다. 다른 PC에서는 최초 한 번 다음 명령을 실행합니다. wheel 버전·SHA256은 [requirements-recording.txt](requirements-recording.txt)에 고정했으며 Python 3.13 / Windows x64용입니다. `--system-site-packages`는 기존 NumPy·Pillow 설치를 재사용합니다. `ot.cmd`는 이 가상환경이 있으면 사용하고 없으면 기존 `py -3.13`을 사용합니다.
+
+```powershell
+py -3.13 -m venv --system-site-packages .\ot\.venv
+.\ot\.venv\Scripts\python.exe -m pip install --only-binary=:all: --require-hashes -r .\ot\requirements-recording.txt
+```
+
 ```powershell
 .\ot\ot.cmd record_bundles --config .\ot\presets\phase1-highway.json --hz 10 --duration 5 --vehicles --output .\research\live\my-road-run
 ```
 
 한 번의 `stream start`로 DLL이 촬영을 예약하고, Python은 `OT_Bundles`를 읽어 저장합니다. 묶음마다 arm/poll/publish 명령을 보내지 않습니다. 3개 GPU 슬롯은 필요한 자원을 첫 사용에 준비한 뒤 순환 재사용하며, immediate-context 복사와 readback은 기존 렌더 callback에서만 수행합니다. native worker는 완성된 CPU 데이터의 공유 메모리 발행을 담당합니다. 차량 상수도 기존 staging을 재사용하고 실제 크기가 바뀔 때만 다시 만듭니다.
 
-출력은 `frame-<Present 구간>.zip`, `index.jsonl`, `run.json`입니다. ZIP은 **비압축 묶음**이며 내부의 카메라별 `images.json`·RGB·깊이·상수 파일은 기존 디렉터리 형식과 같습니다. `otpy.bundles.load_bundle()`과 `birdseye`는 디렉터리와 ZIP을 모두 읽습니다. 카메라별 기존 분석 명령에는 일반 ZIP 도구로 푼 디렉터리를 넘길 수 있습니다. 파일 덮어쓰기는 하지 않습니다.
+기본 출력은 `frame-<Present 구간>.tar.zst`, `index.jsonl`, `run.json`입니다. Zstandard level 1의 **무손실 압축**이며 내부의 카메라별 `images.json`·RGB·깊이·상수 파일은 기존 디렉터리 형식과 같습니다. `--archive zip`은 추가 코덱 없이 기존 비압축 ZIP으로 저장합니다. `otpy.bundles.load_bundle()`과 `birdseye`는 디렉터리·ZIP·TAR.ZST를 읽습니다. 카메라별 기존 분석 명령에는 해당 형식을 지원하는 압축 도구로 푼 디렉터리를 넘길 수 있습니다. 파일 덮어쓰기는 하지 않습니다.
+
+기본 `--workers 2`는 독립된 프레임을 두 스레드에서 압축·저장합니다. 대기 중인 묶음 수도 worker 수로 제한해 느린 디스크에서 메모리가 계속 쌓이지 않게 했습니다. 각 압축기는 스레드 안에서 소유하고, index는 수신 순서대로 하나의 스레드가 씁니다. 종료 시 모든 writer를 합류시킨 뒤 결과를 저장합니다. 압축 해제는 색상 바이트·float32 깊이의 비트 표현을 복원하며 Zstandard checksum과 프레임 완료 여부를 확인합니다.
 
 기본 `rgbd8`은 첫 raw 표본으로 공통 노출을 계산해 실행 내내 고정합니다. `--color-gain`을 주면 이 준비 표본을 생략합니다. `--vehicles`는 같은 pass의 차량 모델 자세·draw 상수 수집을 켜며 생략하면 카메라 데이터만 기록합니다. `raw`·`raw+rgbd8`도 선택할 수 있습니다. 색상 gain은 물리적 카메라 노출 모델이 아닙니다.
 
@@ -72,7 +82,9 @@
 
 실제 FH5 정차 실험에서는 전방 1280×720 두 장·측후방 960×544 두 장과 차량 메타데이터를 **5초에 50묶음, 저장 누락/수집 오류 0회**로 기록했습니다. 복사 제출 시각의 실측 간격은 중앙값 101.65ms, 전체 처리율은 10.006Hz였습니다. 50묶음의 200뷰 모두 묶음의 Present 구간·세션과 일치했고, 첫·중간·마지막 묶음의 기존 점군 복원과 마지막 RGB를 확인했습니다. 30분 주행·전경 FPS 결과는 아닙니다.
 
-초기 파일별 저장은 2초·20수집 중 14저장·6누락이었습니다. 111개 파일을 여닫는 비용과 반복 JSON 쓰기를 ZIP 한 개로 묶어 해결했습니다. 같은 묶음의 오프라인 저장은 약 0.246초 → 0.043초였고, 원본 파일 바이트와 metadata를 다시 읽어 대조했습니다. 최종 50묶음의 바이너리는 1,155,725,568B로 **약 231MB/s**입니다. ZIP은 저장량을 줄이지 않으므로 이 설정의 30분 전체 기록은 약 416GB가 필요합니다. 장시간 운행 기록에는 추가 압축 또는 표본량 조정이 필요합니다.
+초기 파일별 저장은 2초·20수집 중 14저장·6누락이었습니다. 111개 파일을 여닫는 비용과 반복 JSON 쓰기를 ZIP 한 개로 묶어 해결했습니다. 같은 묶음의 오프라인 저장은 약 0.246초 → 0.043초였고, 원본 파일 바이트와 metadata를 다시 읽어 대조했습니다. 비압축 50묶음의 바이너리는 1,155,725,568B로 **약 231MB/s**였습니다.
+
+후속 압축 실험은 **5초·50수집·50저장·누락/오류 0회**, 1,155,710,976B의 바이너리를 metadata 포함 **629,479,352B**로 저장했습니다. 약 45.5% 절감·126MB/s이며, 30분으로 환산하면 약 227GB입니다. 짧은 정차 장면 기준이므로 주행·날씨·주변 물체에 따라 압축률과 비용은 달라집니다. 대표 기존 3표본은 압축 전후 모든 파일 바이트와 metadata가 일치했고, 새 압축 기록의 첫·중간·마지막 점군 복원과 마지막 RGB를 확인했습니다. 잘린 프레임과 checksum 손상도 읽기에서 거절했습니다. 원본은 로컬 `stream-zstd-live/`와 `zstd-first/`입니다(`research/live/2026-10-08-camera-rig/`). 장시간 전체 기록의 저장량은 여전히 큽니다.
 
 수집 중 패닉에서 worker 종료·hook 0, 수집 중 메타로더 unload에서 core와 pipe 해제를 확인했습니다. 다시 로드하면 Tier 0이며 SDK·기존 FFB가 유지됩니다. 로컬 원본은 `research/live/2026-10-08-camera-rig/stream-017-archive/`와 `stream-017-lifecycle.json`입니다.
 

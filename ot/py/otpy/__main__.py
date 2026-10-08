@@ -60,12 +60,14 @@ def main():
     bundles.add_argument("--format", choices=("raw", "rgbd8", "raw+rgbd8"), default="rgbd8")
     bundles.add_argument("--color-gain", type=float, help="Omit to calibrate a fixed exposure from one raw sample")
     bundles.add_argument("--vehicles", action="store_true", help="Include same-pass vehicle model metadata for box projection")
+    bundles.add_argument("--archive", choices=("zstd", "zip"), default="zstd", help="Lossless TAR.ZST (optional codec) or uncompressed ZIP")
+    bundles.add_argument("--workers", type=int, default=2, help="Bounded number of parallel file writers")
     reconstruct = sub.add_parser("reconstruct", help="Offline pass-camera point cloud from a saved DLL capture (NumPy)")
     reconstruct.add_argument("directory", help="Capture directory containing images.json")
     reconstruct.add_argument("--output", required=True, help="New NPZ file; existing files are not overwritten")
     reconstruct.add_argument("--depth-source", choices=("geometry", "attributes"), default="geometry")
     birdseye = sub.add_parser("birdseye", help="Fuse a saved same-frame RGB-D bundle into a world-axis top-down view")
-    birdseye.add_argument("directory", help="Bundle directory containing bundle.json")
+    birdseye.add_argument("directory", help="Bundle directory, .zip or .tar.zst capture")
     birdseye.add_argument("--output", required=True, help="New PNG")
     birdseye.add_argument("--points", help="Optional new NPZ with world points, colors, sources and observation grid")
     birdseye.add_argument("--radius", type=float, default=40.0, help="Crop radius in game world units")
@@ -115,13 +117,15 @@ def main():
             options = dict(hz=args.hz, duration=args.duration, format=args.format, color_gain=args.color_gain) if args.action == "start" else {}
             result = client.request("stream", action=args.action, **options)
         elif args.command == "record_bundles":
+            if args.workers < 1:
+                parser.error("--workers must be positive")
             if not (math.isfinite(args.hz) and args.hz > 0 and math.isfinite(args.duration) and args.duration > 0):
                 parser.error("--hz and --duration must be finite and positive")
             if args.color_gain is not None and (not math.isfinite(args.color_gain) or args.color_gain <= 0):
                 parser.error("--color-gain must be finite and positive")
             from .recording import record_bundles
             result = record_bundles(client, args.config, args.hz, args.duration, args.output,
-                                    args.format, args.color_gain, args.vehicles)
+                                    args.format, args.color_gain, args.vehicles, args.archive, args.workers)
         elif args.command == "watch":
             if not 0 < args.hz <= 240:
                 parser.error("--hz must be in (0, 240]")
