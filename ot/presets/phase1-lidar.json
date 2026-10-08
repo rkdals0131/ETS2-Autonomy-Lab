@@ -1,0 +1,29 @@
+{
+  "description": "Ideal instantaneous depth-derived beams for the FH5 body-fit camera rig. Angles are relative to each axis_camera: azimuth left, elevation up. Research sampling pattern, not a vendor sensor model. Distances retain capture world_units.",
+  "sensors": [
+    {
+      "name": "L_F",
+      "axis_camera": "mirror1",
+      "sources": ["mirror0", "mirror1"],
+      "azimuth_deg": [-60, 60, 0.2],
+      "elevation_bands_deg": [[-5, 3, 11], [3, 13, 51], [13, 21, 11]],
+      "max_range": 250
+    },
+    {
+      "name": "L_PL",
+      "axis_camera": "mirror2",
+      "sources": ["mirror2"],
+      "azimuth_deg": [-50, 50, 0.2],
+      "elevation_bands_deg": [[-13, 27, 64]],
+      "max_range": 150
+    },
+    {
+      "name": "L_PR",
+      "axis_camera": "mirror5",
+      "sources": ["mirror5"],
+      "azimuth_deg": [-50, 50, 0.2],
+      "elevation_bands_deg": [[-13, 27, 64]],
+      "max_range": 150
+    }
+  ]
+}

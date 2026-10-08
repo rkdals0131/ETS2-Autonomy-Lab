@@ -56,6 +56,8 @@ SDK 가속도를 `sensor_msgs/Imu.linear_acceleration`에 그대로 넣지 않�
 
 ## depth와 의사 LiDAR
 
+현재는 저장된 동일 프레임의 4뷰 geometry DSV에서 전방·좌우 포드의 이상적 빔 점군을 만드는 `lidar` 명령을 지원합니다. [소스 선택·좌표·결측·실측](15_virtual_sensors.md)에 구현 범위를 정리했습니다. 아래 내용은 깊이 복원의 기본 원칙입니다.
+
 GPU depth buffer는 보통 미터 거리 그 자체가 아닙니다. 사용 중인 projection, clip 범위, reversed Z, viewport, 샘플링과 후처리 여부를 확인합니다.
 
 현재 설치 빌드의 DX11 기본 투영 경로는 **NDC에서** near=1, far=0인 reversed Z입니다. 실제 미러 surface 작업의 viewport 깊이 범위는 약 0.01–0.9였으므로 텍스처 값을 그대로 NDC 깊이로 쓰면 안 됩니다. 메인 실내는 0.9–1.0이며 실외와 투영의 near/far도 다릅니다. 아래 `P`에는 scene의 원본 CPU 행렬이 아니라 backend 보정까지 적용한 행렬을 사용해야 합니다. 한편 기본 diffuse의 `attributes_0.w`에는 이미 선형 카메라 Z가 저장되므로 같은 pass의 ray 상수로 복원하는 별도 경로를 우선 조사합니다. [분석 근거와 적용 범위](12_dx11_mirror_render_path.md)를 참고합니다. 아직 GPU 픽셀과 실거리를 대조한 결과는 아닙니다.

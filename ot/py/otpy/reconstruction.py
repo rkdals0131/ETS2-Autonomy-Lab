@@ -45,11 +45,12 @@ def reconstruct_capture(directory, depth_source="geometry"):
     return reconstruct_view(meta, read_data, depth_source)
 
 
-def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, color=False):
+def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, color=False, pixel_xy=None):
     """Decode one pass from files or immutable bundle bytes with the same math.
 
     read_data(filename, dtype) returns the raw one-dimensional array. Stride
     samples original pixel centers; it never changes intrinsics or downsizes Z.
+    pixel_xy selects explicit integer pixel centers instead of a regular grid.
     """
     if depth_source not in ("geometry", "attributes"):
         raise ValueError("depth_source must be geometry or attributes")
@@ -64,6 +65,15 @@ def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, colo
     height, width = dimensions["height"], dimensions["width"]
     if height <= 0 or width <= 0:
         raise ValueError("Image dimensions must be positive")
+    if pixel_xy is None:
+        y, x = np.mgrid[0:height:stride, 0:width:stride]
+    else:
+        pixels = np.asarray(pixel_xy)
+        if (stride != 1 or pixels.ndim != 2 or pixels.shape[1] != 2
+                or not np.issubdtype(pixels.dtype, np.integer)
+                or np.any(pixels < 0) or np.any(pixels >= [width, height])):
+            raise ValueError("Explicit pixels require in-bounds integer XY pairs and stride 1")
+        x, y = pixels.T
 
     # File decoding is the boundary: establish format, row layout and alignment
     # here, then use the decoded arrays directly in the numerical path below.
@@ -71,7 +81,8 @@ def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, colo
         if (info["format"] != fmt or (info["height"], info["width"]) != (height, width)
                 or info["row_bytes"] != width * np.dtype(dtype).itemsize * channels):
             raise ValueError("Unsupported or unaligned image: " + info["file"])
-        return read_data(info["file"], dtype).reshape(height, width, channels)[::stride, ::stride]
+        image = read_data(info["file"], dtype).reshape(height, width, channels)
+        return image[::stride, ::stride] if pixel_xy is None else image[y, x]
 
     if packed:
         if depth_source != "geometry":
@@ -104,7 +115,6 @@ def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, colo
     if (not np.isfinite(viewport).all() or vp["width"] <= 0 or vp["height"] <= 0
             or vp["max_depth"] <= vp["min_depth"]):
         raise ValueError("Invalid captured geometry viewport")
-    y, x = np.mgrid[0:height:stride, 0:width:stride]
     u = (x + 0.5 - vp["x"]) / vp["width"]
     v = (y + 0.5 - vp["y"]) / vp["height"]
     valid &= (u >= 0) & (u < 1) & (v >= 0) & (v < 1)
@@ -146,6 +156,8 @@ def reconstruct_view(meta, read_data, depth_source="geometry", *, stride=1, colo
     color_encoding = None
     if color:
         arrays["rgb_linear"], color_encoding = read_color(meta, read_data, stride, expected_size=(height, width))
+        if pixel_xy is not None:
+            arrays["rgb_linear"] = arrays["rgb_linear"][y, x]
     description = {
         "camera": name, "render_frame_id": meta["render_frame_id"],
         "observation_session_qpc": meta["observation_session_qpc"],

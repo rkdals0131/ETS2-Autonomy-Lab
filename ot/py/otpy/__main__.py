@@ -66,6 +66,10 @@ def main():
     reconstruct.add_argument("directory", help="Capture directory containing images.json")
     reconstruct.add_argument("--output", required=True, help="New NPZ file; existing files are not overwritten")
     reconstruct.add_argument("--depth-source", choices=("geometry", "attributes"), default="geometry")
+    lidar = sub.add_parser("lidar", help="Offline ideal LiDAR beams from co-located bundle depth views")
+    lidar.add_argument("directory", help="Bundle directory, .zip or .tar.zst capture")
+    lidar.add_argument("--config", required=True, help="JSON beam pattern and camera sources")
+    lidar.add_argument("--output", required=True, help="New NPZ with beams, source pixels, misses and world points")
     birdseye = sub.add_parser("birdseye", help="Fuse a saved same-frame RGB-D bundle into a world-axis top-down view")
     birdseye.add_argument("directory", help="Bundle directory, .zip or .tar.zst capture")
     birdseye.add_argument("--output", required=True, help="New PNG")
@@ -91,6 +95,9 @@ def main():
         if args.command == "reconstruct":
             from .reconstruction import save_reconstruction
             result = save_reconstruction(args.directory, args.output, args.depth_source)
+        elif args.command == "lidar":
+            from .lidar import save_lidar
+            result = save_lidar(args.directory, args.config, args.output)
         elif args.command == "birdseye":
             from .birdseye import save_birdseye
             result = save_birdseye(args.directory, args.output, radius=args.radius, stride=args.stride, points=args.points)
