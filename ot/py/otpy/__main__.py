@@ -13,7 +13,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("loader", help="Resident loader control; module changes run at SDK frame end").add_argument(
         "action", choices=("status", "load", "unload", "reload"), default="status", nargs="?")
-    for name in ("ping", "version", "hooks", "frames", "schema", "snapshot", "state", "panic", "dump", "reload_permissions"):
+    for name in ("ping", "version", "hooks", "frames", "schema", "snapshot", "state", "panic", "dump", "reload_permissions", "truck_config"):
         sub.add_parser(name)
     sub.add_parser("read").add_argument("field")
     sub.add_parser("tier").add_argument("value", type=int, choices=(0, 1), nargs="?")
@@ -135,6 +135,8 @@ def main():
                     parser.error("camera_rig apply requires --config")
                 with open(args.config, encoding="utf-8") as source:
                     settings = json.load(source)
+                from .rig_layout import resolve_layout
+                settings = resolve_layout(settings, client)
                 client.tier(1)
                 client.request("render_probe", enabled=True, mode="rig" if args.rig_only else "observe", frame_timing=args.frames)
                 try:

@@ -40,6 +40,7 @@ private:
     json snapshot() const;
     scs_telemetry_init_params_v100_t api_;
     json schema_,config_=json::object(),values_=json::object(),registration_=json::object();
+    std::atomic<std::shared_ptr<const json>> truck_config_;
     std::string executable_hash_,gate_error_;
     bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,allow_camera_rig_=false,paused_=true;
     std::mutex control_;
@@ -137,7 +138,31 @@ void Runtime::event(scs_event_t event,const void* data) {
     else if(event==SCS_TELEMETRY_EVENT_paused) paused_=true;
     else if(event==SCS_TELEMETRY_EVENT_configuration && data) {
         const auto& config=*static_cast<const scs_telemetry_configuration_t*>(data);
-        if(config.id && std::strcmp(config.id,"truck")==0) {++generation_;values_=json::object();}
+        if(config.id && std::strcmp(config.id,"truck")==0) {
+            ++generation_;values_=json::object();
+            json attributes=json::array();
+            for(const auto* attribute=config.attributes;attribute->name;++attribute) {
+                const std::string_view name=attribute->name;
+                if(name!="id" && name!="brand" && name!="name" && name!="cabin.position" &&
+                   name!="head.position" && name!="hook.position" && name!="wheels.count" &&
+                   !name.starts_with("wheel.")) continue;
+                const auto& value=attribute->value;json decoded;
+                switch(value.type) {
+                    case SCS_VALUE_TYPE_bool:decoded=value.value_bool.value!=0;break;
+                    case SCS_VALUE_TYPE_u32:decoded=value.value_u32.value;break;
+                    case SCS_VALUE_TYPE_float:decoded=value.value_float.value;break;
+                    case SCS_VALUE_TYPE_string:decoded=value.value_string.value;break;
+                    case SCS_VALUE_TYPE_fvector: {
+                        const auto& v=value.value_fvector;decoded={v.x,v.y,v.z};break;
+                    }
+                    default:continue;
+                }
+                attributes.push_back({{"name",name},{"index",attribute->index==SCS_U32_NIL?json(nullptr):json(attribute->index)},
+                    {"value",std::move(decoded)}});
+            }
+            truck_config_.store(std::make_shared<const json>(json{{"source","SDK truck configuration"},
+                {"truck_generation",generation_},{"attributes",std::move(attributes)}}));
+        }
     } else if(event==SCS_TELEMETRY_EVENT_frame_start && data) {
         ++frame_; clock_=*static_cast<const scs_telemetry_frame_start_t*>(data);
         // Explicitly distinguish a missing callback in this frame from a fresh zero.
@@ -216,11 +241,16 @@ json Runtime::command(const json& request) {
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","capture_mirrors","manual_dump","panic"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","capture_mirrors","manual_dump","panic"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0},
         {"field_writes",false},{"camera_rig",render_probe_->camera_rig(json::object())},{"channels",registration_}};
     if(cmd=="schema") return schema_;
+    if(cmd=="truck_config") {
+        auto config=truck_config_.load();
+        if(!config) throw std::runtime_error("No SDK truck configuration has been received");
+        return *config;
+    }
     if(cmd=="reload_permissions") return reload_permissions();
     if(cmd=="hooks") return render_probe_->status();
     if(cmd=="frames") return render_probe_->frames(request.value("after_id",uint64_t(0)));

@@ -38,6 +38,11 @@ struct ComputeState {
     }
 };
 }
+void GpuPack::release_gpu() {
+    for(auto& image:images) image.staging.Reset();
+    for(auto& work:work_) work=Work{};
+    device_.Reset();
+}
 void GpuPack::depth(ID3D11DeviceContext1* context,ID3D11Texture2D* source,
                     ID3D11Texture2D* attributes,ID3D11Texture2D* material,
                     const D3D11_VIEWPORT& vp,const std::string& camera) {
@@ -50,8 +55,9 @@ void GpuPack::color(ID3D11DeviceContext1* context,ID3D11Texture2D* source,float 
 void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*,3> sources,
                        const std::array<float,12>& values,bool depth,const std::string& camera) {
     Com<ID3D11Device> device;context->GetDevice(&device);
-    std::array<Com<ID3D11Texture2D>,3> copies;
-    std::array<Com<ID3D11ShaderResourceView>,3> views;
+    if(device_.Get()!=device.Get()) {release_gpu();device_=device;}
+    auto& work=work_[depth?0:1];
+    auto& copies=work.copies;auto& views=work.views;
     D3D11_TEXTURE2D_DESC dimensions{};sources[0]->GetDesc(&dimensions);
     for(size_t i=0;i<sources.size();++i) {
         if(!sources[i]) continue;
@@ -71,40 +77,47 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
         }
         desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
         desc.CPUAccessFlags=desc.MiscFlags=0;
-        check(device->CreateTexture2D(&desc,nullptr,&copies[i]),"CreateTexture2D(pack input)");
-        D3D11_SHADER_RESOURCE_VIEW_DESC srv{};srv.Format=view_format;
-        srv.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D;srv.Texture2D.MipLevels=1;
-        check(device->CreateShaderResourceView(copies[i].Get(),&srv,&views[i]),"CreateShaderResourceView(pack input)");
+        const auto& previous=work.input_desc[i];
+        if(!copies[i] || previous.Width!=desc.Width || previous.Height!=desc.Height || previous.Format!=desc.Format) {
+            copies[i].Reset();views[i].Reset();
+            check(device->CreateTexture2D(&desc,nullptr,&copies[i]),"CreateTexture2D(pack input)");++allocations_;
+            D3D11_SHADER_RESOURCE_VIEW_DESC srv{};srv.Format=view_format;
+            srv.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D;srv.Texture2D.MipLevels=1;
+            check(device->CreateShaderResourceView(copies[i].Get(),&srv,&views[i]),"CreateShaderResourceView(pack input)");++allocations_;
+            work.input_desc[i]=desc;
+        }
         context->CopyResource(copies[i].Get(),sources[i]);
     }
     auto desc=dimensions;desc.Format=depth?DXGI_FORMAT_R32_FLOAT:DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_UNORDERED_ACCESS;
     desc.CPUAccessFlags=desc.MiscFlags=0;
-    Com<ID3D11Texture2D> output;
-    check(device->CreateTexture2D(&desc,nullptr,&output),"CreateTexture2D(pack output)");
-    Com<ID3D11UnorderedAccessView> uav;
-    check(device->CreateUnorderedAccessView(output.Get(),nullptr,&uav),"CreateUnorderedAccessView(pack output)");
-    Com<ID3D11ComputeShader> shader;
-    check(device->CreateComputeShader(depth?ot_pack_depth:ot_pack_color,
-        depth?sizeof(ot_pack_depth):sizeof(ot_pack_color),nullptr,&shader),"CreateComputeShader(pack)");
-    D3D11_BUFFER_DESC buffer{};buffer.ByteWidth=sizeof(values);buffer.Usage=D3D11_USAGE_IMMUTABLE;
-    buffer.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
-    D3D11_SUBRESOURCE_DATA data{};data.pSysMem=values.data();
-    Com<ID3D11Buffer> constants;
-    check(device->CreateBuffer(&buffer,&data,&constants),"CreateBuffer(pack constants)");
     auto& image=images[depth?0:1];
-    desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-    check(device->CreateTexture2D(&desc,nullptr,&image.staging),"CreateTexture2D(pack staging)");
+    if(!work.output || work.output_desc.Width!=desc.Width || work.output_desc.Height!=desc.Height) {
+        work.output.Reset();work.uav.Reset();image.staging.Reset();
+        check(device->CreateTexture2D(&desc,nullptr,&work.output),"CreateTexture2D(pack output)");++allocations_;
+        check(device->CreateUnorderedAccessView(work.output.Get(),nullptr,&work.uav),"CreateUnorderedAccessView(pack output)");++allocations_;
+        work.output_desc=desc;
+        auto staging=desc;staging.Usage=D3D11_USAGE_STAGING;staging.BindFlags=0;staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        check(device->CreateTexture2D(&staging,nullptr,&image.staging),"CreateTexture2D(pack staging)");++allocations_;
+    }
+    if(!work.shader) {
+        check(device->CreateComputeShader(depth?ot_pack_depth:ot_pack_color,
+            depth?sizeof(ot_pack_depth):sizeof(ot_pack_color),nullptr,&work.shader),"CreateComputeShader(pack)");++allocations_;
+        D3D11_BUFFER_DESC buffer{};buffer.ByteWidth=sizeof(values);buffer.Usage=D3D11_USAGE_DEFAULT;
+        buffer.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
+        check(device->CreateBuffer(&buffer,nullptr,&work.constants),"CreateBuffer(pack constants)");++allocations_;
+    }
+    context->UpdateSubresource(work.constants.Get(),0,nullptr,values.data(),0,0);
     {
         ComputeState restore(context);
         ID3D11ShaderResourceView* inputs[]={views[0].Get(),views[1].Get(),views[2].Get()};
         context->CSSetShaderResources(0,3,inputs);
-        context->CSSetUnorderedAccessViews(0,1,uav.GetAddressOf(),nullptr);
-        context->CSSetConstantBuffers(0,1,constants.GetAddressOf());
-        context->CSSetShader(shader.Get(),nullptr,0);
+        context->CSSetUnorderedAccessViews(0,1,work.uav.GetAddressOf(),nullptr);
+        context->CSSetConstantBuffers(0,1,work.constants.GetAddressOf());
+        context->CSSetShader(work.shader.Get(),nullptr,0);
         context->Dispatch((desc.Width+7)/8,(desc.Height+7)/8,1);
     }
-    context->CopyResource(image.staging.Get(),output.Get());
+    context->CopyResource(image.staging.Get(),work.output.Get());
     image.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*4);
     image.description={{"file",camera+(depth?"_depth_f32.bin":"_color_ldr.bin")},
         {"width",desc.Width},{"height",desc.Height},{"row_bytes",desc.Width*4},

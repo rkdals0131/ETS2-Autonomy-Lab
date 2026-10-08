@@ -1,4 +1,4 @@
-# ot 0.14.0 — 자유 배치 6뷰와 경량 RGB-D 수집
+# ot 0.15.0 — Phase 1 전방·좌우 포드 4뷰
 
 > **확정:** 기존 미러 슬롯 0–5를 임의 위치·회전·FOV의 센서로 전용했습니다. 서로 다른 샤시 상대 위치의 여섯 영상을 같은 Present 구간 27에서 수집했습니다. 월드 고정 카메라도 동작합니다.
 > **0.11.0:** 여섯 RGB·깊이 버퍼를 각각 640×360으로 맞추고 공유 메모리로 실시간 표시했습니다. 약 10.3초에 완전한 6뷰 묶음 45개, 누락 0개였습니다.
@@ -6,7 +6,41 @@
 > **0.12.1:** 미러 출력이 없는 pass의 문자열·JSON 생성을 생략합니다. 같은 코드 경로의 짧은 관측에서 compile-begin 평균 15.29 → 10.40µs, 이후 6뷰 12묶음 모두 완료했습니다. 게임 전경 FPS 비교 결과는 아직 없습니다.
 > **0.13.0:** 카메라 배치만 유지하는 4-hook 모드를 추가했습니다. 배치를 유지하면서 영상 관측을 켜고 끌 수 있으며, 전환 직후 6뷰 5묶음 모두 완료했습니다. Present 기록에 실제 게임 전경 여부도 포함합니다.
 > **0.14.0:** GPU에서 RGBA8·R32F로 변환하는 `rgbd8` 형식을 추가했습니다. 640×360 6뷰 픽셀 전송량은 44.24 → 11.06 MB로 75% 감소했습니다. 같은 프레임의 원본과 경량 깊이·복원 좌표를 대조했습니다.
-> **다음:** 주행·고개 조작 중 리그 유지와 메인 카메라 기준 가시성·LOD의 누락 해결. 장시간 주행과 성능 비교는 남아 있습니다.
+> **0.15.0:** 기본 리그를 고속도로용 전방 협각·광각과 좌우 포드 4뷰로 변경했습니다. SDK 바퀴 구성으로 후축 기준 장착 좌표를 변환합니다. 같은 해상도에서 GPU 복사·변환 자원을 재사용하며 실제 4뷰 수집·크기/형식 전환을 확인했습니다.
+> **다음:** 연속 수집, 전경 성능 비교, 트레일러 가림·주행 중 가시성 누락. 가상 LiDAR·레이더와 주행보조 모델은 후속 구현입니다.
+
+### Phase 1 고속도로 4뷰
+
+기본 실행은 [phase1-highway.json](presets/phase1-highway.json)과 `rgbd8`입니다. [Phase 1 설계](../docs/14_phase1_highway_sensors.md)에 따라 전방 관측과 좌우 인접 차로를 우선합니다. 트랙터 정후방 카메라는 두지 않으며, 기존 6뷰 프리셋은 연구용 선택지로 유지합니다.
+
+```powershell
+.\ot\preview.cmd
+# 배치만 유지하고 영상 수집은 끄기
+.\ot\ot.cmd camera_rig apply --config .\ot\presets\phase1-highway.json --rig-only
+# 원래 미러로 복귀
+.\ot\ot.cmd panic
+```
+
+| 센서 / 슬롯 | base_link 위치 x/y/z (m) | yaw / pitch | HFOV | 실제 RGB-D 크기 |
+| --- | --- | --- | --- | --- |
+| C_FN / 0 | 4.95 / 0 / 2.90 | 0 / −1° | 30° | 1280×720 |
+| C_FW / 1 | 같은 M_FC 원점 | 0 / −5° | 120° | 1280×720 |
+| C_RL / 2 | 4.70 / +1.55 / 2.30 | +165 / −8° | 70° | 960×544 |
+| C_RR / 5 | 4.70 / −1.55 / 2.30 | −165 / −8° | 70° | 960×544 |
+
+장착 위치는 시작값입니다. 좌표의 원점은 후축 지면, +x 전방·+y 왼쪽·+z 위입니다. `position_base_link`를 읽으면 `truck_config`의 구동 바퀴 중심·반지름으로 명목 후축 지면 원점을 구하고, `p_chassis = origin + (-y, z, -x)`로 변환합니다. 실제 지면이나 서스펜션 변위는 측정하지 않습니다. 현재 Volvo FH5의 SDK 기준 후축 원점은 `[0, -0.0041681, 2.0315917]`, 앞뒤 축 간 거리는 약 3.8241 m였습니다. 두 전방 pass의 월드 원점 차이는 0이었고 실제 HFOV는 30°·120°·70°·70°와 부동소수 오차 범위에서 일치했습니다.
+
+여러 구동축이면 프리셋 최상위에 `base_link_wheels`로 기준축의 바퀴 index를 지정합니다. 현재 FH5는 `[2, 3]`을 자동 선택합니다. API `truck_config`와 같은 이름의 CLI로 SDK 값을 확인할 수 있습니다. 변환 결과의 `mount_calibration`에 차량 ID·바퀴 index·원점을 남깁니다. 변환은 파일을 열거나 CLI로 적용할 때 실행됩니다. 편집기에서 저장한 JSON은 해당 차량의 **변환된 chassis 좌표**이며, 다른 트럭으로 바꾸면 원래 `position_base_link` 프리셋부터 다시 적용합니다.
+
+현재 미러 배율 2×2에서 base 크기 `[640,360]`은 1280×720, `[480,270]`은 엔진 정렬로 960×544가 됐습니다. 목표 960×540으로 잘라 저장하지 않으며 실제 projection·viewport·크기를 함께 사용합니다. 메인 화면 스케일링과 별개이고 게임 설정을 바꾸지 않습니다.
+
+![Phase 1 네 카메라의 실제 도로 영상](../docs/images/phase1-four-0.15.0.png)
+
+초기 10회 모두 같은 Present 구간의 4뷰 묶음으로 완료했습니다(원본 보정 1회 + 경량 9회, 약 3.47초). 별도 실제 미리보기 수집 worker는 5초에 16묶음·누락/오류 0회였으며 창은 띄우지 않았습니다. 측후방에는 주행 중인 AI 트럭이 보였습니다. 이 결과는 정차·백그라운드 수집이며 전경 FPS, 트레일러 가림, 선회 중 사각지대와 30분 안정성은 검증하지 않았습니다.
+
+4뷰 경량 픽셀은 묶음당 **23,101,440 B**(현재 원본의 25%)입니다. 고해상도 두 전방 뷰 때문에 기존 640×360 6뷰보다 픽셀 수는 많습니다. 컴퓨트 입력·출력·shader·상수 버퍼, staging과 완료 query를 재사용합니다. 기본 차량 draw 추적이 꺼진 상태에서 첫 형식별 준비 뒤 추가 GPU 자원 생성 없이 반복 수집했습니다. 해상도 변경은 필요한 자원만 다시 만들며 raw/경량 전환 후 실제 출력도 확인했습니다. 같은 프레임의 원본 DSV와 경량 깊이 차이는 유효 픽셀에서 0이었습니다.
+
+이는 카메라별 자원 재사용이며 여러 GPU 표본을 동시에 처리하는 연속 ring은 아직 없습니다. 차량별 draw 상수 추적 옵션은 여전히 표본마다 별도 staging을 만들 수 있습니다. 패닉·관측 종료·payload unload에서 보유 GPU 자원을 해제합니다. 원본은 로컬 `research/live/2026-10-08-camera-rig/phase1-first-run.json`, `phase1-resource-reuse.json`, `phase1-preview-run.json`, `phase1-first/`에 있습니다.
 
 ### 화면을 보며 카메라 배치 조절
 
@@ -29,19 +63,19 @@
 
 초기 편집 실험의 누락 2/70회 및 4/48회를 조사하면서, 상태 조회가 mutex를 잡으면 렌더 callback이 `try_to_lock` 실패로 필수 바인딩을 건너뛰는 경로를 수정했습니다. 수집 중에만 같은 mutex에서 순서를 기다리고, idle/ready는 atomic phase로 즉시 반환합니다. 상태 조회의 대기 비용은 남으며 장기 성능 비교를 대신하는 결과는 아닙니다. 여섯 카메라가 `armed`인 상태의 메타로더 unload/load도 성공했고 Tier 0·hook 0·SDK 9채널로 복귀했습니다. 실행 원본은 로컬 `research/live/2026-10-08-camera-rig/editor-final-result.json`, `editor-pending-unload.json`에 있습니다.
 
-### 6뷰 실시간 미리보기
+### 실시간 미리보기
 
 일반 DX11 게임의 운전석에서 프로젝트 루트의 다음 명령을 실행합니다. Python 3.13의 NumPy·Pillow·Tk를 사용하며 연구 PC에는 설치되어 있습니다. 아래 리그 사용 절의 권한 설정이 필요합니다.
 
 ```powershell
 .\ot\preview.cmd
 # 10초 후 자동 종료하고 마지막 표시 영상을 새 PNG에 저장
-.\ot\preview.cmd --duration 10 --snapshot six-views.png
+.\ot\preview.cmd --duration 10 --snapshot phase1-views.png
 # 다른 카메라 배치 파일 사용
-.\ot\ot.cmd preview --config .\ot\presets\surround-six.json --hz 5
+.\ot\preview.cmd --config .\ot\presets\surround-preview.json --hz 5
 ```
 
-창에서 여섯 영상을 함께 보고 공통 노출(EV)을 바꾸거나 PNG로 저장할 수 있습니다. 창을 닫으면 수집을 멈추고 `panic`으로 기본 미러·Tier 0으로 돌아갑니다. 게임이 전경이면 DLL의 F11이, 미리보기에 포커스가 있으면 창의 F11 종료 callback이 동작합니다. 다른 앱에 포커스가 있을 때의 전역 단축키는 아니며 물리 키 시험은 수행하지 않았습니다. 미리보기용 임시 이미지 파일은 만들지 않으며, 원시 RGB·깊이·재질 묶음은 `OT_Bundles`에서 읽습니다. 별도 창이므로 게임 화면을 가리거나 비활성 FPS 제한에 영향을 줄 수 있습니다.
+창에서 선택한 영상을 함께 보고 공통 노출(EV)을 바꾸거나 PNG로 저장할 수 있습니다. 4뷰는 2×2, 6뷰는 3×2로 표시합니다. 창을 닫으면 수집을 멈추고 `panic`으로 기본 미러·Tier 0으로 돌아갑니다. 게임이 전경이면 DLL의 F11이, 미리보기에 포커스가 있으면 창의 F11 종료 callback이 동작합니다. 다른 앱에 포커스가 있을 때의 전역 단축키는 아니며 물리 키 시험은 수행하지 않았습니다. 미리보기용 임시 이미지 파일은 만들지 않으며 선택한 형식의 묶음을 `OT_Bundles`에서 읽습니다. 별도 창이므로 게임 화면을 가리거나 비활성 FPS 제한에 영향을 줄 수 있습니다.
 
 [surround-preview.json](presets/surround-preview.json)은 6방향 샤시 리그에 16:9 FOV와 `base_resolution: [320, 180]`을 지정합니다. 이 값은 **게임의 미러 렌더 배율을 적용하기 전 크기**입니다. 연구 PC의 미러 배율 2×2에서 실제 RGB·깊이 버퍼는 모두 640×360이었습니다. 메인 화면 스케일링과 별개이며 게임 설정은 변경하지 않습니다. 실제 크기는 각 영상 제목에 표시합니다.
 
@@ -97,7 +131,7 @@ RGBA8의 alpha는 255입니다. 색상은 음수·비유한 성분을 0으로 �
 
 ![경량 형식에서 표시한 실제 6뷰](../docs/images/six-rgbd8-0.14.0.png)
 
-이번 계측은 백그라운드이며 고정 10 Hz·장시간 주행 결과가 아닙니다. staging·compute 자원은 아직 표본마다 생성합니다. `OT_Bundles` 슬롯은 첫 발행 크기로 정해지므로, 경량 묶음으로 시작한 세션에서 더 큰 원본 묶음을 발행하려면 reader를 닫고 payload를 reload해야 합니다. 실제 결과는 로컬 `research/live/2026-10-08-camera-rig/rgbd-compact-run.json`, `rgbd-first-comparison.json`, `rgbd-reconstruction-comparison.json`, `rgbd-color-gain-comparison.json`, `rgbd-preview-auto.json`에 있습니다.
+이번 0.14.0 계측은 백그라운드이며 고정 10 Hz·장시간 주행 결과가 아닙니다. 후속 0.15.0에서 staging·compute 자원 재사용을 추가했습니다. `OT_Bundles` 슬롯은 첫 발행 크기로 정해지므로, 경량 묶음으로 시작한 세션에서 더 큰 원본 묶음을 발행하려면 reader를 닫고 payload를 reload해야 합니다. 실제 결과는 로컬 `research/live/2026-10-08-camera-rig/rgbd-compact-run.json`, `rgbd-first-comparison.json`, `rgbd-reconstruction-comparison.json`, `rgbd-color-gain-comparison.json`, `rgbd-preview-auto.json`에 있습니다.
 
 ### 미러 pass만 자세히 관측
 

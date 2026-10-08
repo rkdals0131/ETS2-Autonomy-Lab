@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(ot_core VERSION 0.14.0 LANGUAGES C CXX)
+project(ot_core VERSION 0.15.0 LANGUAGES C CXX)
 if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "ot_core requires MSVC x64 on Windows")
 endif()

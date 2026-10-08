@@ -14,6 +14,7 @@ from .client import Client
 from .bundles import BundleReader
 from .rig_editor import RigEditor
 from .color import read_color
+from .rig_layout import resolve_layout
 
 
 def _latest(output, message):
@@ -53,10 +54,12 @@ class Mosaic:
         if samples:
             target = max(float(np.nanpercentile(np.concatenate(samples), 99)), 1e-7)
             self.white = target if self.white is None else .9*self.white + .1*target
-        canvas = Image.new("RGB", (1456, 650), "#111820")
+        columns = 2 if len(decoded) <= 4 else 3
+        rows = (len(decoded)+columns-1)//columns
+        canvas = Image.new("RGB", (columns*484+4, rows*321+8), "#111820")
         drawing = ImageDraw.Draw(canvas)
         for index, (name, rgb, width, height, aspect, encoding) in enumerate(decoded):
-            x, y = 8 + (index % 3)*484, 8 + (index // 3)*321
+            x, y = 8 + (index % columns)*484, 8 + (index // columns)*321
             title = f"{self.names.get(name, name)}  |  {name}  |  {width} x {height}"
             drawing.text((x+4, y+4), title, font=self.font, fill="#e3eef8")
             # Resize in float32 before tone mapping; leave raw sensor arrays
@@ -175,6 +178,7 @@ def _capture(config, hz, stop, output, state, updates, capture_format="raw", col
 def run_preview(config_file, hz=5.0, duration=None, snapshot=None, capture_format="raw", color_gain=None):
     with open(config_file, encoding="utf-8") as stream:
         config = json.load(stream)
+    config = resolve_layout(config, Client())
     root = tk.Tk()
     root.title("ETS2 camera rig — live RGB")
     root.configure(bg="#111820")
@@ -204,7 +208,7 @@ def run_preview(config_file, hz=5.0, duration=None, snapshot=None, capture_forma
         if last_picture is None:
             return
         filename = filedialog.asksaveasfilename(parent=root, defaultextension=".png",
-                                              initialfile=f"ets2-six-{last_frame}.png",
+                                              initialfile=f"ets2-rig-{last_frame}.png",
                                               filetypes=[("PNG image", "*.png")])
         if filename:
             last_picture.save(filename)

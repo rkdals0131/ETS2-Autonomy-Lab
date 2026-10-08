@@ -24,6 +24,7 @@ public:
                  uint64_t binding_sequence, uint64_t sdk_frame, uint64_t render_frame,
                  uint64_t observation_session,const json* pass) noexcept;
 private:
+    enum class Phase { idle,armed,waiting_gpu,ready,error };
     template<class T> using Com=Microsoft::WRL::ComPtr<T>;
     struct Image {
         Com<ID3D11Texture2D> source,staging;
@@ -35,13 +36,15 @@ private:
         std::vector<uint8_t> bytes;
         json description;
     };
-    enum class Phase { idle,armed,waiting_gpu,ready,error };
     void submit(ID3D11DeviceContext* context, uint64_t sequence, uint64_t sdk_frame,
                 uint64_t render_frame, uint64_t observation_session);
     void collect(ID3D11DeviceContext* context);
     void geometry_constants(ID3D11DeviceContext* context,uint64_t binding_sequence);
     void vehicle_constants(ID3D11DeviceContext* context,ID3D11Device* device);
     void release_gpu();
+    void release_sources();
+    void prepare_staging(Image& image,const D3D11_TEXTURE2D_DESC& desc,ID3D11Device* device);
+    void prepare_constants(Constants& sample,UINT bytes,ID3D11Device* device);
     json status(bool metadata=true) const;
     json save();
     std::mutex mutex_;
@@ -57,6 +60,8 @@ private:
     std::vector<Constants> vehicle_constants_; // VS slot 0 of matched vehicle draw items
     Com<ID3D11Query> completion_;
     Com<ID3D11DeviceContext> context_;
+    Com<ID3D11Device> device_;
+    uint64_t allocations_=0;
     uint64_t sequence_=0,request_started_=0,geometry_binding_=0,geometry_sdk_=0;
     uint64_t geometry_frame_=0,requested_frame_=0;
     uint64_t gpu_polls_=0,bindings_seen_=0;

@@ -32,13 +32,33 @@ void check(HRESULT result,const char* operation) {
 }
 }
 
+void GpuCapture::release_sources() {
+    for(auto& image:images_) image.source.Reset();
+    geometry_depth_.source.Reset();context_.Reset();
+}
 void GpuCapture::release_gpu() {
-    packed_.release_gpu();
-    for(auto& image:images_) {image.source.Reset();image.staging.Reset();}
-    geometry_depth_.source.Reset();geometry_depth_.staging.Reset();
+    release_sources();packed_.release_gpu();
+    for(auto& image:images_) image.staging.Reset();
+    geometry_depth_.staging.Reset();
     for(auto& constants:geometry_constants_) constants.staging.Reset();
     for(auto& constants:vehicle_constants_) constants.staging.Reset();
-    completion_.Reset();context_.Reset();
+    completion_.Reset();device_.Reset();
+}
+void GpuCapture::prepare_staging(Image& image,const D3D11_TEXTURE2D_DESC& desc,ID3D11Device* device) {
+    D3D11_TEXTURE2D_DESC previous{};if(image.staging) image.staging->GetDesc(&previous);
+    if(!image.staging || previous.Width!=desc.Width || previous.Height!=desc.Height || previous.Format!=desc.Format) {
+        image.staging.Reset();
+        check(device->CreateTexture2D(&desc,nullptr,&image.staging),"CreateTexture2D(staging)");++allocations_;
+    }
+}
+void GpuCapture::prepare_constants(Constants& sample,UINT bytes,ID3D11Device* device) {
+    D3D11_BUFFER_DESC previous{};if(sample.staging) sample.staging->GetDesc(&previous);
+    if(!sample.staging || previous.ByteWidth!=bytes) {
+        sample.staging.Reset();
+        D3D11_BUFFER_DESC staging{};staging.ByteWidth=bytes;
+        staging.Usage=D3D11_USAGE_STAGING;staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        check(device->CreateBuffer(&staging,nullptr,&sample.staging),"CreateBuffer(constant staging)");++allocations_;
+    }
 }
 void GpuCapture::cancel() noexcept {
     try {
@@ -53,7 +73,7 @@ json GpuCapture::status(bool metadata) const {
         phase_==Phase::waiting_gpu?"waiting_gpu":phase_==Phase::ready?"ready":"error";
     json result={{"phase",phase},{"capture_sequence",sequence_},{"bindings_seen",bindings_seen_},
             {"camera",camera_},{"requested_frame_id",requested_frame_},{"last_label",last_label_},
-            {"gpu_polls",gpu_polls_},{"error",error_},
+            {"gpu_polls",gpu_polls_},{"error",error_},{"gpu_allocations",allocations_+packed_.allocations()},
             {"saved_directory",saved_.string()}};
     if(metadata) result["metadata"]=metadata_;
     return result;
@@ -63,7 +83,7 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool
     if(action=="arm") {
         if(phase_==Phase::armed || phase_==Phase::waiting_gpu)
             throw std::runtime_error("A camera capture is already pending");
-        release_gpu();
+        release_sources();
         options_=options;packed_.clear();
         for(auto& image:images_) image.pixels.clear();
         geometry_depth_.pixels.clear();
@@ -120,15 +140,17 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
                 submit(context,binding_sequence,sdk_frame,render_frame,observation_session);
                 return;
             }
-            release_gpu();
+            release_sources();
         }
         const auto label=target_name(pass,0);
         if(!label.empty()) last_label_=label;
         if(count==4) {
-            release_gpu();
+            release_sources();
             if(label!=camera_+"/attributes_0" || target_name(pass,3)!=camera_+"/attributes_3") return;
             auto flags=texture(targets[3]);
             if(!next || !flags) return;
+            Com<ID3D11Device> device;context->GetDevice(&device);
+            if(device_.Get()!=device.Get()) {release_gpu();device_=device;}
             images_[0].source=std::move(next);images_[1].source=std::move(flags);
             context_=context;geometry_binding_=binding_sequence;geometry_sdk_=sdk_frame;geometry_frame_=render_frame;
             geometry_pass_=*pass;geometry_gpu_=nullptr;geometry_depth_.pixels.clear();
@@ -180,7 +202,7 @@ void GpuCapture::geometry_constants(ID3D11DeviceContext* context,uint64_t bindin
         if(options_.raw()) {
             staging.Usage=D3D11_USAGE_STAGING;staging.BindFlags=0;
             staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;staging.MiscFlags=0;
-            check(device->CreateTexture2D(&staging,nullptr,&depth.staging),"CreateTexture2D(depth staging)");
+            prepare_staging(depth,staging,device.Get());
             depth.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*depth_pixel_bytes_);
             context->CopyResource(depth.staging.Get(),depth.source.Get());
             geometry_gpu_["depth_texture"]={{"file",camera_+"_geometry_depth.bin"},
@@ -213,9 +235,7 @@ void GpuCapture::geometry_constants(ID3D11DeviceContext* context,uint64_t bindin
         sample.description.update({{"source_buffer",reinterpret_cast<uintptr_t>(source.Get())},
             {"source_byte_width",desc.ByteWidth},{"source_byte_offset",offset},{"copied_bytes",bytes}});
         if(!bytes) continue;
-        D3D11_BUFFER_DESC staging{};staging.ByteWidth=static_cast<UINT>(bytes);
-        staging.Usage=D3D11_USAGE_STAGING;staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-        check(device->CreateBuffer(&staging,nullptr,&sample.staging),"CreateBuffer(constant staging)");
+        prepare_constants(sample,static_cast<UINT>(bytes),device.Get());
         sample.bytes.resize(static_cast<size_t>(bytes));
         sample.description["file"]=camera_+(stage==0?"_geometry_vs_cb0.bin":"_geometry_ps_cb0.bin");
         D3D11_BOX box{static_cast<UINT>(offset),0,0,static_cast<UINT>(offset+bytes),1,1};
@@ -252,9 +272,7 @@ void GpuCapture::vehicle_constants(ID3D11DeviceContext* context,ID3D11Device* de
                 {"geometry_address",draw.at("geometry_address")},{"draw_item_index",draw.at("draw_item_index")},
                 {"source_byte_width",desc.ByteWidth},{"source_byte_offset",offset},{"copied_bytes",bytes}});
             if(bytes) {
-                D3D11_BUFFER_DESC staging{};staging.ByteWidth=static_cast<UINT>(bytes);
-                staging.Usage=D3D11_USAGE_STAGING;staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-                check(device->CreateBuffer(&staging,nullptr,&sample.staging),"CreateBuffer(vehicle constant staging)");
+                prepare_constants(sample,static_cast<UINT>(bytes),device);
                 sample.bytes.resize(static_cast<size_t>(bytes));
                 sample.description["file"]=camera_+"_vehicle_"+std::to_string(vehicle_constants_.size())+"_vs_cb0.bin";
                 D3D11_BOX box{static_cast<UINT>(offset),0,0,static_cast<UINT>(offset+bytes),1,1};
@@ -280,7 +298,7 @@ void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t 
             throw std::runtime_error("Unsupported or unaligned camera texture descriptors");
         if(options_.raw()) {
             desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;desc.MiscFlags=0;
-            check(device->CreateTexture2D(&desc,nullptr,&image.staging),"CreateTexture2D(staging)");
+            prepare_staging(image,desc,device.Get());
             image.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*8);
             descriptions.push_back({{"file",camera_+"_"+names[i]+".bin"},
                 {"width",desc.Width},{"height",desc.Height},{"format",i==1?"R16G16B16A16_UINT":"R16G16B16A16_FLOAT"},
@@ -288,15 +306,15 @@ void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t 
         }
     }
     if(options_.packed()) {
-        if(!packed_.images[0].staging) throw std::runtime_error("RGB-D geometry depth was not captured");
+        if(packed_.images[0].description.is_null()) throw std::runtime_error("RGB-D geometry depth was not captured");
         Com<ID3D11DeviceContext1> context1;
         check(context->QueryInterface(IID_PPV_ARGS(&context1)),"QueryInterface(DeviceContext1)");
         packed_.color(context1.Get(),images_[2].source.Get(),options_.color_gain,camera_);
         for(const auto& image:packed_.images) descriptions.push_back(image.description);
     }
     D3D11_QUERY_DESC query{D3D11_QUERY_EVENT,0};
-    check(device->CreateQuery(&query,&completion_),"CreateQuery(EVENT)");
-    for(auto& image:images_) if(image.staging) context->CopyResource(image.staging.Get(),image.source.Get());
+    if(!completion_) {check(device->CreateQuery(&query,&completion_),"CreateQuery(EVENT)");++allocations_;}
+    for(auto& image:images_) if(options_.raw()) context->CopyResource(image.staging.Get(),image.source.Get());
     context->End(completion_.Get());
     ++sequence_;
     metadata_={{"capture_sequence",sequence_},{"camera",camera_},{"capture_format",options_.format},{"phase","leaving_camera_composition"},
@@ -320,7 +338,7 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
     std::array<D3D11_MAPPED_SUBRESOURCE,3> mapped{};
     size_t count=0;
     for(;count<images_.size();++count) {
-        if(!images_[count].staging) continue;
+        if(!options_.raw()) continue;
         const auto result=context->Map(images_[count].staging.Get(),0,D3D11_MAP_READ,
                                        D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped[count]);
         if(result==DXGI_ERROR_WAS_STILL_DRAWING || FAILED(result)) {
@@ -330,13 +348,13 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
         }
     }
     for(size_t i=0;i<images_.size();++i) {
-        if(!images_[i].staging) continue;
+        if(!options_.raw()) continue;
         auto& image=images_[i];const auto row=static_cast<size_t>(image.desc.Width)*8;
         for(unsigned y=0;y<image.desc.Height;++y)
             std::memcpy(image.pixels.data()+y*row,static_cast<uint8_t*>(mapped[i].pData)+y*mapped[i].RowPitch,row);
         context->Unmap(image.staging.Get(),0);
     }
-    if(geometry_depth_.staging) {
+    if(options_.raw() && !geometry_depth_.pixels.empty()) {
         D3D11_MAPPED_SUBRESOURCE mapped_depth{};
         const auto result=context->Map(geometry_depth_.staging.Get(),0,D3D11_MAP_READ,
             D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped_depth);
@@ -351,7 +369,7 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
     if(options_.packed() && !packed_.collect(context)) return;
     json constants_json=json::array();
     for(auto& sample:geometry_constants_) {
-        if(sample.staging) {
+        if(!sample.bytes.empty()) {
             D3D11_MAPPED_SUBRESOURCE mapped_buffer{};
             const auto result=context->Map(sample.staging.Get(),0,D3D11_MAP_READ,
                 D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped_buffer);
@@ -365,7 +383,7 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
     if(!metadata_["geometry_gpu"].is_null()) metadata_["geometry_gpu"]["constant_buffers"]=std::move(constants_json);
     json vehicle_json=json::array();
     for(auto& sample:vehicle_constants_) {
-        if(sample.staging) {
+        if(!sample.bytes.empty()) {
             D3D11_MAPPED_SUBRESOURCE mapped_buffer{};
             const auto result=context->Map(sample.staging.Get(),0,D3D11_MAP_READ,D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped_buffer);
             if(result==DXGI_ERROR_WAS_STILL_DRAWING) return;
@@ -379,7 +397,7 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
         metadata_["geometry_gpu"]["vehicle_constant_buffers"]=std::move(vehicle_json);
     metadata_["readback_ready_qpc"]=qpc_now();
     metadata_["readback_cpu_ticks"]=qpc_now()-cpu_begin;
-    release_gpu();phase_=Phase::ready;
+    release_sources();phase_=Phase::ready;
 }
 void GpuCapture::append_bundle(json& views,std::vector<BundleBlob>& blobs) {
     std::lock_guard lock(mutex_);
