@@ -311,6 +311,9 @@ json Runtime::command(const json& request) {
         if(action=="arm" || action=="start" || action=="update") {
             options.format=request.value("format",std::string(cmd=="stream"?"rgbd8":"raw"));
             options.color_gain=request.value("color_gain",1.0f);
+            options.shared_gpu=request.value("shared_gpu",false);
+            if(options.shared_gpu && (cmd!="stream" || options.format!="ros"))
+                throw std::runtime_error("Shared GPU output requires a ROS stream relay");
             if(request.contains("lidars")) for(const auto& item:request.at("lidars").items()) {
                 const auto& name=item.key();
                 if(name.size()!=7 || !name.starts_with("mirror") || name.back()<'0' || name.back()>'5')

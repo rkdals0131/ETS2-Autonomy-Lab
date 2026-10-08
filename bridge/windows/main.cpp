@@ -1,4 +1,5 @@
 #include "messages.hpp"
+#include "gpu_readback.hpp"
 #include "../../ot/native/ipc_layout.hpp"
 #include <windows.h>
 #include <objbase.h>
@@ -96,7 +97,7 @@ static json command(json request) {
     throw std::runtime_error("Game reply too large");
 }
 class Mapping {
-    Handle file_;void* base_=nullptr;uint32_t capacity_=0;bool bundles_;uint64_t sequence_=0;
+    Handle file_;void* base_=nullptr;uint32_t capacity_=0,producer_=0;bool bundles_;uint64_t sequence_=0;
 public:
     explicit Mapping(bool bundles):file_(OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,bundles?L"Local\\OT_Bundles":L"Local\\OT_State")),bundles_(bundles) {
         if(!file_.h) return;
@@ -104,7 +105,7 @@ public:
         if(!header) throw std::runtime_error("Cannot map IPC header");
         const auto valid=header->abi==1 && header->slots==(bundles?ot::bundle_slots:ot::ring_slots) &&
             std::memcmp(header->magic,bundles?"OTBNDL01":"OTSTATE1",8)==0;
-        capacity_=header->bytes_per_slot;UnmapViewOfFile(header);
+        capacity_=header->bytes_per_slot;producer_=header->producer_pid;UnmapViewOfFile(header);
         if(!valid || !capacity_ || capacity_>(bundles?ot::bundle_max_bytes:ot::slot_bytes) || (!bundles && capacity_!=ot::slot_bytes))
             throw std::runtime_error("Unsupported game shared-memory ABI");
         const size_t size=64+(bundles?ot::bundle_slots:ot::ring_slots)*(size_t{64}+capacity_);
@@ -117,6 +118,7 @@ public:
     }
     ~Mapping(){if(base_) UnmapViewOfFile(base_);}
     bool available() const {return base_!=nullptr;}
+    DWORD producer() const {return producer_;}
     bool read(Bytes& bytes) {
         if(bundles_) {
             ot::BundleSlot* oldest=nullptr;
@@ -232,7 +234,8 @@ int main(int argc,char** argv) {
         std::atomic<bool> capture_wanted{welcome.meta.value("capture",true)},capture_active{false};
         std::atomic<std::shared_ptr<const Demand>> demand{std::make_shared<const Demand>()};
         std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0};Latency latency,copy_time,encode_time,send_time;
-        LatestQueue<Bytes> read_queue;LatestQueue<Packet> send_queue;ReadBuffers read_buffers;
+        LatestQueue<SensorBundle> read_queue;LatestQueue<Packet> send_queue;ReadBuffers read_buffers;
+        std::mutex capture_access;
         Workers workers(state,bulk);
         workers.start([&]{while(workers.alive) {
             const auto p=receive_packet(state);if(p.meta.at("session")!=session) throw std::runtime_error("Stale control session");
@@ -255,15 +258,22 @@ int main(int argc,char** argv) {
                     {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}});diagnostic_time=ticks();}
                 packet.meta["ping_us"]=microseconds();send_packet(state,packet.meta,packet.data);std::this_thread::sleep_for(20ms);}
         });
-        workers.start([&]{std::unique_ptr<Mapping> mapping;Bytes bytes;while(workers.alive) {
+        workers.start([&]{std::unique_ptr<Mapping> mapping;Bytes bytes;GpuReadback gpu;while(workers.alive) {
+            std::unique_lock access(capture_access);
             if(!mapping || !mapping->available()) mapping=std::make_unique<Mapping>(true);
             if(mapping->available()) {if(bytes.empty()) bytes=read_buffers.take();const auto begin=microseconds();
-                if(mapping->read(bytes)) {copy_time.add(begin);Bytes retired;if(read_queue.push(std::move(bytes),&retired)) ++dropped;read_buffers.put(std::move(retired));}}
-            std::this_thread::sleep_for(2ms);
+                if(mapping->read(bytes)) {
+                    auto bundle=decode_bundle(std::move(bytes));
+                    if(bundle.manifest.at("stream_id")==stream_id.load()) {
+                        gpu.read(bundle,mapping->producer());copy_time.add(begin);SensorBundle retired;
+                        if(read_queue.push(std::move(bundle),&retired)) ++dropped;read_buffers.put(std::move(retired.data));
+                    } else read_buffers.put(std::move(bundle.data));
+                }}
+            access.unlock();std::this_thread::sleep_for(2ms);
         }});
         workers.start([&]{const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if(FAILED(hr)) throw std::runtime_error("COM worker initialization failed");
             struct ComEnd{~ComEnd(){CoUninitialize();}} com;
-            while(workers.alive) {Bytes bytes;if(read_queue.pop(bytes)) {const auto begin=microseconds();auto packet=sensor_messages(bytes,session,*demand.load(),dropped,stream_id,rig);encode_time.add(begin);read_buffers.put(std::move(bytes));if(!packet.data.empty() && send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
+            while(workers.alive) {SensorBundle bundle;if(read_queue.pop(bundle)) {const auto begin=microseconds();auto packet=sensor_messages(bundle,session,*demand.load(),dropped,stream_id,rig);encode_time.add(begin);read_buffers.put(std::move(bundle.data));if(!packet.data.empty() && send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
         });
         workers.start([&]{uint64_t heartbeat=0;while(workers.alive) {
             Packet packet;if(send_queue.pop(packet)) {if(packet.meta.at("native_stream")!=stream_id.load()) continue;const auto begin=microseconds();send_packet(bulk,packet.meta,packet.data);send_time.add(begin);++sent;bytes_sent+=packet.data.size();heartbeat=ticks();}
@@ -272,10 +282,11 @@ int main(int argc,char** argv) {
         const auto start=ticks();uint64_t report=0;Demand previous_demand;
         while(workers.alive && !stopped && lease_ok && ticks()-start<remaining*1000) {
             if(capture_wanted.load()!=capture_active.load()) {
+                std::lock_guard access(capture_access);
                 if(capture_wanted) {
                     owned({{"cmd","tier"},{"value",1}});
                     owned({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true},{"draw_metadata",false}});owned(rig);
-                    stream_id=owned({{"cmd","stream"},{"action","start"},{"format","ros"},{"hz",10},{"duration",remaining-(ticks()-start)/1000.0},
+                    stream_id=owned({{"cmd","stream"},{"action","start"},{"format","ros"},{"shared_gpu",config.value("shared_gpu",true)},{"hz",10},{"duration",remaining-(ticks()-start)/1000.0},
                         {"color_gain",config.value("color_gain",1.0)},{"outputs",json::object()},{"lidars",patterns}}).at("stream_id").get<uint64_t>();
                     previous_demand.clear();capture_active=true;
                 } else {
@@ -298,7 +309,7 @@ int main(int argc,char** argv) {
                     if(patterns.contains(mirror) && requested->contains("/ets2/lidar/"+patterns.at(mirror).at("name").get<std::string>()+"/points")) selected.push_back("lidar");
                     if(!selected.empty()) outputs[mirror]=selected;
                 }
-                owned({{"cmd","stream"},{"action","update"},{"format","ros"},{"color_gain",config.value("color_gain",1.0)},{"outputs",outputs},{"lidars",patterns}});
+                owned({{"cmd","stream"},{"action","update"},{"format","ros"},{"shared_gpu",config.value("shared_gpu",true)},{"color_gain",config.value("color_gain",1.0)},{"outputs",outputs},{"lidars",patterns}});
                 previous_demand=*requested;
             }
             if(ticks()-report>=1000) {std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},

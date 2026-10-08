@@ -327,7 +327,7 @@ void RenderProbe::present_callback(safetyhook::Context& context) noexcept {
 }
 void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load()) {
+    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load() && self->compile_frame()) {
         const auto start=qpc_now();
         uintptr_t input{},output{};uint16_t id{};
         if(read_memory(context.r10,input) && read_memory(context.rsp+0x58,output) &&
@@ -348,7 +348,13 @@ void RenderProbe::compile_end_callback(safetyhook::Context& context) noexcept {
 }
 void RenderProbe::rig_select_callback(safetyhook::Context& context) noexcept {
     ++callbacks;
-    if(auto* self=observer.load();self && self->accepting_.load()) self->rig_.select(context);
+    if(auto* self=observer.load();self && self->accepting_.load()) {
+        auto stream=self->stream_.load();
+        // Camera submission can precede its command execution by a Present
+        // boundary. Cover both intervals, but capture only the requested one.
+        self->rig_.select(context,stream && stream->running()?
+            (stream->frame_mask(self->presents_.load()+1)|stream->frame_mask(self->presents_.load()+2)):UINT32_MAX);
+    }
     --callbacks;
 }
 void RenderProbe::rig_begin_callback(safetyhook::Context& context) noexcept {
@@ -386,7 +392,7 @@ json RenderProbe::camera_rig(const json& request) {
 }
 void RenderProbe::draw_batch_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load() && self->vehicle_metadata_.load()) {
+    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load() && self->vehicle_metadata_.load() && self->compile_frame()) {
         const auto start=qpc_now();
         uintptr_t work{},input{},items{};
         if(read_memory(context.rbp+0x5F,work) && read_memory(work+0xF0,input) &&
@@ -436,7 +442,14 @@ json RenderProbe::frames(uint64_t after_id) {
         {"boundary_observed",frame_boundary_seen_.load()},{"present_calls",presents_.load()},
         {"missed_records",missed_frames_.load()},{"records",records}};
 }
+bool RenderProbe::compile_frame() const noexcept {
+    const auto stream=stream_.load();
+    return !stream || !stream->running() ||
+        (stream->frame_mask(presents_.load()+1)|stream->frame_mask(presents_.load()+2))!=0;
+}
 void RenderProbe::observe(const safetyhook::Context& context) noexcept {
+    const auto stream=stream_.load();
+    if(stream && stream->running() && !stream->pending()) return;
     Record record{};
     record.sequence=calls_.fetch_add(1)+1;
     record.sdk_frame_hint=sdk_frame_.load(std::memory_order_relaxed);
@@ -445,7 +458,8 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     record.count=static_cast<uint32_t>(context.rdx);
     uintptr_t cursor{},data{};
     const auto index=static_cast<uint32_t>(context.r13);
-    if(index && read_memory(context.rbp-0x30,cursor) && read_memory(cursor,record.compiled_id) &&
+    if((!stream || !stream->running() || stream->frame_mask(record.render_frame)) &&
+       index && read_memory(context.rbp-0x30,cursor) && read_memory(cursor,record.compiled_id) &&
        read_memory(context.r12,data)) {
         record.token=data+(index-1)*4;
         record.pass=pass_commands_.lookup(record.compiled_id,record.token);
@@ -456,10 +470,10 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
        (record.count && !copy_memory(context.r8,record.targets.data(),record.count*sizeof(uintptr_t)))) {
         missed_.fetch_add(1);return;
     }
-    for(auto* camera:cameras())
+    if(!stream || !stream->running()) for(auto* camera:cameras())
         camera->observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
             record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,observation_session_,record.pass.get());
-    if(auto stream=stream_.load())
+    if(stream)
         stream->observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
             record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,record.pass.get());
     if(!TryAcquireSRWLockExclusive(&records_lock_)) {missed_.fetch_add(1);return;}

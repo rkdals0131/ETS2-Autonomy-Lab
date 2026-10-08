@@ -85,13 +85,14 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool
         if(phase_==Phase::armed || phase_==Phase::waiting_gpu)
             throw std::runtime_error("A camera capture is already pending");
         release_sources();
-        options_=options;packed_.clear();
+        if(!packed_.reusable()) throw std::runtime_error("Shared GPU sample still belongs to the relay");
+        options_=options;packed_.clear();packed_.share(options.shared_gpu);
         for(auto& image:images_) image.pixels.clear();
         geometry_depth_.pixels.clear();
         for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
         clear_vehicle_constants();
         metadata_=json::object();error_.clear();last_label_.clear();saved_.clear();
-        geometry_binding_=geometry_sdk_=gpu_polls_=bindings_seen_=0;
+        geometry_binding_=geometry_sdk_=gpu_polls_=bindings_seen_=polled_frame_=0;
         geometry_pass_=color_pass_=geometry_gpu_=nullptr;requested_frame_=requested_frame;
         request_started_=GetTickCount64();phase_=Phase::armed;
     } else if(action=="cancel") {
@@ -125,6 +126,8 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
             throw std::runtime_error("Camera readback requires the observed immediate context");
         if(phase_==Phase::waiting_gpu) {
             if(context!=context_.Get()) return;
+            if(polled_frame_==render_frame) return;
+            polled_frame_=render_frame;
             collect(context);return;
         }
         if(!render_frame || (requested_frame_ && render_frame<requested_frame_)) return;
@@ -344,6 +347,7 @@ void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t 
         {"geometry_binding_sequence",geometry_binding_},{"copy_binding_sequence",sequence},
         {"context",reinterpret_cast<uintptr_t>(context)},{"render_thread_id",GetCurrentThreadId()},
         {"ordered_same_context",true},{"images",descriptions},{"source_row_order_preserved",true}};
+    if(options_.shared_gpu) metadata_["shared_gpu"]=packed_.seal(context);
     phase_=Phase::waiting_gpu;
 }
 void GpuCapture::collect(ID3D11DeviceContext* context) {
@@ -422,7 +426,7 @@ void GpuCapture::append_bundle(json& views,std::vector<BundleBlob>& blobs) {
     views.push_back({{"camera",camera_},{"metadata",metadata_}});
     for(size_t i=0;i<images_.size();++i) if(!images_[i].pixels.empty())
         blobs.push_back({camera_,metadata_.at("images")[i].at("file").get<std::string>(),images_[i].pixels.data(),images_[i].pixels.size()});
-    for(const auto& image:packed_.images) if(!image.description.is_null())
+    for(const auto& image:packed_.images) if(!image.description.is_null() && !options_.shared_gpu)
         blobs.push_back({camera_,image.description.at("file").get<std::string>(),image.pixels.data(),image.pixels.size()});
     if(!packed_.lidar_description.is_null()) blobs.push_back({camera_,packed_.lidar_description.at("file").get<std::string>(),packed_.lidar_pixels.data(),packed_.lidar_pixels.size()});
     if(!geometry_depth_.pixels.empty())

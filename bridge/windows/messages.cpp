@@ -167,19 +167,27 @@ static Bytes camera_info(uint64_t us,const std::string& frame,uint32_t width,uin
         c<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<false;
     });
 }
-Packet sensor_messages(std::span<const uint8_t> input,const std::string& session,const Demand& demand,uint64_t dropped,uint64_t stream_id,const json& rig) {
+SensorBundle decode_bundle(Bytes input) {
     uint64_t length{};if(input.size()<8) throw std::runtime_error("Truncated bundle");std::memcpy(&length,input.data(),8);
     if(length>input.size()-8) throw std::runtime_error("Invalid bundle manifest length");
-    const auto manifest=json::parse(input.begin()+8,input.begin()+8+length);const auto blobs=input.subspan(8+length);
+    auto manifest=json::parse(input.begin()+8,input.begin()+8+length);
+    const auto size=input.size()-8-length;
+    for(const auto& f:manifest.at("files")) {
+        const auto offset=f.at("offset").get<size_t>(),n=f.at("length").get<size_t>();
+        if(offset>size || n>size-offset) throw std::runtime_error("Invalid bundle blob bounds");
+    }
+    return {std::move(manifest),std::move(input),static_cast<size_t>(8+length)};
+}
+Packet sensor_messages(const SensorBundle& bundle,const std::string& session,const Demand& demand,uint64_t dropped,uint64_t stream_id,const json& rig) {
+    const auto& manifest=bundle.manifest;const auto blobs=std::span(bundle.data).subspan(bundle.blob_offset);
     if(manifest.at("stream_id")!=stream_id) return {}; // Ready slots can survive an earlier stream.
     std::map<std::string,std::span<const uint8_t>> files;
     for(const auto& f:manifest.at("files")) {
         const auto offset=f.at("offset").get<size_t>(),n=f.at("length").get<size_t>();
-        if(offset>blobs.size() || n>blobs.size()-offset) throw std::runtime_error("Invalid bundle blob bounds");
         files.emplace(f.at("file").get<std::string>(),blobs.subspan(offset,n));
     }
     Packet packet{{{"session",session},{"frame",manifest.at("render_frame_id")},{"native_stream",stream_id}}, {}};
-    size_t capacity=input.size();
+    size_t capacity=bundle.data.size();
     for(const auto& [file,bytes]:files) if(file.ends_with("_lidar.bin")) capacity+=bytes.size()/16*(36-16);
     packet.data.reserve(capacity);
     const auto& first=manifest.at("views").at(0).at("metadata").at("geometry_pass").at("sdk_at_compile");

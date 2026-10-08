@@ -23,6 +23,15 @@ void CaptureStream::stop() noexcept {
     SetEvent(stop_event_.h);
     if(worker_.joinable()) worker_.join();
 }
+uint32_t CaptureStream::frame_mask(uint64_t frame) const noexcept {
+    uint32_t mask=0;
+    for(const auto& slot:slots_) if(slot.active.load() && slot.frame.load()==frame) mask|=slot.mask.load();
+    return mask;
+}
+bool CaptureStream::pending() const noexcept {
+    for(const auto& slot:slots_) if(slot.active.load()) return true;
+    return false;
+}
 void CaptureStream::observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
         uint64_t sequence,uint64_t sdk_frame,uint64_t render_frame,const json* pass) noexcept {
     for(auto& slot:slots_) if(slot.active.load())
@@ -42,6 +51,7 @@ void CaptureStream::finish_slot(Slot& slot) {
     slot.active=false;
     if(failed) {
         ++failed_;
+        for(auto& camera:slot.cameras) camera->abandon_shared();
         std::string errors;
         for(auto& camera:slot.cameras) if(camera->phase()==GpuCapture::Phase::error) {
             const auto state=camera->command("status",0,false);
@@ -61,7 +71,8 @@ void CaptureStream::finish_slot(Slot& slot) {
     }
     // Completed captures are immutable until this worker rearms the slot.
     const auto result=publisher_.publish_bundle(std::move(manifest),blobs);
-    if(result.at("published").get<bool>()) ++published_;else ++queue_dropped_;
+    if(result.at("published").get<bool>()) ++published_;
+    else {++queue_dropped_;for(auto& camera:slot.cameras) camera->abandon_shared();}
 }
 void CaptureStream::run() noexcept {
     std::string reason="duration",error;
@@ -81,13 +92,16 @@ void CaptureStream::run() noexcept {
                 if(auto changed=pending_options_.exchange({})) {std::lock_guard lock(result_mutex_);options_=*changed;}
                 next+=1.0/hz_;
                 if(next<=elapsed) next=elapsed+1.0/hz_; // No catch-up burst after a stall.
-                const auto frame=presents_.load()+2;
+                const auto frame=presents_.load()+3;
                 if(frame==previous_frame) ++same_frame_;
                 else {
                     Slot* available=nullptr;
                     for(size_t n=0;n<slots_.size();++n) {
                         const auto index=(cursor+n)%slots_.size();
-                        if(!slots_[index].active.load()) {available=&slots_[index];cursor=(index+1)%slots_.size();break;}
+                        if(!slots_[index].active.load() && std::all_of(slots_[index].cameras.begin(),slots_[index].cameras.end(),
+                            [](const auto& camera){return camera->reusable();})) {
+                            available=&slots_[index];cursor=(index+1)%slots_.size();break;
+                        }
                     }
                     if(!available) ++ring_busy_;
                     else {

@@ -6,6 +6,7 @@
 #include <numbers>
 #include <stdexcept>
 #include <DirectXMath.h>
+#include <dxgi1_2.h>
 
 namespace ot {
 namespace {
@@ -43,6 +44,7 @@ struct ComputeState {
 };
 }
 void GpuPack::release_gpu() {
+    fence_handle_.reset();fence_.Reset();fence_value_=0;awaiting_reader_=false;
     lidar_=LidarWork{};
     for(auto& image:images) image.staging.Reset();
     for(auto& work:work_) work=Work{};
@@ -151,7 +153,10 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
     Com<ID3D11Device> device;context->GetDevice(&device);
     if(device_.Get()!=device.Get()) {release_gpu();device_=device;}
     auto& work=work_[kind];
-    auto& copies=work.copies;auto& views=work.views;
+    // Full color and preview consume the same HDR image before it is reused.
+    // Share that private input copy; each output keeps its own dimensions/UAV.
+    auto& input=work_[depth?0:1];
+    auto& copies=input.copies;auto& views=input.views;
     D3D11_TEXTURE2D_DESC dimensions{};sources[0]->GetDesc(&dimensions);
     for(size_t i=0;i<sources.size();++i) {
         if(!sources[i]) continue;
@@ -171,26 +176,35 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
         }
         desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
         desc.CPUAccessFlags=desc.MiscFlags=0;
-        const auto& previous=work.input_desc[i];
+        const auto& previous=input.input_desc[i];
         if(!copies[i] || previous.Width!=desc.Width || previous.Height!=desc.Height || previous.Format!=desc.Format) {
             copies[i].Reset();views[i].Reset();
             check(device->CreateTexture2D(&desc,nullptr,&copies[i]),"CreateTexture2D(pack input)");++allocations_;
             D3D11_SHADER_RESOURCE_VIEW_DESC srv{};srv.Format=view_format;
             srv.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D;srv.Texture2D.MipLevels=1;
             check(device->CreateShaderResourceView(copies[i].Get(),&srv,&views[i]),"CreateShaderResourceView(pack input)");++allocations_;
-            work.input_desc[i]=desc;
+            input.input_desc[i]=desc;
         }
-        context->CopyResource(copies[i].Get(),sources[i]);
+        if(depth || !color_copied_) context->CopyResource(copies[i].Get(),sources[i]);
     }
+    if(!depth) color_copied_=true;
     auto desc=dimensions;if(kind==2) {desc.Width/=2;desc.Height/=2;}desc.Format=depth?DXGI_FORMAT_R32_FLOAT:DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_UNORDERED_ACCESS|D3D11_BIND_SHADER_RESOURCE;
-    desc.CPUAccessFlags=desc.MiscFlags=0;
+    desc.CPUAccessFlags=0;
+    desc.MiscFlags=shared_?(D3D11_RESOURCE_MISC_SHARED|D3D11_RESOURCE_MISC_SHARED_NTHANDLE):0;
     auto& image=images[kind];
-    if(!work.output || work.output_desc.Width!=desc.Width || work.output_desc.Height!=desc.Height) {
+    if(!work.output || work.output_desc.Width!=desc.Width || work.output_desc.Height!=desc.Height || work.output_desc.MiscFlags!=desc.MiscFlags) {
         work.output.Reset();work.uav.Reset();image.staging.Reset();
+        work.shared_handle.reset();
         check(device->CreateTexture2D(&desc,nullptr,&work.output),"CreateTexture2D(pack output)");++allocations_;
         check(device->CreateUnorderedAccessView(work.output.Get(),nullptr,&work.uav),"CreateUnorderedAccessView(pack output)");++allocations_;
         work.output_desc=desc;
+        if(shared_) {
+            Com<IDXGIResource1> resource;check(work.output.As(&resource),"QueryInterface(shared resource)");
+            auto handle=std::make_unique<Handle>();
+            check(resource->CreateSharedHandle(nullptr,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,nullptr,&handle->h),"CreateSharedHandle(pack)");
+            work.shared_handle=std::move(handle);work.resource_id=qpc_now();
+        }
     }
     if(!work.shader) {
         check(device->CreateComputeShader(depth?ot_pack_depth:ot_pack_color,
@@ -210,21 +224,45 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
         context->Dispatch((desc.Width+7)/8,(desc.Height+7)/8,1);
     }
     if(!readback) {image.description=nullptr;return;}
-    if(!image.staging) {
+    if(!shared_ && !image.staging) {
         auto staging=desc;staging.Usage=D3D11_USAGE_STAGING;staging.BindFlags=0;staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        staging.MiscFlags=0;
         check(device->CreateTexture2D(&staging,nullptr,&image.staging),"CreateTexture2D(pack staging)");++allocations_;
     }
-    context->CopyResource(image.staging.Get(),work.output.Get());
-    image.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*4);
+    if(!shared_) {
+        context->CopyResource(image.staging.Get(),work.output.Get());
+        image.pixels.resize(static_cast<size_t>(desc.Width)*desc.Height*4);
+    }
     image.description={{"file",camera+(depth?"_depth_f32.bin":kind==2?"_preview_ldr.bin":"_color_ldr.bin")},
         {"width",desc.Width},{"height",desc.Height},{"row_bytes",desc.Width*4},
         {"format",depth?"R32_FLOAT":"R8G8B8A8_UNORM"},
         {"encoding",depth?(values[1]!=0?"optical_depth_m_nan_invalid":"viewport_depth_nan_invalid"):"srgb_reinhard"}};
     if(!depth) image.description["linear_gain"]=values[0];
+    if(shared_) image.description["shared_texture"]={{"handle",reinterpret_cast<uintptr_t>(work.shared_handle->h)},
+        {"id",work.resource_id},{"dxgi_format",static_cast<unsigned>(desc.Format)}};
+}
+json GpuPack::seal(ID3D11DeviceContext* context) {
+    if(!shared_ || std::all_of(images.begin(),images.end(),[](const auto& i){return i.description.is_null();})) return nullptr;
+    if(!fence_) {
+        Com<ID3D11Device5> device;check(device_.As(&device),"QueryInterface(Device5)");
+        check(device->CreateFence(0,D3D11_FENCE_FLAG_SHARED,IID_PPV_ARGS(&fence_)),"CreateFence(pack)");
+        auto handle=std::make_unique<Handle>();
+        check(fence_->CreateSharedHandle(nullptr,GENERIC_ALL,nullptr,&handle->h),"CreateSharedHandle(fence)");
+        fence_handle_=std::move(handle);fence_id_=qpc_now();
+    }
+    Com<ID3D11DeviceContext4> context4;check(context->QueryInterface(IID_PPV_ARGS(&context4)),"QueryInterface(Context4)");
+    fence_value_+=2;
+    check(context4->Signal(fence_.Get(),fence_value_-1),"Signal(pack ready)");
+    awaiting_reader_=true;
+    Com<IDXGIDevice> dxgi;Com<IDXGIAdapter> adapter;DXGI_ADAPTER_DESC description{};
+    check(device_.As(&dxgi),"QueryInterface(DXGI device)");check(dxgi->GetAdapter(&adapter),"GetAdapter");
+    check(adapter->GetDesc(&description),"GetAdapterDesc");
+    return {{"pid",GetCurrentProcessId()},{"id",fence_id_},{"handle",reinterpret_cast<uintptr_t>(fence_handle_->h)},
+        {"ready",fence_value_-1},{"released",fence_value_},{"adapter_low",description.AdapterLuid.LowPart},{"adapter_high",description.AdapterLuid.HighPart}};
 }
 bool GpuPack::collect(ID3D11DeviceContext* context) {
     for(auto& image:images) {
-        if(image.description.is_null()) continue;
+        if(image.description.is_null() || shared_) continue;
         D3D11_MAPPED_SUBRESOURCE mapped{};
         const auto hr=context->Map(image.staging.Get(),0,D3D11_MAP_READ,D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped);
         if(hr==DXGI_ERROR_WAS_STILL_DRAWING) return false;

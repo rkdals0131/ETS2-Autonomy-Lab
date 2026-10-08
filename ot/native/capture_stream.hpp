@@ -13,6 +13,8 @@ public:
     void stop() noexcept;
     void update(const CaptureOptions& options) {pending_options_.store(std::make_shared<const CaptureOptions>(options));}
     bool running() const noexcept {return running_.load();}
+    uint32_t frame_mask(uint64_t frame) const noexcept;
+    bool pending() const noexcept;
     json status();
     void observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
                  uint64_t sequence,uint64_t sdk_frame,uint64_t render_frame,const json* pass) noexcept;

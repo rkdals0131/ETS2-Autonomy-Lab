@@ -1,7 +1,7 @@
 #pragma once
 #include "ot.hpp"
 #include <array>
-#include <d3d11_1.h>
+#include <d3d11_4.h>
 #include <wrl/client.h>
 
 namespace ot {
@@ -24,10 +24,14 @@ public:
                std::shared_ptr<const LidarPattern> lidar={});
     void color(ID3D11DeviceContext1* context,ID3D11Texture2D* source,float gain,const std::string& camera,bool preview=false);
     bool collect(ID3D11DeviceContext* context);
+    void share(bool enabled) {shared_=enabled;}
+    json seal(ID3D11DeviceContext* context);
+    bool reusable() const {return !awaiting_reader_ || (fence_ && fence_->GetCompletedValue()>=fence_value_);}
+    void abandon() {awaiting_reader_=false;}
     void release_gpu();
     // Descriptions select this sample's outputs. Retain CPU storage so arming
     // the next sample does not zero every pixel on the render thread.
-    void clear() {for(auto& image:images) image.description=nullptr;lidar_description=nullptr;}
+    void clear() {for(auto& image:images) image.description=nullptr;lidar_description=nullptr;color_copied_=false;}
     uint64_t allocations() const {return allocations_;}
     std::array<Image,3> images; // depth, color, preview
     json lidar_description;
@@ -42,10 +46,17 @@ private:
         Com<ID3D11ComputeShader> shader;
         Com<ID3D11Buffer> constants;
         D3D11_TEXTURE2D_DESC output_desc{};
+        std::unique_ptr<Handle> shared_handle;
+        uint64_t resource_id=0;
     };
     std::array<Work,3> work_;
     Com<ID3D11Device> device_;
     uint64_t allocations_=0;
+    bool shared_=false,awaiting_reader_=false;
+    bool color_copied_=false;
+    Com<ID3D11Fence> fence_;
+    std::unique_ptr<Handle> fence_handle_;
+    uint64_t fence_value_=0,fence_id_=0;
     struct LidarWork {
         std::shared_ptr<const LidarPattern> pattern;
         Com<ID3D11Buffer> beams,output,staging,constants;

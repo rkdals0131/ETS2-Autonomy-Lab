@@ -56,6 +56,7 @@ private:
     Timing draw_batch_timing_;
     void present(HRESULT result) noexcept;
     void observe(const safetyhook::Context& context) noexcept;
+    bool compile_frame() const noexcept;
     bool quiescent() noexcept;
     bool disable_locked(bool clear_rig);
     std::mutex control_;

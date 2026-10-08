@@ -104,8 +104,13 @@ json CameraRig::status() {
         {"in_flight",in_flight_.load()},{"unavailable",unavailable_.load()},{"views",views},
         {"source","private submission copy; persistent mirror fields unchanged"}};
 }
-void CameraRig::select(safetyhook::Context& context) noexcept {
-    if(auto config=configuration_.load()) context.r12|=config->mask;
+void CameraRig::select(safetyhook::Context& context,uint32_t capture_mask) noexcept {
+    if(auto config=configuration_.load()) {
+        // A relocated slot is owned by the sensor while the stream is active.
+        // Clear its native-mirror selection as well as the forced selection on
+        // unused frames; all unowned mirrors retain the engine's choice.
+        context.r12=(context.r12&~uint64_t(config->mask))|(config->mask&capture_mask);
+    }
 }
 void CameraRig::begin(safetyhook::Context& context) noexcept {
     auto config=configuration_.load();const auto slot=static_cast<uint32_t>(context.rbp);

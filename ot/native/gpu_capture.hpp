@@ -10,6 +10,7 @@ struct CaptureOptions {
     std::string format="raw";
     float color_gain=1;
     bool selective=false;
+    bool shared_gpu=false;
     std::array<uint8_t,6> outputs{3,3,3,3,3,3}; // color=1, depth=2, preview=4, lidar=8, metadata=16
     uint8_t products=3;
     std::array<std::shared_ptr<const LidarPattern>,6> lidar_patterns;
@@ -28,6 +29,8 @@ class GpuCapture {
 public:
     enum class Phase { idle,armed,waiting_gpu,ready,error };
     Phase phase() const noexcept {return phase_.load();}
+    bool reusable() {std::lock_guard lock(mutex_);return packed_.reusable();}
+    void abandon_shared() {std::lock_guard lock(mutex_);packed_.abandon();}
     explicit GpuCapture(std::string camera):camera_(std::move(camera)) {}
     json command(const std::string& action,uint64_t requested_frame=0,bool metadata=true,const CaptureOptions& options={});
     void cancel() noexcept;
@@ -78,6 +81,7 @@ private:
     uint64_t sequence_=0,request_started_=0,geometry_binding_=0,geometry_sdk_=0;
     uint64_t geometry_frame_=0,requested_frame_=0;
     uint64_t gpu_polls_=0,bindings_seen_=0;
+    uint64_t polled_frame_=0;
     std::string error_,last_label_;
     fs::path saved_;
 };

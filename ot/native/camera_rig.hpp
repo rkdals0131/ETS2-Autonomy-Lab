@@ -11,7 +11,7 @@ public:
     json configure(const json& request);
     json status();
     void clear() noexcept { configuration_.store(nullptr); }
-    void select(safetyhook::Context& context) noexcept;
+    void select(safetyhook::Context& context,uint32_t capture_mask=UINT32_MAX) noexcept;
     void begin(safetyhook::Context& context) noexcept;
     void end() noexcept;
     void dimensions(safetyhook::Context& context) noexcept;
