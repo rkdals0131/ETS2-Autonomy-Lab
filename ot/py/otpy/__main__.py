@@ -27,6 +27,10 @@ def main():
     record.add_argument("--hz", type=float, default=10.0)
     record.add_argument("--duration", type=float, required=True)
     record.add_argument("--output", required=True, help="New JSONL index; raw images are saved by the DLL")
+    reconstruct = sub.add_parser("reconstruct", help="Offline pass-camera point cloud from a saved DLL capture (NumPy)")
+    reconstruct.add_argument("directory", help="Capture directory containing images.json")
+    reconstruct.add_argument("--output", required=True, help="New NPZ file; existing files are not overwritten")
+    reconstruct.add_argument("--depth-source", choices=("geometry", "attributes"), default="geometry")
     watch = sub.add_parser("watch", help="Print newest shared state as JSON lines; Ctrl+C closes the reader")
     watch.add_argument("--hz", type=float, default=10.0)
     watch.add_argument("--duration", type=float, help="Stop after this many seconds")
@@ -34,7 +38,10 @@ def main():
     args = parser.parse_args()
     try:
         client = Client(timeout=args.timeout)
-        if args.command == "loader":
+        if args.command == "reconstruct":
+            from .reconstruction import save_reconstruction
+            result = save_reconstruction(args.directory, args.output, args.depth_source)
+        elif args.command == "loader":
             client = LoaderClient(timeout=args.timeout)
             result = client.status() if args.action == "status" else client.control(args.action)
         elif args.command == "record_mirror5":
@@ -72,7 +79,7 @@ def main():
         return 0
     except KeyboardInterrupt:
         return 0
-    except (OSError, RuntimeError, ValueError) as error:
+    except (OSError, RuntimeError, ValueError, KeyError, ImportError) as error:
         print(f"otpy: {error}", file=sys.stderr)
         return 1
 

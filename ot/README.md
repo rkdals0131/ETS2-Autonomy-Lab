@@ -1,10 +1,24 @@
 # ot 0.8.2 — 네 미러 영상·CPU/GPU 상수·실제 깊이 버퍼
 
 > **확정:** SDK/IPC·내부 자차 pose 대조. mirror5 10 Hz 기록·네 미러 같은 Present 구간 수집. 0.8.0은 명령 구간을 통해 영상과 pass 기본 카메라 상태를 연결. 콘솔 없는 기능 DLL 교체, hook 시간 계측·내부 읽기 비용 감소도 실측.
-> **미확정:** DLL 영상과 최종 카메라 상수 연결·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
+> **남은 검증:** draw별 상수 변경 범위·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
 > **다음:** draw별 변경 범위·월드 정합·AI 박스 대조, 주행 및 연속 데이터 전달.
 
 ### 0.8.2 — 실제 DSV 깊이와 attributes Z 비교
+
+저장된 캡처를 게임 접속 없이 점군으로 복원하는 명령을 추가했습니다. NumPy가 필요하며 다른 pipe·공유 메모리 명령에는 새 의존성이 없습니다.
+
+```powershell
+# <capture-directory>는 capture_mirrors save가 반환하는 각 saved_directory
+.\ot\ot.cmd reconstruct '<capture-directory>' --output geometry.npz
+.\ot\ot.cmd reconstruct '<capture-directory>' --depth-source attributes --output shading-z.npz
+```
+
+기본 `geometry`는 DSV를 캡처한 viewport와 CPU pass 투영으로 역투영합니다. `attributes`는 게임의 deferred ray에 `attributes0.w`를 곱하므로 재질의 Z 보정도 포함합니다. 어느 쪽도 다른 쪽으로 자동 대체하지 않습니다. NPZ에는 픽셀 배열을 유지한 `xyz_camera`(float32), `xyz_world`(float64), `valid`(bool), `material_bits`(uint8), JSON 문자열 `metadata_json`이 들어 있습니다. `np.load(path, allow_pickle=False)`로 읽을 수 있으며 기존 출력 파일은 덮어쓰지 않습니다. 무효 픽셀은 NaN입니다.
+
+월드 좌표는 `geometry_pass.camera_at_compile`의 기본 회전·원점을 사용하며 단위는 `game_length_units`입니다. projection modifier가 켜진 표본은 아직 해석하지 않습니다. 개별 draw의 별도 투영이나 billboard를 실제 입체 물체의 형상으로 바꿔 주는 기능은 아닙니다. 두 깊이 경로 모두 같은 pass 카메라로 복원하고 출처·관측 구간을 NPZ에 남깁니다.
+
+Present 구간 60의 네 미러를 두 방식으로 실제 실행해 각 방식당 1,413,986개의 유효 점을 얻었습니다. 별도로 저장해 둔 GPU 상수 기반 DSV 복원과 비교했을 때, 새 CPU pass 기반 카메라 Z의 최대 차이는 1.53e-5 게임 길이 단위였습니다. [월드 점군과 재질별 Z 차이 그림](../research/live/2026-10-08-render-probe/0.8.2-world-reconstruction/geometry-world-and-material-offset.png)을 확인했습니다. 이는 같은 캡처의 두 상수 경로 대조이며 실제 거리 정확도의 검증은 아닙니다.
 
 G-buffer 종료 시 현재 바인딩된 depth-stencil Texture2D도 복사합니다. 실제 게임의 형식은 `D32_FLOAT_S8X24_UINT`였으며 호환되는 typeless staging 텍스처로 전체를 복사하고 기존 query 뒤에 회수했습니다. `<camera>_geometry_depth.bin`은 픽셀당 8 bytes의 원본입니다. 앞 32 bits는 float depth, 다음 8 bits는 stencil이며 나머지는 해석하지 않습니다. `geometry_gpu.depth_texture`에 형식·크기·행 길이·원본 리소스를 기록합니다. 기존 attributes Z를 이 값으로 자동 대체하지 않습니다.
 
@@ -21,7 +35,9 @@ Present 구간 60에서 네 미러의 원본 DSV를 확보했습니다. 카메�
 
 DSV에서 얻은 Z를 CPU 기본 반올림으로 FP16 변환하면 일치율이 약 50%였습니다. Direct3D의 높은 정밀도→낮은 정밀도 float 변환은 0 방향 절삭을 사용합니다([공식 규격 §3.2.2](https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm)). 이 규칙으로 비교하면 0–30 게임 길이 단위 영역의 일치율은 뷰별 약 99.98% 이상입니다. 일반적인 FP16 양자화와 일관되는 결과입니다.
 
-원거리 일부 픽셀의 차이는 이것만으로 설명되지 않습니다. 최대 차이는 mirror2의 `(y=592,x=142)`에서 attributes Z `-162.5`, DSV 복원 Z 약 `-163.9046`이었습니다. 해당 영역의 draw별 투영·깊이 bias·shader 깊이 쓰기와 재질을 아직 분리하지 않았으며 둘 중 하나를 정답으로 선언하지 않습니다. 다음 분석에서 이 차이를 좁힙니다.
+원거리 일부 픽셀의 차이는 FP16 절삭만으로 설명되지 않습니다. 최대 차이는 mirror2의 `(y=592,x=142)`에서 attributes Z `-162.5`, DSV 복원 Z 약 `-163.9046`이었습니다. 큰 차이는 packed material 값 `2`에 집중됐습니다. 후속 정적 분석에서 `eut2.leaves`의 defattr pixel shader가 `attributes0.w = eye_z + 2 * mask_texture.b * input_normal_eye.z`를 기록하고, `SV_Depth`는 출력하지 않는 경로를 찾았습니다. 같은 GLSL에서 bit `2`는 billboard 분기, bit `8`은 전환 구간을 표시합니다. 이 플래그를 게임 전체의 의미론적 클래스 ID로 해석하지 않습니다.
+
+SM5 DXBC에서도 법선 Z와 마스크 채널의 곱을 두 번 더해 `o0.w`에 넣는 명령을 확인했습니다. 따라서 attributes Z와 DSV는 재질에 따라 의도적으로 달라질 수 있습니다. 현재의 최대 차이 픽셀을 생성한 draw까지 직접 추적한 것은 아니므로 모든 잔차를 이 식으로 설명했다고 주장하지 않습니다. 이전 RenderDoc 네 미러 G-buffer의 실제 rasterizer state는 모두 depth bias 0이었습니다. 근거는 [12번 후속 셰이더 분석](../docs/12_dx11_mirror_render_path.md#잎-billboard의-z-보정과-dsv-차이)에 정리했습니다.
 
 [깊이·차이 영상](../research/live/2026-10-08-render-probe/0.8.2-depth-comparison/comparison.png)을 확인했고 DSV 복원 Z·절대 차이 NPY를 보존했습니다. 수집 원본은 `0.8.2-depth-gpu.json`, 수치는 `0.8.2-depth-comparison/summary.json`과 `rounding-and-range.json`입니다. 수집 후 패닉·로더 재로딩으로 새 depth staging 자원까지 정리했습니다.
 

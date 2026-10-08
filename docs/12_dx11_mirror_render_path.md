@@ -1,5 +1,7 @@
 # DX11 미러 렌더 경로와 실제 리소스 연결
 
+이 문서의 외부 읽기 기록은 DLL 도입 전 조사다. 이후 DLL 0.8.2에서 네 미러의 픽셀·CPU/GPU 카메라 상수·DSV 수집까지 진행했으며 실제 구현 상태는 [ot 문서](../ot/README.md)를 따른다. 후속 재질 분석은 맨 아래 [잎 billboard의 Z 보정과 DSV 차이](#잎-billboard의-z-보정과-dsv-차이)에 추가했다.
+
 **미러 0·1·2·5의 이름, 렌더 그래프 항목, 실제 DX11 색상·깊이 텍스처를 외부 메모리 읽기로 연결했다. 셰이더에서는 일반 색상 텍스처 `attributes_0.w`에 카메라 좌표계 Z가 들어가는 경로도 확인했다. 실제 복원 상수에 이어 미러별 준비 작업의 투영행렬·viewport도 읽었다. 미러 장면의 viewport 깊이 범위는 약 0.01–0.9이며, 메인 실내는 0.9–1.0이었다. 픽셀과 같은 프레임으로 연결한 결과는 아직 없다.** 미러 0과 2가 같은 깊이·중간 색상 리소스를 재사용하므로, 후속 수집기는 각 미러의 렌더 완료 시점에 복사해야 한다. 화면 Present 시점의 일괄 복사만으로 네 미러의 depth를 확보할 수 있다고 가정하면 안 된다.
 
 관측 대상은 2026-10-08의 사용자 소유 ETS2 1.61.1.1 프로세스 PID 24940이다. 게임 함수 호출, 디버거 연결, 메모리 쓰기, DLL 설치·주입, 입력, 설정 변경은 수행하지 않았다. 아래 offset은 이 EXE에만 해당하며 주소는 재시작 후 달라진다. CPU 자료구조를 여러 번 읽은 결과이므로 한 게임 tick 또는 GPU frame의 원자적 스냅샷은 아니다.
@@ -1079,3 +1081,24 @@ py -3.13 research/read_render_memory.py --pid 24940 --base 0x7ff707440000 --d3d-
 실제 실행은 8초/5Hz, 40표본, 23,017회 읽기, 17,535,888 bytes, 읽기 오류 0건이었다. 표본 수집 시간은 reader 기준 중앙값 3.738ms, 최대 4.326ms이며 게임 FPS나 GPU overhead 수치가 아니다. 관측 observer PID 27336은 실행 종료 후 handle을 닫았다.
 
 자료는 [`research/live/2026-10-08-render-path/`](../research/live/2026-10-08-render-path/)에 있다. `render-graph.jsonl`은 현재 namespace와 DX11 리소스를 함께 수집한 결과, `summary.json`은 선택 미러와 재사용 집계, `d3d11-render-target-inventory.json`은 전체 풀의 render/depth 항목이다. disassembly 후보 파일명 중에는 탐색 당시의 임시 이름이 있으므로 의미는 이 문서의 검증된 경로를 우선한다.
+
+## 잎 billboard의 Z 보정과 DSV 차이
+
+0.8.2의 같은 Present 구간 60에서 DSV를 역투영한 Z와 `attributes0.w`를 비교했다. 근거리의 작은 차이는 FP16 절삭과 일관됐지만, 원거리 최대 차이는 약 1.4 게임 길이 단위였다. 미러 0·1·2에서 가장 큰 차이의 픽셀은 모두 packed material 값 `2`, stencil `1`이었다. 이 상관관계만으로 픽셀의 의미론적 종류를 선언하지 않고, 설치된 `effect.scs`에서 대응 가능한 셰이더를 조사했다.
+
+`/effect/eut2/leaves/eut2.leaves.rfx`와 `eut2.leaves.instanced.rfx`는 defattr fragment shader를 공유한다. GLSL은 `d98ecb96da47988d6532e49c773a71dc.glsl.fso`, SM5는 `e89c181b8d2a80a4738c467d9f3cd691.sm5x.fso`다. GLSL에서 다음 계산을 직접 확인했다.
+
+```text
+eye_position_adjust = input_normal_eye * (mask_texture.b * 2)
+attributes0.w = interpolated_eye_position.z + eye_position_adjust.z
+```
+
+SM5 DXBC도 같은 의미의 `dp2 r0.x, r3.xxxx, v4.zzzz`와 `add o0.w, r0.x, v5.z`를 실행한다. 여기서 `r3.x`는 texture mask의 B 채널이다. 출력 signature에는 `SV_Target0..3`만 있으며 `SV_Depth`는 없다. 따라서 이 재질은 deferred shading용 Z를 이동시키면서 하드웨어 깊이에는 그 이동을 쓰지 않는다. DSV가 나타내는 것은 실제 rasterized geometry이며 billboard 자체를 실제 나뭇잎의 입체 형상으로 바꾸지는 않는다.
+
+같은 GLSL은 billboard 조건에서 mask bit `2`를 설정하고, 전환 구간에서 bit `8`을 설정한다. Z 보정 자체는 billboard 조건문 밖에 있으므로 bit `2`가 없는 잎에도 적용될 수 있다. 또한 저장된 최종 normal은 별도 혼합·정규화된 값이므로, `attributes0.xyz`를 위 식의 입력 법선으로 대입해 보정량을 되돌릴 수 있다고 가정하면 안 된다. 이 플래그 의미는 확인한 셰이더 범위의 해석이다.
+
+이전 RenderDoc 프레임 3160의 네 미러 G-buffer draw가 쓴 rasterizer state는 ID `739`와 `755`였고 모두 `DepthBias`, `SlopeScaledDepthBias`, `DepthBiasClamp`가 0이었다. 그림자 pass의 별도 bias 상태 ID `6619`와 혼동하지 않았다. 해당 기록에서는 G-buffer 종료 이후 composition 종료까지 attributes 텍스처가 다시 렌더 타깃으로 바인딩되지 않았다. 현재 DLL 캡처의 개별 최대 차이 픽셀을 만든 draw·입력 법선·마스크 샘플까지 직접 추적한 결과는 아니므로, 모든 잔차의 원인을 입증한 것은 아니다.
+
+실용적으로 깊이 출처를 나눈다. `otpy reconstruct`의 기본 `geometry`는 DSV와 viewport·pass 투영을 사용하고, `attributes`는 보정된 Z와 deferred ray를 사용한다. 기존 원시 자료를 덮어쓰거나 둘을 같은 센서값으로 혼합하지 않는다. 네 뷰에서 두 경로의 점군을 만들었으며 각 경로의 유효 점은 1,413,986개다. 기본 카메라 월드 변환과 실제 거리·AI 박스의 정합은 후속 검증 대상이다.
+
+근거 자료는 `research/extracted/effect-analysis/leaves_defattr.asm`, 원본 GLSL 추출본, `research/live/2026-10-08-render-probe/0.8.2-depth-comparison/material-groups.json`, `0.8.2-world-reconstruction/`이다. 게임 셰이더 원본과 raw 배열은 공개 저장소에 포함하지 않는다.
