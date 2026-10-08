@@ -174,7 +174,13 @@ static json resolve_rig(json rig,const json& truck,const json& selected) {
     std::array<double,3> origin{};
     for(int index:wheels) {auto p=attributes.at({"wheel.position",index}).get<std::array<double,3>>();p[1]-=attributes.at({"wheel.radius",index}).get<double>();for(int i=0;i<3;++i) origin[i]+=p[i]/wheels.size();}
     json views=json::array();
+    const std::map<int,std::string> legacy_names{{0,"C_FN"},{1,"C_FW"},{2,"C_RL"},{5,"C_RR"}};
+    std::set<std::string> camera_ids;
     for(auto v:rig.at("views")) if(std::find(selected.begin(),selected.end(),v.at("slot"))!=selected.end()) {
+        const auto name=v.contains("camera_id")?v.at("camera_id").get<std::string>():legacy_names.at(v.at("slot").get<int>());
+        if((name!="C_FN" && name!="C_FW" && name!="C_RL" && name!="C_RR") || !camera_ids.insert(name).second)
+            throw std::runtime_error("ROS camera_id must be unique and one of C_FN, C_FW, C_RL, C_RR");
+        v["camera_id"]=name;
         const auto p=v.at("position_base_link").get<std::array<double,3>>();v["position"]={origin[0]-p[1],origin[1]+p[2],origin[2]-p[0]};v.erase("position_base_link");views.push_back(v);
     }
     if(views.empty()) throw std::runtime_error("No selected sensor views");
@@ -296,15 +302,14 @@ int main(int argc,char** argv) {
             const auto requested=demand.load();
             if(capture_active && *requested!=previous_demand) {
                 json outputs=json::object();
-                const std::map<int,std::string> camera_names{{0,"C_FN"},{1,"C_FW"},{2,"C_RL"},{5,"C_RR"}};
                 for(const auto& view:rig.at("views")) {
-                    const int slot=view.at("slot");const auto base_topic="/ets2/camera/"+camera_names.at(slot);
+                    const int slot=view.at("slot");const auto name=view.at("camera_id").get<std::string>();const auto base_topic="/ets2/camera/"+name;
                     auto selected=json::array();
                     if(requested->contains(base_topic+"/image_raw")) selected.push_back("color");
                     if(requested->contains(base_topic+"/depth/image_raw")) selected.push_back("depth");
                     if(requested->contains(base_topic+"/preview/image/compressed") || requested->contains(base_topic+"/perception/image_raw")) selected.push_back("preview");
                     if(requested->contains(base_topic+"/camera_info") || requested->contains(base_topic+"/preview/camera_info") || requested->contains(base_topic+"/perception/camera_info") ||
-                       requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/objects") || requested->contains("/ets2/ground_truth/"+camera_names.at(slot)+"/markers") || requested->contains("/tf") || requested->contains("/ets2/frame_info") || requested->contains("/ets2/frame_info/exposure")) selected.push_back("metadata");
+                       requested->contains("/ets2/ground_truth/"+name+"/objects") || requested->contains("/ets2/ground_truth/"+name+"/markers") || requested->contains("/tf") || requested->contains("/ets2/frame_info") || requested->contains("/ets2/frame_info/exposure")) selected.push_back("metadata");
                     const auto mirror="mirror"+std::to_string(slot);
                     if(patterns.contains(mirror) && requested->contains("/ets2/lidar/"+patterns.at(mirror).at("name").get<std::string>()+"/points")) selected.push_back("lidar");
                     if(!selected.empty()) outputs[mirror]=selected;

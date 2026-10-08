@@ -62,13 +62,12 @@ static void pose(Cdr& c,V p,Q q) {c.serialize_array(p.data(),3);c.serialize_arra
 static const M enu{1,0,0,0,0,-1,0,1,0},optical{1,0,0,0,-1,0,0,0,-1},base_to_model{0,-1,0,0,0,1,-1,0,0};
 Packet static_messages(const json& rig,const json& patterns,const std::string& session) {
     struct Mount {std::string name;V p;Q q;};std::vector<Mount> mounts;
-    const std::map<int,std::string> names{{0,"C_FN"},{1,"C_FW"},{2,"C_RL"},{5,"C_RR"}};
     for(const auto& view:rig.at("views")) {
         const int slot=view.at("slot");
         if(view.at("basis")!="cabin") throw std::runtime_error("ROS mounting tree requires cabin mounts");
         const auto p=mul(transpose(base_to_model),view.at("position").get<V>());
         const auto r=mul(transpose(base_to_model),from_quat(view.at("quaternion_wxyz").get<Q>()));
-        mounts.push_back({names.at(slot)+"_optical",p,quaternion(mul(r,optical))});
+        mounts.push_back({view.at("camera_id").get<std::string>()+"_optical",p,quaternion(mul(r,optical))});
         const auto source="mirror"+std::to_string(slot);
         if(patterns.contains(source) && patterns.at(source).at("axis_camera")==source)
             mounts.push_back({patterns.at(source).at("name"),p,quaternion(mul(r,base_to_model))});
@@ -237,8 +236,9 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
     std::map<std::string,std::vector<LidarSource>> lidars;
     for(const auto& view:manifest.at("views")) {
         const std::string mirror=view.at("camera");
-        static const std::map<std::string,std::string> names{{"mirror0","C_FN"},{"mirror1","C_FW"},{"mirror2","C_RL"},{"mirror5","C_RR"}};
-        const auto name=names.at(mirror),base="/ets2/camera/"+name,frame=name+"_optical";
+        const auto mount=std::find_if(rig.at("views").begin(),rig.at("views").end(),[&](const json& v){return "mirror"+std::to_string(v.at("slot").get<int>())==mirror;});
+        if(mount==rig.at("views").end()) throw std::runtime_error("Bundle camera is not in the configured rig");
+        const auto name=mount->at("camera_id").get<std::string>(),base="/ets2/camera/"+name,frame=name+"_optical";
         const auto& meta=view.at("metadata");const auto& pass=meta.at("geometry_pass");const auto& camera=pass.at("camera_at_compile");
         if(pass.at("sdk_at_compile").at("frame_id")!=first.at("frame_id")) throw std::runtime_error("Different SDK associations within one sensor bundle");
         if(camera.at("projection_modifier_flag").get<unsigned>()!=0) throw std::runtime_error("Unsupported modified camera projection");

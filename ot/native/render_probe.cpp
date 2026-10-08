@@ -15,12 +15,17 @@ constexpr uintptr_t hook_rva=0x2B3193;
 constexpr uintptr_t present_hook_rva=0x2BFEDA;
 constexpr uintptr_t compile_begin_rva=0x2B1B40,compile_end_rva=0x2B266A;
 constexpr uintptr_t draw_batch_rva=0x2E6243;
-constexpr uintptr_t rig_select_rva=0x5389CD,rig_begin_rva=0x538B11,rig_end_rva=0x538CE3;
+constexpr uintptr_t rig_select_rva=0x538A4E,rig_begin_rva=0x538B11,rig_end_rva=0x538CE3;
+constexpr uintptr_t rig_drawables_rva=0x538AD4,rig_graph_drawables_rva=0x4D458B,rig_graph_cameras_rva=0x4D46E4,rig_graph_end_rva=0x4D4E54;
+constexpr std::array<uint8_t,16> rig_drawables_signature={0x48,0x3B,0x71,0x10,0x0F,0x83,0x71,0x02,0x00,0x00,0x48,0x8B,0x41,0x08,0x48,0x8B};
+constexpr std::array<uint8_t,16> rig_graph_drawables_signature={0x48,0x3B,0x43,0x10,0x0F,0x83,0x89,0x09,0x00,0x00,0x48,0x8B,0x43,0x08,0x48,0x83};
+constexpr std::array<uint8_t,16> rig_graph_cameras_signature={0x48,0x3B,0x79,0x10,0x0F,0x83,0xB0,0x08,0x00,0x00,0x48,0x8B,0x59,0x08,0x48,0x8B};
+constexpr std::array<uint8_t,16> rig_graph_end_signature={0x48,0x8B,0x44,0x24,0x40,0x48,0x05,0x98,0x00,0x00,0x00,0x48,0x89,0x44,0x24,0x40};
 constexpr uintptr_t rig_dimensions_rva=0x1610250;
 constexpr uintptr_t rig_ego_parts_rva=0xA3CADE;
 constexpr std::array<uint8_t,11> rig_ego_parts_signature={0x49,0x8B,0xF8,0x48,0x8B,0xD9,0x74,0x0F,0x49,0x8B,0xD0};
 constexpr std::array<uint8_t,17> rig_dimensions_signature={0x48,0x83,0xEC,0x58,0xF3,0x0F,0x10,0x0D,0x3C,0xC2,0xF0,0,0x0F,0x57,0xC0,0x8B,0xC2};
-constexpr std::array<uint8_t,12> rig_select_signature={0x44,0x39,0xA9,0xC0,0x0A,0,0,0x76,0x05,0x83,0xFF,0x02};
+constexpr std::array<uint8_t,16> rig_select_signature={0x44,0x0F,0x29,0x84,0x24,0xC0,0x01,0x00,0x00,0x41,0x8B,0xED,0xF3,0x44,0x0F,0x10};
 constexpr std::array<uint8_t,13> rig_begin_signature={0xBA,1,0,0,0,0x49,0x8B,0xCF,0xE8,0x42,0xAD,0xF5,0xFF};
 constexpr std::array<uint8_t,16> rig_end_signature={0x4C,0x8B,0xBC,0x24,0x28,0x02,0,0,0x45,0x33,0xED,0xFF,0xC5,0x83,0xFD,0x09};
 constexpr std::array<uint8_t,25> draw_batch_signature={
@@ -61,7 +66,7 @@ uintptr_t find_target(std::span<const uint8_t> bytes_to_find,size_t adjustment,u
         throw std::runtime_error("Render hook signature does not resolve to the inspected call site");
     return found;
 }
-struct CodeRanges { std::array<std::pair<uintptr_t,uintptr_t>,19> ranges; };
+struct CodeRanges { std::vector<std::pair<uintptr_t,uintptr_t>> ranges; };
 bool contains(const CodeRanges& ranges,DWORD64 ip) noexcept {
     for(const auto& [begin,end]:ranges.ranges) if(ip>=begin && ip<end) return true;
     return false;
@@ -102,7 +107,8 @@ void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool fram
     if(mode!="observe" && mode!="rig") throw std::runtime_error("Render mode must be observe or rig");
     if(mode=="rig" && vehicle_metadata) throw std::runtime_error("Vehicle metadata requires observe mode");
     const auto selected=[&](const safetyhook::MidHook* hook) {
-        if(hook==&rig_select_hook_ || hook==&rig_begin_hook_ || hook==&rig_end_hook_ || hook==&rig_dimensions_hook_ || hook==&rig_ego_parts_hook_) return true;
+        if(hook==&rig_select_hook_ || hook==&rig_begin_hook_ || hook==&rig_end_hook_ || hook==&rig_dimensions_hook_ || hook==&rig_ego_parts_hook_ ||
+           hook==&rig_drawables_hook_ || hook==&rig_graph_drawables_hook_ || hook==&rig_graph_cameras_hook_ || hook==&rig_graph_end_hook_) return true;
         if(mode=="observe") return hook!=&draw_batch_hook_ || (vehicle_metadata && draw_metadata);
         return frame_timing && hook==&present_hook_;
     };
@@ -179,12 +185,16 @@ void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool fram
             throw std::runtime_error("Cannot create draw binding observer");
         }
         draw_batch_hook_=std::move(*draw_result);
-        const std::array<std::tuple<safetyhook::MidHook*,uintptr_t,safetyhook::MidHookFn>,5> rig_hooks={{
+        const std::array<std::tuple<safetyhook::MidHook*,uintptr_t,safetyhook::MidHookFn>,9> rig_hooks={{
             {&rig_select_hook_,find_target(rig_select_signature,0,rig_select_rva),&rig_select_callback},
             {&rig_begin_hook_,find_target(rig_begin_signature,0,rig_begin_rva),&rig_begin_callback},
             {&rig_end_hook_,find_target(rig_end_signature,0,rig_end_rva),&rig_end_callback},
             {&rig_dimensions_hook_,find_target(rig_dimensions_signature,0,rig_dimensions_rva),&rig_dimensions_callback},
-            {&rig_ego_parts_hook_,find_target(rig_ego_parts_signature,0,rig_ego_parts_rva),&rig_ego_parts_callback}}};
+            {&rig_ego_parts_hook_,find_target(rig_ego_parts_signature,0,rig_ego_parts_rva),&rig_ego_parts_callback},
+            {&rig_drawables_hook_,find_target(rig_drawables_signature,0,rig_drawables_rva),&rig_drawables_callback},
+            {&rig_graph_drawables_hook_,find_target(rig_graph_drawables_signature,0,rig_graph_drawables_rva),&rig_graph_drawables_callback},
+            {&rig_graph_cameras_hook_,find_target(rig_graph_cameras_signature,0,rig_graph_cameras_rva),&rig_graph_cameras_callback},
+            {&rig_graph_end_hook_,find_target(rig_graph_end_signature,0,rig_graph_end_rva),&rig_graph_end_callback}}};
         for(const auto& [destination,address,function]:rig_hooks) {
             auto rig_result=safetyhook::MidHook::create(address,function,safetyhook::MidHook::StartDisabled);
             if(!rig_result) {
@@ -242,13 +252,14 @@ bool RenderProbe::disable_locked(bool clear_rig) {
     accepting_=false;
     observing_=false;
     if(auto stream=stream_.load()) stream->stop();
-    if(clear_rig) rig_.clear();
     vehicle_metadata_=false;
     frame_boundary_seen_=false;
     mode_="off";
     last_error_.clear();
     bool changed=false;
-    for(auto* hook:hookset()) if(hook!=&rig_end_hook_ && hook->enabled()) {
+    const auto draining=[&](auto* hook) {return hook==&rig_begin_hook_ || hook==&rig_end_hook_ || hook==&rig_dimensions_hook_ ||
+        hook==&rig_drawables_hook_ || hook==&rig_graph_drawables_hook_ || hook==&rig_graph_cameras_hook_ || hook==&rig_graph_end_hook_;};
+    for(auto* hook:hookset()) if(!draining(hook) && hook->enabled()) {
         changed=true;
         if(!hook->disable()) last_error_="Render observer disable failed";
     }
@@ -258,7 +269,8 @@ bool RenderProbe::disable_locked(bool clear_rig) {
     const auto deadline=GetTickCount64()+2000;
     while((callbacks.load() || rig_.in_flight()) && GetTickCount64()<deadline) Sleep(1);
     if(!callbacks.load() && !rig_.in_flight()) {
-        if(rig_end_hook_.enabled() && !rig_end_hook_.disable()) last_error_="Camera submission end hook disable failed";
+        for(auto* hook:hookset()) if(draining(hook) && hook->enabled() && !hook->disable()) last_error_="Camera graph drain hook disable failed";
+        if(clear_rig) rig_.clear();
     } else last_error_="Camera submission still draining; payload must stay loaded";
     for(auto* camera:cameras()) camera->cancel();
     bundle_frame_=0;published_bundle_=nullptr;
@@ -266,11 +278,11 @@ bool RenderProbe::disable_locked(bool clear_rig) {
 }
 bool RenderProbe::quiescent() noexcept {
     if(callbacks.load() || rig_.in_flight()) return false;
-    CodeRanges ranges{};ranges.ranges[0]={module_begin_,module_end_};
-    size_t range=1;
+    CodeRanges ranges{};ranges.ranges.reserve(1+2*hookset().size());
+    ranges.ranges.push_back({module_begin_,module_end_});
     for(const auto* hook:hookset()) {
-        ranges.ranges[range++]={hook->stub().address(),hook->stub().address()+hook->stub().size()};
-        ranges.ranges[range++]={hook->trampoline().address(),hook->trampoline().address()+hook->trampoline().size()};
+        ranges.ranges.push_back({hook->stub().address(),hook->stub().address()+hook->stub().size()});
+        ranges.ranges.push_back({hook->trampoline().address(),hook->trampoline().address()+hook->trampoline().size()});
     }
     Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0));
     if(!snapshot) return false;
@@ -350,32 +362,44 @@ void RenderProbe::rig_select_callback(safetyhook::Context& context) noexcept {
     ++callbacks;
     if(auto* self=observer.load();self && self->accepting_.load()) {
         auto stream=self->stream_.load();
-        // Camera submission can precede its command execution by a Present
-        // boundary. Cover both intervals, but capture only the requested one.
-        self->rig_.select(context,stream && stream->running()?
-            (stream->frame_mask(self->presents_.load()+1)|stream->frame_mask(self->presents_.load()+2)):UINT32_MAX);
+        // Keep private descriptors immutable until their queued graphs finish.
+        // Do not consume a capture request when the previous selection owns them.
+        self->rig_.select(context,self->rig_.can_select()?
+            (stream && stream->running()?stream->select_pending():UINT32_MAX):0);
     }
     --callbacks;
 }
 void RenderProbe::rig_begin_callback(safetyhook::Context& context) noexcept {
     ++callbacks;
-    if(auto* self=observer.load();self && self->accepting_.load()) self->rig_.begin(context);
+    if(auto* self=observer.load();self && (self->accepting_.load() || self->rig_.in_flight())) self->rig_.begin(context);
     --callbacks;
 }
-void RenderProbe::rig_end_callback(safetyhook::Context&) noexcept {
+void RenderProbe::rig_end_callback(safetyhook::Context& context) noexcept {
     ++callbacks;
-    if(auto* self=observer.load()) self->rig_.end();
+    if(auto* self=observer.load()) self->rig_.end(context);
     --callbacks;
 }
 void RenderProbe::rig_dimensions_callback(safetyhook::Context& context) noexcept {
     ++callbacks;
-    if(auto* self=observer.load();self && self->accepting_.load()) self->rig_.dimensions(context);
+    if(auto* self=observer.load()) self->rig_.dimensions(context);
     --callbacks;
 }
 void RenderProbe::rig_ego_parts_callback(safetyhook::Context& context) noexcept {
     ++callbacks;
     if(auto* self=observer.load();self && self->accepting_.load()) self->rig_.ego_parts(context);
     --callbacks;
+}
+void RenderProbe::rig_drawables_callback(safetyhook::Context& context) noexcept {
+    ++callbacks;if(auto* self=observer.load()) self->rig_.submission_drawables(context);--callbacks;
+}
+void RenderProbe::rig_graph_drawables_callback(safetyhook::Context& context) noexcept {
+    ++callbacks;if(auto* self=observer.load()) self->rig_.graph_drawables(context);--callbacks;
+}
+void RenderProbe::rig_graph_cameras_callback(safetyhook::Context& context) noexcept {
+    ++callbacks;if(auto* self=observer.load()) self->rig_.graph_cameras(context);--callbacks;
+}
+void RenderProbe::rig_graph_end_callback(safetyhook::Context&) noexcept {
+    ++callbacks;if(auto* self=observer.load()) self->rig_.graph_end();--callbacks;
 }
 json RenderProbe::camera_rig(const json& request) {
     std::lock_guard lock(control_);
@@ -445,7 +469,7 @@ json RenderProbe::frames(uint64_t after_id) {
 bool RenderProbe::compile_frame() const noexcept {
     const auto stream=stream_.load();
     return !stream || !stream->running() ||
-        (stream->frame_mask(presents_.load()+1)|stream->frame_mask(presents_.load()+2))!=0;
+        stream->compiling();
 }
 void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     const auto stream=stream_.load();
@@ -458,7 +482,7 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     record.count=static_cast<uint32_t>(context.rdx);
     uintptr_t cursor{},data{};
     const auto index=static_cast<uint32_t>(context.r13);
-    if((!stream || !stream->running() || stream->frame_mask(record.render_frame)) &&
+    if((!stream || !stream->running() || stream->compiling()) &&
        index && read_memory(context.rbp-0x30,cursor) && read_memory(cursor,record.compiled_id) &&
        read_memory(context.r12,data)) {
         record.token=data+(index-1)*4;
@@ -539,7 +563,7 @@ json RenderProbe::capture_views(const std::string& action,Transport* publisher,b
         if(!bundle_frame_ || pending || (!ready && action=="publish") || !publisher)
             throw std::runtime_error("Camera bundle is incomplete or still pending");
         if(!published_bundle_.is_null()) return published_bundle_;
-        json names=json::array();for(unsigned slot=0;slot<6;++slot) if(bundle_mask_&(1u<<slot)) names.push_back("mirror"+std::to_string(slot));
+        json names=json::array();for(unsigned slot=0;slot<9;++slot) if(bundle_mask_&(1u<<slot)) names.push_back("mirror"+std::to_string(slot));
         json manifest={{"render_frame_id",bundle_frame_},{"observation_session_qpc",observation_session_},
             {"complete",ready},{"requested_cameras",names},
             {"missing_views",json::array()},{"views",json::array()}};
@@ -630,7 +654,11 @@ json RenderProbe::status() {
             {{"name","camera.sensor_submission_begin"},{"tier",2},{"rva",rig_begin_rva},{"enabled",rig_begin_hook_.enabled()}},
             {{"name","camera.sensor_submission_end"},{"tier",2},{"rva",rig_end_rva},{"enabled",rig_end_hook_.enabled()}},
             {{"name","camera.sensor_dimensions"},{"tier",2},{"rva",rig_dimensions_rva},{"enabled",rig_dimensions_hook_.enabled()}},
-            {{"name","camera.sensor_ego_parts"},{"tier",2},{"rva",rig_ego_parts_rva},{"enabled",rig_ego_parts_hook_.enabled()}}})},
+            {{"name","camera.sensor_ego_parts"},{"tier",2},{"rva",rig_ego_parts_rva},{"enabled",rig_ego_parts_hook_.enabled()}},
+            {{"name","camera.private_submission_drawables"},{"tier",2},{"rva",rig_drawables_rva},{"enabled",rig_drawables_hook_.enabled()}},
+            {{"name","camera.private_graph_drawables"},{"tier",2},{"rva",rig_graph_drawables_rva},{"enabled",rig_graph_drawables_hook_.enabled()}},
+            {{"name","camera.private_graph_cameras"},{"tier",2},{"rva",rig_graph_cameras_rva},{"enabled",rig_graph_cameras_hook_.enabled()}},
+            {{"name","camera.private_graph_end"},{"tier",2},{"rva",rig_graph_end_rva},{"enabled",rig_graph_end_hook_.enabled()}}})},
         {"last_error",last_error_},{"render_coherent",false},{"capture",gpu_.command("status")},
         {"recent_bindings",entries}};
 }

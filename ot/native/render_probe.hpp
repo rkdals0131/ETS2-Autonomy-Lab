@@ -45,6 +45,10 @@ private:
     static void rig_end_callback(safetyhook::Context& context) noexcept;
     static void rig_dimensions_callback(safetyhook::Context& context) noexcept;
     static void rig_ego_parts_callback(safetyhook::Context& context) noexcept;
+    static void rig_drawables_callback(safetyhook::Context& context) noexcept;
+    static void rig_graph_drawables_callback(safetyhook::Context& context) noexcept;
+    static void rig_graph_cameras_callback(safetyhook::Context& context) noexcept;
+    static void rig_graph_end_callback(safetyhook::Context& context) noexcept;
     struct Timing {
         std::atomic<uint64_t> count{0},total{0},maximum{0};
         // Bucket 0 includes 0 and 1 tick; bucket k contains [2^k, 2^(k+1)).
@@ -73,11 +77,13 @@ private:
     safetyhook::MidHook draw_batch_hook_;
     safetyhook::MidHook rig_select_hook_,rig_begin_hook_,rig_end_hook_,rig_dimensions_hook_;
     safetyhook::MidHook rig_ego_parts_hook_;
+    safetyhook::MidHook rig_drawables_hook_,rig_graph_drawables_hook_,rig_graph_cameras_hook_,rig_graph_end_hook_;
     CameraRig rig_;
     std::atomic<std::shared_ptr<CaptureStream>> stream_;
-    std::array<safetyhook::MidHook*,10> hookset() noexcept {
+    std::array<safetyhook::MidHook*,14> hookset() noexcept {
         return {&hook_,&present_hook_,&compile_begin_hook_,&compile_end_hook_,&draw_batch_hook_,
-            &rig_select_hook_,&rig_begin_hook_,&rig_end_hook_,&rig_dimensions_hook_,&rig_ego_parts_hook_};
+            &rig_select_hook_,&rig_begin_hook_,&rig_end_hook_,&rig_dimensions_hook_,&rig_ego_parts_hook_,
+            &rig_drawables_hook_,&rig_graph_drawables_hook_,&rig_graph_cameras_hook_,&rig_graph_end_hook_};
     }
     PassCommands pass_commands_;
     std::atomic<std::shared_ptr<const json>> sdk_state_;
@@ -93,10 +99,11 @@ private:
     std::string last_error_;
     std::string mode_="off";
     GpuCapture gpu_{"mirror5"},gpu0_{"mirror0"},gpu1_{"mirror1"},gpu2_{"mirror2"},gpu3_{"mirror3"},gpu4_{"mirror4"};
+    GpuCapture gpu6_{"mirror6"},gpu7_{"mirror7"},gpu8_{"mirror8"};
     uint64_t bundle_frame_=0;
     uint32_t bundle_mask_=0x27;
     json published_bundle_;
-    std::array<GpuCapture*,6> cameras() noexcept {return {&gpu0_,&gpu1_,&gpu2_,&gpu3_,&gpu4_,&gpu_};}
+    std::array<GpuCapture*,9> cameras() noexcept {return {&gpu0_,&gpu1_,&gpu2_,&gpu3_,&gpu4_,&gpu_,&gpu6_,&gpu7_,&gpu8_};}
     std::vector<GpuCapture*> capture_cameras() {
         std::vector<GpuCapture*> selected;const auto all=cameras();
         for(size_t i=0;i<all.size();++i) if(bundle_mask_&(1u<<i)) selected.push_back(all[i]);

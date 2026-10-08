@@ -1,6 +1,7 @@
 #include "camera_rig.hpp"
 #include <cmath>
 #include <stdexcept>
+#include <cstdio>
 
 namespace ot {
 namespace {
@@ -11,6 +12,10 @@ struct SubmissionCopy {
     CameraRig* owner=nullptr;
 };
 thread_local SubmissionCopy submission;
+thread_local CameraRig* selection_owner=nullptr;
+thread_local std::shared_ptr<const void> selection_config;
+thread_local uint32_t selection_mask=0;
+thread_local uintptr_t graph_camera=0;
 using Q=std::array<double,4>;
 using V=std::array<double,3>;
 Q multiply(Q a,Q b) {
@@ -55,11 +60,14 @@ json CameraRig::configure(const json& request) {
     if(!request.value("enabled",true)) {clear();return status();}
     auto config=std::make_shared<Configuration>();
     config->ego_full_model=request.value("ego_full_model",false);
+    config->private_outputs=request.value("private_outputs",false);
     for(const auto& item:request.at("views")) {
         const int slot=item.at("slot").get<int>();
-        if(slot<0 || slot>=6 || config->views[slot].enabled)
-            throw std::runtime_error("Camera rig slots must be unique and between 0 and 5");
+        if(slot<0 || slot>=9 || config->views[slot].enabled)
+            throw std::runtime_error("Camera rig slots must be unique and between 0 and 8");
         auto& view=config->views[slot];
+        view.source_slot=item.value("source_slot",slot);
+        if(view.source_slot>=9) throw std::runtime_error("Camera source slot must be between 0 and 8");
         const auto basis=item.value("basis",std::string("chassis"));
         if(basis!="world" && basis!="chassis" && basis!="cabin")
             throw std::runtime_error("Camera basis must be world, chassis or cabin");
@@ -89,7 +97,7 @@ json CameraRig::configure(const json& request) {
 }
 json CameraRig::status() {
     auto config=configuration_.load();json views=json::array();
-    for(size_t slot=0;slot<6;++slot) {
+    for(size_t slot=0;slot<9;++slot) {
         json view={{"slot",slot},{"applied",applied_[slot].load()}};
         if(config && config->views[slot].enabled) {
             const auto& v=config->views[slot];
@@ -101,25 +109,95 @@ json CameraRig::status() {
     }
     return {{"enabled",config!=nullptr},{"selected_mask",config?config->mask:0},
         {"ego_full_model",config && config->ego_full_model},{"ego_parts_applied",ego_parts_applied_.load()},
-        {"in_flight",in_flight_.load()},{"unavailable",unavailable_.load()},{"views",views},
+        {"private_outputs",config && config->private_outputs},{"private_ready",private_ready_.load()},
+        {"in_flight",in_flight()},{"pending_graphs",graphs_.load()},{"unavailable",unavailable_.load()},{"views",views},
         {"source","private submission copy; persistent mirror fields unchanged"}};
 }
 void CameraRig::select(safetyhook::Context& context,uint32_t capture_mask) noexcept {
     if(auto config=configuration_.load()) {
+        // This hook runs after native camera updates. Register-only array
+        // redirection leaves the engine's owning arrays and HUD aliases intact.
+        if(config->private_outputs) {
+            if(!(config->mask&capture_mask)) {context.r12&=~uint64_t(config->mask);return;}
+            if(!prepare_private(context.r14,*config)) {++unavailable_;return;}
+            context.r14=reinterpret_cast<uintptr_t>(&camera_array_);
+            selection_mask=config->mask&capture_mask;
+            if(selection_mask) {selection_owner=this;selection_config=config;++selections_;}
+        }
         // A relocated slot is owned by the sensor while the stream is active.
         // Clear its native-mirror selection as well as the forced selection on
         // unused frames; all unowned mirrors retain the engine's choice.
         context.r12=(context.r12&~uint64_t(config->mask))|(config->mask&capture_mask);
     }
 }
+bool CameraRig::prepare_private(uintptr_t cameras,const Configuration& config) noexcept {
+    uintptr_t controller{};Array camera_array{},drawable_array{};
+    const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    if(!read_memory(cameras,camera_array) || camera_array.size!=9 ||
+       !read_memory(base+0x36AE6D8,controller) || !controller ||
+       !read_memory(controller+0xA8,drawable_array) || drawable_array.size!=9) return false;
+    std::array<uintptr_t,9> sources{},drawables{};
+    if(!copy_memory(camera_array.data,sources.data(),sizeof(sources)) ||
+       !copy_memory(drawable_array.data,drawables.data(),sizeof(drawables))) return false;
+    const auto original_sources=sources,original_drawables=drawables;
+    for(unsigned i=0;i<9;++i) if(config.views[i].enabled) {
+        const auto source=config.views[i].source_slot;auto& view=private_views_[i];
+        if(!original_sources[source] || !original_drawables[source] ||
+           !copy_memory(original_sources[source],view.camera.data(),view.camera.size()) ||
+           !copy_memory(original_drawables[source],view.drawable.data(),view.drawable.size())) return false;
+        // The descriptor's transient graph image is named independently of
+        // native mirror textures. An invalid alias means graph output only.
+        std::snprintf(view.name.data(),view.name.size(),"ot/sensor%u",i);
+        const auto name=reinterpret_cast<uintptr_t>(view.name.data());
+        const uint32_t length=static_cast<uint32_t>(std::strlen(view.name.data()));
+        const uint16_t invalid=0xffff;
+        const uint32_t mode=0;
+        std::memcpy(view.drawable.data()+0x38,&name,8);
+        std::memcpy(view.drawable.data()+0x40,&length,4);
+        std::memcpy(view.drawable.data()+0x148,&invalid,2);
+        std::memcpy(view.drawable.data()+0x160,&invalid,2);
+        std::memcpy(view.camera.data()+0x518,&mode,4);
+        sources[i]=reinterpret_cast<uintptr_t>(view.camera.data());
+        drawables[i]=reinterpret_cast<uintptr_t>(view.drawable.data());
+    }
+    camera_pointers_=sources;drawable_pointers_=drawables;
+    camera_array_=camera_array;camera_array_.data=reinterpret_cast<uintptr_t>(camera_pointers_.data());
+    drawable_array_=drawable_array;drawable_array_.data=reinterpret_cast<uintptr_t>(drawable_pointers_.data());
+    interior_=cameras-0x13A8;private_ready_=true;
+    return true;
+}
+void CameraRig::submission_drawables(safetyhook::Context& context) noexcept {
+    if(context.r14==reinterpret_cast<uintptr_t>(&camera_array_)) context.rcx=reinterpret_cast<uintptr_t>(&drawable_array_);
+}
+void CameraRig::graph_drawables(safetyhook::Context& context) noexcept {
+    graph_camera=0;uintptr_t record{},camera{};
+    if(!private_ready_ || !read_memory(context.rsp+0x40,record) || !read_memory(record+8,camera)) return;
+    std::lock_guard lock(requests_mutex_);
+    if(requests_.contains(camera)) {
+        graph_camera=camera;
+        context.rbx=reinterpret_cast<uintptr_t>(&drawable_array_);
+    }
+}
+void CameraRig::graph_cameras(safetyhook::Context& context) noexcept {
+    if(graph_camera)
+        context.rcx=reinterpret_cast<uintptr_t>(&camera_array_);
+}
+void CameraRig::graph_end() noexcept {
+    if(!graph_camera) return;
+    std::lock_guard lock(requests_mutex_);
+    if(requests_.erase(graph_camera)) --graphs_;
+    graph_camera=0;
+}
 void CameraRig::begin(safetyhook::Context& context) noexcept {
-    auto config=configuration_.load();const auto slot=static_cast<uint32_t>(context.rbp);
-    if(!config || slot>=6 || !config->views[slot].enabled) return;
+    auto config=selection_owner==this?std::static_pointer_cast<const Configuration>(selection_config):configuration_.load();
+    const auto slot=static_cast<uint32_t>(context.rbp);
+    if(!config || slot>=9 || !config->views[slot].enabled) return;
+    if(config->private_outputs && selection_owner!=this) return;
     if(submission.owner) {++unavailable_;return;}
     const auto& view=config->views[slot];V position=view.position;Q rotation=view.rotation;
     if(view.basis!=Basis::world) {
         Placement body{};
-        const auto interior=context.r14-0x13a8;
+        const auto interior=context.r14==reinterpret_cast<uintptr_t>(&camera_array_)?interior_.load():context.r14-0x13a8;
         if(!(view.basis==Basis::cabin?cabin_pose(interior,body):chassis_pose(interior,body))) {++unavailable_;return;}
         Q q{body.w,body.qx,body.qy,body.qz};
         const auto relative=rotate(q,position);
@@ -146,8 +224,13 @@ void CameraRig::begin(safetyhook::Context& context) noexcept {
     context.rbx=reinterpret_cast<uintptr_t>(submission.bytes.data());
     ++applied_[slot];
 }
-void CameraRig::end() noexcept {
+void CameraRig::end(safetyhook::Context& context) noexcept {
     if(submission.owner==this) {submission.owner=nullptr;--in_flight_;}
+    if(selection_owner==this && (selection_mask&(1u<<context.rbp))) {
+        {std::lock_guard lock(requests_mutex_);if(requests_.insert(context.rdi).second) ++graphs_;}
+        selection_mask&=~(1u<<context.rbp);
+        if(!selection_mask) {selection_owner=nullptr;selection_config.reset();--selections_;}
+    }
 }
 void CameraRig::dimensions(safetyhook::Context& context) noexcept {
     uintptr_t caller{};
@@ -155,7 +238,7 @@ void CameraRig::dimensions(safetyhook::Context& context) noexcept {
        caller!=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))+0x4d46b8) return;
     const auto slot=static_cast<uint32_t>(context.rdi);
     const auto config=configuration_.load();
-    if(!config || slot>=6 || !config->views[slot].enabled) return;
+    if(!config || slot>=9 || !config->views[slot].enabled) return;
     const auto& size=config->views[slot].resolution;
     if(size[0]) {context.rdx=size[0];context.r8=size[1];}
 }
@@ -164,13 +247,15 @@ void CameraRig::ego_parts(safetyhook::Context& context) noexcept {
     if(!config || !config->ego_full_model) return;
     uintptr_t caller{},mask{},controller{},actor{},vehicle{};
     const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    constexpr std::array<uint64_t,9> masks={0x400,0x800,0x1000,0x2000,0x4000,0x8000,0x10000,0x0800000000000000,0x1000000000000000};
+    uint64_t sensor_mask=0;for(unsigned i=0;i<9;++i) if(config->mask&(1u<<i)) sensor_mask|=masks[i];
     // A3CADE follows the cached-model "all parts" test. Limit the override to
     // the two body model calls made by the player's 646C00 submission, and to
     // camera slots owned by this rig. Other models and normal mirrors keep
     // their native per-mirror subsets. No model/camera memory is changed.
     if(!read_memory(context.rsp+0x48,caller) ||
        (caller!=base+0x646DC9 && caller!=base+0x646E57) ||
-       !read_memory(context.r8+0x18,mask) || !(mask&(uint64_t(config->mask)<<10)) ||
+       !read_memory(context.r8+0x18,mask) || !(mask&sensor_mask) ||
        !read_memory(base+0x36AE6D8,controller) || !controller ||
        !read_memory(controller+0x31B0,actor) || !actor ||
        !read_memory(actor+0x18,vehicle) || context.rsi!=vehicle) return;

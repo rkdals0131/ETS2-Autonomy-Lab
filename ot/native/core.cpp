@@ -318,7 +318,7 @@ json Runtime::command(const json& request) {
                 throw std::runtime_error("Shared GPU output requires a ROS stream relay");
             if(request.contains("lidars")) for(const auto& item:request.at("lidars").items()) {
                 const auto& name=item.key();
-                if(name.size()!=7 || !name.starts_with("mirror") || name.back()<'0' || name.back()>'5')
+                if(name.size()!=7 || !name.starts_with("mirror") || name.back()<'0' || name.back()>'8')
                     throw std::runtime_error("Invalid LiDAR source camera");
                 options.lidar_patterns[name.back()-'0']=make_lidar_pattern(item.value());
             }
@@ -327,7 +327,7 @@ json Runtime::command(const json& request) {
                 options.selective=true;options.outputs.fill(0);
                 for(const auto& entry:request.at("outputs").items()) {
                     const auto& name=entry.key();
-                    if(name.size()!=7 || !name.starts_with("mirror") || name.back()<'0' || name.back()>'5')
+                    if(name.size()!=7 || !name.starts_with("mirror") || name.back()<'0' || name.back()>'8')
                         throw std::runtime_error("Invalid output camera");
                     for(const auto& output:entry.value()) {
                         uint8_t flag=output=="color"?1:output=="depth"?2:output=="preview"?4:output=="lidar"?8:output=="metadata"?16:0;
@@ -336,7 +336,7 @@ json Runtime::command(const json& request) {
                     }
                 }
             }
-            for(size_t i=0;i<6;++i) if((options.outputs[i]&8) && !options.lidar_patterns[i])
+            for(size_t i=0;i<options.outputs.size();++i) if((options.outputs[i]&8) && !options.lidar_patterns[i])
                 throw std::runtime_error("LiDAR demand requires a beam pattern");
             if(options.format!="raw" && options.format!="rgbd8" && options.format!="raw+rgbd8" && options.format!="ros" && options.format!="raw+ros")
                 throw std::runtime_error("Capture format must be raw, rgbd8, raw+rgbd8 ros or raw+ros");

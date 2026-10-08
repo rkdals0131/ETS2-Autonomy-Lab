@@ -8,7 +8,7 @@ CaptureStream::CaptureStream(uint32_t mask,const CaptureOptions& options,double 
     options_(options),hz_(hz),duration_(duration),presents_(presents),session_(session),publisher_(publisher),
     stop_event_(CreateEventW(nullptr,TRUE,FALSE,nullptr)) {
     if(!stop_event_) throw std::runtime_error("Cannot create capture stream stop event");
-    for(unsigned camera=0;camera<6;++camera) if(mask&(1u<<camera)) {
+    for(unsigned camera=0;camera<9;++camera) if(mask&(1u<<camera)) {
         exposure_[camera]=std::make_shared<ExposureState>();
         const auto name="mirror"+std::to_string(camera);names_.push_back(name);camera_indices_.push_back(camera);
         for(auto& slot:slots_) slot.cameras.push_back(std::make_unique<GpuCapture>(name));
@@ -24,10 +24,23 @@ void CaptureStream::stop() noexcept {
     SetEvent(stop_event_.h);
     if(worker_.joinable()) worker_.join();
 }
-uint32_t CaptureStream::frame_mask(uint64_t frame) const noexcept {
-    uint32_t mask=0;
-    for(const auto& slot:slots_) if(slot.active.load() && slot.frame.load()==frame) mask|=slot.mask.load();
-    return mask;
+bool CaptureStream::compiling() const noexcept {
+    for(const auto& slot:slots_) if(slot.active.load() && slot.selected.load())
+        for(size_t i=0;i<slot.cameras.size();++i)
+            if((slot.mask.load()&(1u<<camera_indices_[i])) && slot.cameras[i]->phase()==GpuCapture::Phase::armed) return true;
+    return false;
+}
+uint32_t CaptureStream::select_pending() noexcept {
+    if(selecting_.test_and_set()) return 0;
+    struct Unlock {std::atomic_flag& flag;~Unlock(){flag.clear();}} unlock{selecting_};
+    // Only one selected bundle may still be waiting for its render commands.
+    // GPU readback of older bundles can overlap the next submission.
+    if(compiling()) return 0;
+    for(auto& slot:slots_) if(slot.active.load() && !slot.selected.exchange(true)) {
+        ++selected_;
+        return slot.mask.load();
+    }
+    return 0;
 }
 bool CaptureStream::pending() const noexcept {
     for(const auto& slot:slots_) if(slot.active.load()) return true;
@@ -35,7 +48,7 @@ bool CaptureStream::pending() const noexcept {
 }
 void CaptureStream::observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
         uint64_t sequence,uint64_t sdk_frame,uint64_t render_frame,const json* pass) noexcept {
-    for(auto& slot:slots_) if(slot.active.load())
+    for(auto& slot:slots_) if(slot.active.load() && slot.selected.load())
         for(auto& camera:slot.cameras)
             camera->observe(context,count,targets,sequence,sdk_frame,render_frame,session_,pass);
 }
@@ -49,11 +62,18 @@ void CaptureStream::finish_slot(Slot& slot) {
         failed|=phase==GpuCapture::Phase::error;
     }
     if(pending) return;
-    slot.active=false;
+    uint64_t frame=0;bool mixed_frames=false;
+    if(!failed) for(size_t i=0;i<slot.cameras.size();++i) if(slot.mask.load()&(1u<<camera_indices_[i])) {
+        const auto captured=slot.cameras[i]->captured_frame();
+        if(frame && frame!=captured) mixed_frames=true;
+        frame=captured;
+    }
+    failed|=mixed_frames;
+    slot.frame=frame;slot.active=false;
     if(failed) {
         ++failed_;
         for(auto& camera:slot.cameras) camera->abandon_shared();
-        std::string errors;
+        std::string errors=mixed_frames?"Sensor views crossed a Present boundary":"";
         for(auto& camera:slot.cameras) if(camera->phase()==GpuCapture::Phase::error) {
             const auto state=camera->command("status",0,false);
             if(!errors.empty()) errors+="; ";
@@ -93,7 +113,7 @@ void CaptureStream::run() noexcept {
                 if(auto changed=pending_options_.exchange({})) {std::lock_guard lock(result_mutex_);options_=*changed;}
                 next+=1.0/hz_;
                 if(next<=elapsed) next=elapsed+1.0/hz_; // No catch-up burst after a stall.
-                const auto frame=presents_.load()+3;
+                const auto frame=presents_.load();
                 if(frame==previous_frame) ++same_frame_;
                 else {
                     Slot* available=nullptr;
@@ -112,10 +132,12 @@ void CaptureStream::run() noexcept {
                             options.exposure=options.auto_exposure?exposure_[camera_indices_[i]]:nullptr;
                             options.lidar_pattern=options.lidar()?options.lidar_patterns[camera_indices_[i]]:nullptr;
                             if(options.selective && !options.products) continue;
-                            available->cameras[i]->command("arm",frame,false,options);mask|=1u<<camera_indices_[i];
+                            // The next selection claims this request exactly
+                            // once. Actual execution determines its Present ID.
+                            available->cameras[i]->command("arm",0,false,options);mask|=1u<<camera_indices_[i];
                         }
                         available->mask=mask;
-                        if(mask) {available->frame=frame;available->active=true;previous_frame=frame;++armed_;}
+                        if(mask) {available->frame=0;available->selected=false;available->active=true;previous_frame=frame;++armed_;}
                     }
                 }
             }
@@ -136,12 +158,12 @@ json CaptureStream::status() {
     for(auto& slot:slots_) {
         json cameras=json::array();
         for(auto& camera:slot.cameras) cameras.push_back(camera->command("status",0,false));
-        slots.push_back({{"active",slot.active.load()},{"render_frame_id",slot.frame.load()},{"cameras",cameras}});
+        slots.push_back({{"active",slot.active.load()},{"selected",slot.selected.load()},{"render_frame_id",slot.frame.load()},{"cameras",cameras}});
     }
     std::lock_guard lock(result_mutex_);
     return {{"running",running_.load()},{"stream_id",id_},{"requested_hz",hz_},{"duration_s",duration_},
         {"format",options_.format},{"color_gain",options_.color_gain},{"requested_cameras",names_},
-        {"armed",armed_.load()},{"completed",completed_.load()},{"published",published_.load()},
+        {"armed",armed_.load()},{"selected",selected_.load()},{"completed",completed_.load()},{"published",published_.load()},
         {"failed",failed_.load()},{"canceled",canceled_.load()},{"gpu_ring_busy",ring_busy_.load()},
         {"same_frame_skipped",same_frame_.load()},{"queue_dropped",queue_dropped_.load()},
         {"ended_qpc",ended_.load()},{"reason",reason_},{"last_error",error_},{"slots",slots}};
