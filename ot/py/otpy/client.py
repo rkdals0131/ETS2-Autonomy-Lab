@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import struct
 import time
+import uuid
 
 
 class _Overlapped(C.Structure):
@@ -78,17 +79,18 @@ def _io(handle, function, buffer, size, deadline):
 class Client:
     """Each command owns one pipe connection and closes it after its reply."""
 
-    def __init__(self, timeout=5.0):
+    def __init__(self, timeout=5.0, pipe_name=r"\\.\pipe\ot"):
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         self.timeout = timeout
+        self.pipe_name = pipe_name
 
     def request(self, command, **arguments):
         payload = (json.dumps({"cmd": command, **arguments}, allow_nan=False) + "\n").encode()
         if len(payload) > 65536:
             raise ValueError("ot request exceeds 65536 bytes")
         deadline = time.monotonic() + self.timeout
-        name = r"\\.\pipe\ot"
+        name = self.pipe_name
         while True:
             # OVERLAPPED + SECURITY_SQOS_PRESENT + SECURITY_IDENTIFICATION.
             handle = _create_file(name, 0xC0000000, 0, None, 3, 0x40110000, None)
@@ -96,7 +98,7 @@ class Client:
                 break
             error = C.get_last_error()
             if error == 2:
-                raise FileNotFoundError("ot pipe is absent; ot_core is not loaded or initialization failed")
+                raise FileNotFoundError(f"Command pipe is absent: {name}; plugin is not loaded or initialization failed")
             if error != 231:  # ERROR_PIPE_BUSY
                 raise C.WinError(error)
             left = deadline - time.monotonic()
@@ -144,6 +146,37 @@ class Client:
 
     def panic(self):
         return self.request("panic")
+
+
+class LoaderClient(Client):
+    """Resident loader; commands finish at a game SDK frame boundary."""
+
+    def __init__(self, timeout=5.0):
+        super().__init__(timeout=timeout, pipe_name=r"\\.\pipe\ot_loader")
+
+    def status(self):
+        return self.request("status")
+
+    def control(self, action):
+        request_id = str(uuid.uuid4())
+        # Submit once. A lost response is not an instruction to repeat a reload.
+        try:
+            result = self.request(action, request_id=request_id)
+        except (OSError, RuntimeError) as error:
+            raise RuntimeError(f"Loader request {request_id}: inspect loader status before retrying: {error}") from error
+        deadline = time.monotonic() + max(8.0, self.timeout)
+        while True:
+            operation = result.get("operation") or {}
+            if operation.get("request_id") != request_id:
+                raise RuntimeError(f"Loader operation {request_id} was superseded; inspect loader status")
+            if operation["state"] == "done":
+                return result
+            if operation["state"] in ("failed", "expired", "cancelled"):
+                raise RuntimeError(operation.get("error", operation["state"]))
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Loader operation {request_id} is {operation['state']}; inspect loader status before retrying")
+            time.sleep(0.05)
+            result = self.status()
 
 
 class StateReader:

@@ -1,6 +1,7 @@
 #include "ot.hpp"
 #include "build_identity.hpp"
 #include "render_probe.hpp"
+#include "module_api.hpp"
 #include <scssdk_telemetry.h>
 #include <array>
 #include <fstream>
@@ -19,7 +20,7 @@ public:
     explicit Runtime(const scs_telemetry_init_params_v100_t& api):api_(api),schema_(json::parse(OT_SCHEMA)) {}
     ~Runtime() { shutdown(); }
     void initialize();
-    void shutdown() noexcept;
+    bool shutdown() noexcept;
     void panic() noexcept;
     void event(scs_event_t event,const void* data);
     void value(const Channel& channel,const scs_value_t* value);
@@ -87,7 +88,7 @@ void Runtime::initialize() {
     log("ot_core initialized: SDK callbacks registered, pipe ready, tier="+std::to_string(tier_.load()));
     if(api_.common.log) api_.common.log(SCS_LOG_TYPE_message,"[ot_core] SDK plugin ready; local pipe \\\\.\\pipe\\ot");
 }
-void Runtime::shutdown() noexcept {
+bool Runtime::shutdown() noexcept {
     tier_=0;
     for(auto event:events_) api_.unregister_from_event(event);
     events_.clear();
@@ -99,12 +100,13 @@ void Runtime::shutdown() noexcept {
     if(render_probe_) {
         if(render_probe_->close()) render_probe_.reset();
         else {
-            // Its extra module reference and hook storage remain valid until process
-            // exit. Never free code while another thread could return through it.
-            render_probe_.release();
-            log("ot_core SDK stopped but render observer is retained; normal game exit is required");
+            // Keep the runtime for a loader stop retry. Direct SDK shutdown
+            // retains it until process exit instead of freeing active code.
+            log("ot_core stopped but render observer is retained; DLL release refused");
+            return false;
         }
     }
+    return true;
 }
 void Runtime::panic() noexcept {
     try {
@@ -297,4 +299,14 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version,const scs_telemetry_ini
     } catch(const std::exception& e) {ot::log(std::string("Initialization failed: ")+e.what());return SCS_RESULT_generic_error;}
     catch(...) {ot::log("Initialization failed");return SCS_RESULT_generic_error;}
 }
-SCSAPI_VOID scs_telemetry_shutdown() {ot::runtime.reset();}
+static int SCSAPIFUNC module_stop() {
+    if(ot::runtime && !ot::runtime->shutdown()) return 0;
+    ot::runtime.reset();return 1;
+}
+SCSAPI_VOID scs_telemetry_shutdown() {
+    if(!module_stop()) ot::runtime.release();
+}
+extern "C" __declspec(dllexport) const OtModuleApi* SCSAPIFUNC ot_get_module_api(uint32_t abi) {
+    static const OtModuleApi api{1,sizeof(OtModuleApi),OT_VERSION,scs_telemetry_init,module_stop};
+    return abi==api.abi?&api:nullptr;
+}

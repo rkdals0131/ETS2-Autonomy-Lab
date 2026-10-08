@@ -25,7 +25,11 @@ void log(const std::string& message) noexcept {
     try {
         static std::mutex lock;
         std::lock_guard guard(lock);
+#ifdef OT_RESIDENT_LOADER
+        std::ofstream out(log_directory() / L"ot_loader.log", std::ios::app);
+#else
         std::ofstream out(log_directory() / L"ot_core.log", std::ios::app);
+#endif
         SYSTEMTIME time{}; GetSystemTime(&time);
         out << time.wYear << '-' << time.wMonth << '-' << time.wDay << 'T'
             << time.wHour << ':' << time.wMinute << ':' << time.wSecond << "Z " << message << '\n';

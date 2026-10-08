@@ -4,13 +4,15 @@ import json
 import math
 import sys
 import time
-from . import Client, StateReader
+from . import Client, LoaderClient, StateReader
 
 
 def main():
     parser = argparse.ArgumentParser(description="ot_core local client (Windows x64)")
     parser.add_argument("--timeout", type=float, default=5.0)
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("loader", help="Resident loader control; module changes run at SDK frame end").add_argument(
+        "action", choices=("status", "load", "unload", "reload"), default="status", nargs="?")
     for name in ("ping", "version", "hooks", "frames", "schema", "snapshot", "state", "panic", "dump", "reload_permissions"):
         sub.add_parser(name)
     sub.add_parser("read").add_argument("field")
@@ -32,7 +34,10 @@ def main():
     args = parser.parse_args()
     try:
         client = Client(timeout=args.timeout)
-        if args.command == "record_mirror5":
+        if args.command == "loader":
+            client = LoaderClient(timeout=args.timeout)
+            result = client.status() if args.action == "status" else client.control(args.action)
+        elif args.command == "record_mirror5":
             if not (math.isfinite(args.hz) and args.hz > 0 and math.isfinite(args.duration) and args.duration > 0):
                 parser.error("--hz and --duration must be finite and positive")
             record_mirror5(client, args.hz, args.duration, args.output)

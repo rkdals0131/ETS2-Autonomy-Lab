@@ -1,8 +1,52 @@
-# ot_core 0.6.1 — SDK·렌더 관측·네 미러 GPU 캡처
+# ot 0.7.0 — 상주 로더·SDK·네 미러 GPU 캡처
 
 > **확정:** SDK/IPC·내부 자차 pose 대조. 0.5.0 mirror5 5초·50표본·10 Hz 기록. 0.6.1은 미러 0·1·2·5를 같은 Present 구간에서 3묶음 수집하고 네 hook의 패닉 복원을 확인. RenderDoc 4뷰 픽셀·상수·카메라 점군.
 > **미확정:** DLL 영상과 최종 카메라 상수 연결·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
 > **다음:** pass별 카메라 자세·투영·ray 상수를 영상에 연결합니다.
+
+### 0.7.0 상주 로더 — 실제 게임 전환·교체 확인
+
+`ot_loader.dll`은 게임의 SDK 플러그인으로 남고, 하위 `ot_runtime/ot_core.dll`을 로드·해제합니다. 게임이 직접 찾는 `plugins/ot_core.dll`과 함께 설치하면 안 됩니다. 최초 전환은 `sdk unload` 후 기존 플러그인을 백업하고 아래 구조로 배치한 뒤 `sdk reload`합니다. 이후에는 기능 DLL만 아래 API로 교체합니다. 로더 자체를 업데이트할 때에는 여전히 SDK 언로드가 필요합니다.
+
+```text
+plugins/
+  ot_loader.dll             SCS SDK 진입·이벤트 전달·교체 API
+  ot_runtime/
+    ot_core.dll             교체 가능한 기능 모듈
+    ot_config.json          기존 연구 권한과 F11 설정
+```
+
+```powershell
+.\ot\ot.cmd loader status
+.\ot\ot.cmd loader unload
+# module_state=unloaded를 확인한 후 ot_runtime/ot_core.dll 교체
+.\ot\ot.cmd loader load
+# 파일 교체 없이 현재 기능 모듈을 재초기화하려면:
+.\ot\ot.cmd loader reload
+```
+
+로더 pipe는 `\\.\pipe\ot_loader`, 기능 pipe는 기존 `\\.\pipe\ot`입니다. 두 pipe는 현재 Windows 사용자만 접근할 수 있고 원격 클라이언트를 거부합니다. `load/unload/reload`는 `request_id` 문자열과 함께 한 번 제출하고 `status`로 결과를 조회합니다. CLI는 이 과정을 처리합니다. 서버는 진행 중 요청과 마지막 결과만 보존하고 동일한 마지막 ID는 중복 실행하지 않습니다. 응답을 잃은 요청은 자동 재전송하지 않습니다.
+
+외부 스레드는 교체를 직접 수행하지 않습니다. 로더가 상주 SDK 이벤트 함수를 등록하고, 기능 모듈의 `frame_end` 콜백이 반환한 뒤 SDK 스레드에서 교체합니다. 같은 이벤트 안에서 그 이벤트를 다시 등록할 수 없다는 SDK 제약 때문에 이벤트 전달 함수는 계속 남습니다. 기능 모듈은 채널·이벤트 구독을 해제하고 pipe worker와 렌더 hook을 정리한 뒤 ABI 1의 `stop()`으로 해제 가능 여부를 반환합니다. 정리가 끝나지 않으면 `retained`로 남기며 `FreeLibrary`와 새 모듈 로드를 진행하지 않습니다.
+
+대기 요청은 5초 안에 SDK 프레임 경계가 오지 않으면 만료되며 나중에 실행되지 않습니다. 새 모듈의 초기화가 실패해도 로더 API는 남으므로 파일을 고친 뒤 `load`를 다시 요청할 수 있습니다. hot load에는 현재 SDK configuration의 복사본과 started/paused 상태를 전달합니다. 다른 SDK 플러그인(예: FFB)은 이 API의 교체 대상이 아닙니다.
+
+공유 메모리 reader는 교체 전에 닫고, 교체 후 새 `StateReader`로 연결합니다. 기존 reader가 매핑을 잡고 있으면 새 기능 모듈의 독점 매핑 생성이 실패할 수 있습니다. 시작 권한은 기존 `initial_tier` 설정을 따르며 설치 설정은 Tier 0입니다. 로더 수명은 SDK 종료 또는 게임 정상 종료까지이고, 로더 로그는 `%LOCALAPPDATA%/ETS2AutonomyLab/ot/<PID>/ot_loader.log`입니다.
+
+Python에서도 같은 API를 사용합니다.
+
+```python
+from otpy import LoaderClient
+loader = LoaderClient()
+print(loader.status())
+loader.control("unload")
+# 기능 DLL 파일 교체
+loader.control("load")
+```
+
+PID 24748에서 최초 설치 후 콘솔 입력 없이 기능 DLL을 실제 언로드하고 파일을 덮어쓴 뒤 재로딩했습니다. 메모리의 기능 DLL 부재와 기능 pipe 소멸을 확인했고, 로더와 기존 FFB DLL은 유지됐습니다. 네 렌더 hook을 켜고 캡처를 요청한 상태에서도 언로드가 완료됐으며 원래 게임 코드 네 지점이 복원됐습니다. 파일을 잠시 다른 이름으로 옮겨 발생시킨 `LoadLibraryExW failed: 126` 뒤에도 로더 API가 응답했고, 파일 복원 후 로드에 성공했습니다. 완료된 reload 요청 ID를 재전송했을 때 세대 번호가 증가하지 않았습니다.
+
+재로딩 후 네 미러 픽셀 한 묶음(프레임 구간 14)을 다시 저장했고, 마지막 교체에서 hook 임시 코드까지 해제했습니다. 최종 세대 6은 Tier 0·활성 hook 0·SDK 9채널·새 공유 메모리 reader 수신 상태입니다. 차량 configuration 재전달도 `truck_generation=1`로 확인했습니다. 원본은 `research/live/2026-10-08-render-probe/0.7.0-loader-active-unload.json`, `0.7.0-loader-recovery.json`, `0.7.0-loader-final-idle.json`입니다. 로더 자체의 SDK 종료·재로딩, 의도적인 hook 정리 timeout, 장시간 반복 교체는 아직 시험하지 않았습니다.
 
 ### 0.6.1 — 같은 Present 구간의 네 미러
 
@@ -54,7 +98,7 @@ JSONL은 캡처 metadata·원시 파일 저장 경로·Present 기록·실제 �
 
 0.6.0에서 pass 명령 연결을 실제 확인했습니다. `0x227140`은 pass의 명령 버퍼(`+0x2E8`)를 목록에 넣고, renderer slot `+0x108`이 이를 DX11 명령으로 컴파일합니다. `0x2B1B40`/`0x2B266A`에서 입력 버퍼 하나가 만든 출력 token 범위를 기록하고, OMSetRenderTargets 관측 지점에서 실제 token 주소·compiled pool ID로 찾습니다. pass 이름은 그래프의 pass 배열에서 읽고 연결 이미지의 namespace를 함께 보존합니다. 3초 동안 바인딩 6,157회가 모두 연결됐으며 오류는 0이었습니다. 0.6.1은 이전 이미지 생성 hook을 제거해 총 4개(명령 컴파일 시작/끝, 바인딩, Present)만 사용합니다. 0.6.0의 다섯 hook은 패닉 원상 복원과 완전한 SDK 언로드를 확인했습니다. 정적 근거는 `graph-pass-command-submit.txt`, `rt-binding-token-read.txt`, 실제 기록은 `0.6.0-pass-commands.json`입니다.
 
-`dist/ot_core.dll`은 공식 SCS telemetry SDK 플러그인입니다. `scs_telemetry_init`에서 시작하고 `scs_telemetry_shutdown`에서 콜백·명령 스레드·pipe·공유 메모리를 해제합니다. 별도 injector나 DXGI 프록시를 사용하지 않습니다.
+`dist/ot_loader.dll`이 공식 SCS telemetry SDK 플러그인으로 시작해 기능 모듈 `ot_core.dll`을 관리합니다. SDK 종료 때 두 DLL의 콜백·명령 스레드·pipe·공유 메모리를 정리합니다. 별도 injector나 DXGI 프록시를 사용하지 않습니다.
 
 | 기능 | 현재 구현 |
 | --- | --- |
@@ -130,17 +174,18 @@ py -3.13 -m pip install --disable-pip-version-check --target ot/.tools cmake==4.
 
 결과물:
 
-- `dist/ot_core.dll`: **게임용** SDK 플러그인.
+- `dist/ot_loader.dll`: **게임용** 상주 SDK 플러그인. `plugins/`에 배치합니다.
+- `dist/ot_core.dll`: 교체 가능한 기능 모듈. `plugins/ot_runtime/`에 배치합니다.
 - `dist/ot_ipc.dll`: **Python 프로세스용** 공유 메모리 슬롯 복사 함수. 게임 plugins 폴더에 넣지 않습니다.
 - `dist/ot_config.json`: DLL 시작 설정.
 - `dist/ot_schema.json`: 컴파일된 스키마의 참고 사본. 수정해도 DLL의 주소/권한이 바뀌지 않습니다.
-- `dist/ot_core.pdb`, `dist/ot_ipc.pdb`: 디버그 심볼.
+- `dist/ot_loader.pdb`, `dist/ot_core.pdb`, `dist/ot_ipc.pdb`: 디버그 심볼.
 
 `schema/1.61.1.1/game.json`은 조사된 EXE 해시를 고정합니다. 새 EXE를 발견했다고 자동으로 갱신하지 않습니다. 구조를 다시 확인한 뒤 스키마와 함께 재빌드해야 합니다.
 
 ## 설치와 첫 연결
 
-현재 설치 버전은 **0.6.1**, 기본 시작 상태는 Tier 0입니다. 직전 0.6.0은 `ot/backup/before-0.6.1-20261008/`, 0.5.0은 `ot/backup/before-0.6.0-20261008/`에 보존했습니다. 다음은 최초 설치부터의 이력입니다.
+현재 설치 버전은 **0.7.0 로더+기능 모듈**, 기본 시작 상태는 Tier 0입니다. 직전 0.6.1과 설정은 `ot/backup/before-loader-0.7.0-20261008/`에 보존했습니다. 현재 설정 파일은 `plugins/ot_runtime/ot_config.json`입니다. 다음은 최초 설치부터의 이력입니다.
 
 **0.1 DLL의 실제 SDK 연결을 확인한 뒤, 게임 종료 상태에서 0.2로 교체했습니다.** 실행 중인 게임에 원격 주입하거나 강제 종료하지 않았습니다. 이전 DLL·플러그인 설정·사용자 `config.cfg`는 `ot/backup/before-0.2/`에 보존했습니다. 개발 콘솔을 켰고, 설치된 플러그인 설정은 싱글플레이 내부 읽기를 허용하되 시작 Tier는 0입니다. `dist/ot_config.json`의 배포 기본값은 계속 내부 읽기 비활성입니다.
 

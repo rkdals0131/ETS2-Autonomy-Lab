@@ -42,7 +42,8 @@ template<class T> bool read_memory(uintptr_t address, T& value) noexcept {
 
 class Transport {
 public:
-    Transport(std::function<json(const json&)> handler, std::function<void()> panic, int panic_key);
+    Transport(std::function<json(const json&)> handler, std::function<void()> panic, int panic_key,
+              std::wstring pipe_name=L"\\\\.\\pipe\\ot");
     ~Transport();
     void start(bool shared_state);
     void stop() noexcept;
@@ -56,6 +57,7 @@ private:
     std::function<json(const json&)> handler_;
     std::function<void()> panic_;
     int panic_key_;
+    std::wstring pipe_name_;
     Handle stop_event_, pipe_, mapping_;
     Ring* ring_ = nullptr;
     PSECURITY_DESCRIPTOR security_ = nullptr;

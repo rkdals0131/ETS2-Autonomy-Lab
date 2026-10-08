@@ -4,8 +4,9 @@
 #include <stdexcept>
 
 namespace ot {
-Transport::Transport(std::function<json(const json&)> handler,std::function<void()> panic,int key)
-    : handler_(std::move(handler)),panic_(std::move(panic)),panic_key_(key),stop_event_(CreateEventW(nullptr,TRUE,FALSE,nullptr)) {}
+Transport::Transport(std::function<json(const json&)> handler,std::function<void()> panic,int key,std::wstring pipe_name)
+    : handler_(std::move(handler)),panic_(std::move(panic)),panic_key_(key),pipe_name_(std::move(pipe_name)),
+      stop_event_(CreateEventW(nullptr,TRUE,FALSE,nullptr)) {}
 Transport::~Transport() { stop(); if(ring_) UnmapViewOfFile(ring_); if(security_) LocalFree(security_); }
 void Transport::start(bool shared) {
     if(!stop_event_) throw std::runtime_error("Stop event creation failed");
@@ -20,9 +21,9 @@ void Transport::start(bool shared) {
     std::wstring acl=L"D:P(A;;GA;;;"+std::wstring(sid)+L")"; LocalFree(sid);
     if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(acl.c_str(),SDDL_REVISION_1,&security_,nullptr)) throw std::runtime_error("IPC ACL creation failed");
     SECURITY_ATTRIBUTES sa{sizeof(sa),security_,FALSE};
-    pipe_.h=CreateNamedPipeW(L"\\\\.\\pipe\\ot",PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,
+    pipe_.h=CreateNamedPipeW(pipe_name_.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,
         PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,1,65536,65536,0,&sa);
-    if(pipe_.h==INVALID_HANDLE_VALUE) {pipe_.h=nullptr; throw std::runtime_error("Cannot own \\\\.\\pipe\\ot; another instance or access error");}
+    if(pipe_.h==INVALID_HANDLE_VALUE) {pipe_.h=nullptr; throw std::runtime_error("Cannot own command pipe; another instance or access error");}
     if(shared) {
         mapping_.h=CreateFileMappingW(INVALID_HANDLE_VALUE,&sa,PAGE_READWRITE,0,sizeof(Ring),L"Local\\OT_State");
         if(!mapping_ || GetLastError()==ERROR_ALREADY_EXISTS) throw std::runtime_error("Cannot exclusively own Local\\OT_State");
@@ -41,6 +42,7 @@ void Transport::stop() noexcept {
     if(worker_.joinable()) worker_.join();
 }
 void Transport::poll_panic() {
+    if(!panic_key_) return;
     DWORD owner=0; GetWindowThreadProcessId(GetForegroundWindow(),&owner);
     bool down=owner==GetCurrentProcessId() && (GetAsyncKeyState(panic_key_)&0x8000);
     if(down && !key_was_down_) panic_();
