@@ -60,7 +60,7 @@ void Runtime::initialize() {
     if(initial<0 || initial>1 || key<1 || key>254) throw std::runtime_error("Invalid initial_tier or panic_virtual_key");
     allow_tier1_=config_.value("allow_tier1",false) && config_.value("singleplayer_research",false);
     allow_render_probe_=config_.value("allow_render_probe",false);
-    render_probe_=std::make_unique<RenderProbe>(schema_);
+    render_probe_=std::make_unique<RenderProbe>();
     try {executable_hash_=sha256_file(module_path(nullptr)); gate_ok_=executable_hash_==OT_GAME_SHA256;}
     catch(const std::exception& e) {gate_error_=e.what();}
     if(!gate_ok_) log("Version gate closed; SDK-only. Observed hash="+executable_hash_+" "+gate_error_);
@@ -212,7 +212,7 @@ json Runtime::command(const json& request) {
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","manual_dump","panic"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","capture_mirrors","manual_dump","panic"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0},
         {"field_writes",false},{"channels",registration_}};
@@ -220,12 +220,12 @@ json Runtime::command(const json& request) {
     if(cmd=="reload_permissions") return reload_permissions();
     if(cmd=="hooks") return render_probe_->status();
     if(cmd=="frames") return render_probe_->frames(request.value("after_id",uint64_t(0)));
-    if(cmd=="capture_mirror5") {
+    if(cmd=="capture_mirror5" || cmd=="capture_mirrors") {
         std::lock_guard lock(control_);
         const auto action=request.value("action",std::string("status"));
         if(action=="arm" && (tier_!=1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_))
             throw std::runtime_error("Mirror5 capture requires the permitted Tier 1 render probe");
-        return render_probe_->capture(action);
+        return cmd=="capture_mirrors"?render_probe_->capture_views(action):render_probe_->capture(action);
     }
     if(cmd=="render_probe") {
         std::lock_guard lock(control_);

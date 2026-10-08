@@ -19,6 +19,8 @@ def main():
         "mode", choices=("on", "off", "status"), default="status", nargs="?")
     sub.add_parser("capture_mirror5", help="One requested mirror5 GPU readback").add_argument(
         "action", choices=("arm", "status", "save", "cancel"), default="status", nargs="?")
+    sub.add_parser("capture_mirrors", help="Request mirror 0/1/2/5 in one Present interval").add_argument(
+        "action", choices=("arm", "status", "save", "cancel"), default="status", nargs="?")
     record = sub.add_parser("record_mirror5", help="Record bounded mirror5 samples; restores Tier 0 on exit")
     record.add_argument("--hz", type=float, default=10.0)
     record.add_argument("--duration", type=float, required=True)
@@ -57,8 +59,8 @@ def main():
         elif args.command == "render_probe":
             options = {} if args.mode == "status" else {"enabled": args.mode == "on"}
             result = client.request("render_probe", **options)
-        elif args.command == "capture_mirror5":
-            result = client.request("capture_mirror5", action=args.action)
+        elif args.command in ("capture_mirror5", "capture_mirrors"):
+            result = client.request(args.command, action=args.action)
         else:
             result = client.request(args.command)
         print(json.dumps(result, ensure_ascii=False, indent=2))

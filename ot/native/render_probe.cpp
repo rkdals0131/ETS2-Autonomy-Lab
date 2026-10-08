@@ -10,15 +10,17 @@ namespace {
 std::atomic<RenderProbe*> observer{};
 std::atomic<uint32_t> callbacks{};
 constexpr uintptr_t hook_rva=0x2B3193;
-constexpr uintptr_t label_hook_rva=0x21F09D;
 constexpr uintptr_t present_hook_rva=0x2BFEDA;
+constexpr uintptr_t compile_begin_rva=0x2B1B40,compile_end_rva=0x2B266A;
+constexpr std::array<uint8_t,24> compile_begin_signature={
+    0x4D,0x8B,0x3A,0x49,0x8B,0x4F,0x10,0x48,0x85,0xC9,0x0F,0x84,
+    0x1A,0x0B,0x00,0x00,0x4D,0x8B,0x7F,0x08,0x48,0x8D,0x0C,0x49};
+constexpr std::array<uint8_t,24> compile_end_signature={
+    0x49,0x83,0xC2,0x08,0x4C,0x89,0x55,0xF0,0x4D,0x3B,0xD3,0x0F,
+    0x85,0xC5,0xF4,0xFF,0xFF,0x48,0x8B,0x7C,0x24,0x58,0x0F,0xB7};
 constexpr std::array<uint8_t,27> present_signature={
     0x85,0xC0,0x79,0x12,0x8B,0xD0,0x48,0x8D,0x0D,0x41,0x4E,0xF5,0x01,
     0x48,0x83,0xC4,0x28,0xE9,0x70,0xC9,0xE3,0xFF,0x48,0x83,0xC4,0x28,0xC3};
-constexpr std::array<uint8_t,29> label_signature={
-    0x0F,0xB7,0x53,0x34,0x48,0x8D,0x8F,0x40,0x07,0x00,0x00,
-    0x4C,0x8B,0x6C,0x24,0x78,0x4C,0x8B,0xA4,0x24,0xC0,0x00,0x00,0x00,
-    0x4C,0x8B,0x74,0x24,0x70};
 // The surrounding instruction sequence selects RTVs and calls OMSetRenderTargets.
 // The detour starts at mov r9,[rbp+0xA8]; relocated bytes contain no CALL.
 constexpr std::array<uint8_t,38> signature={
@@ -45,7 +47,7 @@ uintptr_t find_target(std::span<const uint8_t> bytes_to_find,size_t adjustment,u
         throw std::runtime_error("Render hook signature does not resolve to the inspected call site");
     return found;
 }
-struct CodeRanges { std::array<std::pair<uintptr_t,uintptr_t>,7> ranges; };
+struct CodeRanges { std::array<std::pair<uintptr_t,uintptr_t>,9> ranges; };
 bool contains(const CodeRanges& ranges,DWORD64 ip) noexcept {
     for(const auto& [begin,end]:ranges.ranges) if(ip>=begin && ip<end) return true;
     return false;
@@ -78,9 +80,7 @@ bool stack_clear(CONTEXT context,const CodeRanges& ranges) noexcept {
 
 RenderProbe::~RenderProbe() {
     // Runtime calls close() before destruction; a failed close retains the object.
-    hook_.reset();
-    label_hook_.reset();
-    present_hook_.reset();
+    for(auto* hook:hookset()) hook->reset();
     if(module_reference_) FreeLibrary(module_reference_);
 }
 void RenderProbe::enable() {
@@ -92,8 +92,9 @@ void RenderProbe::enable() {
         if(observer.load() && observer.load()!=this)
             throw std::runtime_error("A previous render observer is retained; restart ETS2");
         const auto target=find_target(signature,15,hook_rva);
-        const auto label_target=find_target(label_signature,0,label_hook_rva);
         const auto present_target=find_target(present_signature,0,present_hook_rva);
+        const auto compile_begin_target=find_target(compile_begin_signature,0,compile_begin_rva);
+        const auto compile_end_target=find_target(compile_end_signature,0,compile_end_rva);
         if(!module_reference_) {
             if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
                                   reinterpret_cast<LPCWSTR>(&callback),&module_reference_))
@@ -106,29 +107,36 @@ void RenderProbe::enable() {
         auto result=safetyhook::MidHook::create(target,&callback,safetyhook::MidHook::StartDisabled);
         if(!result) throw std::runtime_error("SafetyHook could not create the render detour");
         hook_=std::move(*result);
-        auto label_result=safetyhook::MidHook::create(label_target,&label_callback,safetyhook::MidHook::StartDisabled);
-        if(!label_result) {hook_.reset();throw std::runtime_error("SafetyHook could not create the graph label observer");}
-        label_hook_=std::move(*label_result);
         auto present_result=safetyhook::MidHook::create(present_target,&present_callback,safetyhook::MidHook::StartDisabled);
         if(!present_result) {
-            hook_.reset();label_hook_.reset();
+            hook_.reset();
             throw std::runtime_error("SafetyHook could not create the Present observer");
         }
         present_hook_=std::move(*present_result);
+        auto compile_begin_result=safetyhook::MidHook::create(compile_begin_target,&compile_begin_callback,safetyhook::MidHook::StartDisabled);
+        if(!compile_begin_result) {
+            for(auto* hook:hookset()) hook->reset();
+            throw std::runtime_error("Cannot create command compilation observer");
+        }
+        compile_begin_hook_=std::move(*compile_begin_result);
+        auto compile_end_result=safetyhook::MidHook::create(compile_end_target,&compile_end_callback,safetyhook::MidHook::StartDisabled);
+        if(!compile_end_result) {
+            for(auto* hook:hookset()) hook->reset();
+            throw std::runtime_error("Cannot create command compilation end observer");
+        }
+        compile_end_hook_=std::move(*compile_end_result);
         // A suspended external callee must not have a return address in a
         // trampoline without unwind metadata. Check the instructions themselves.
         ZydisDecoder decoder{};
         ZydisDecoderInit(&decoder,ZYDIS_MACHINE_MODE_LONG_64,ZYDIS_STACK_WIDTH_64);
-        for(const auto* inspected:{&hook_,&label_hook_,&present_hook_}) {
+        for(const auto* inspected:hookset()) {
         const auto& relocated=inspected->original_bytes();
         for(size_t offset=0;offset<relocated.size();) {
             ZydisDecodedInstruction instruction{};
             if(!ZYAN_SUCCESS(ZydisDecoderDecodeInstruction(&decoder,nullptr,
                     relocated.data()+offset,relocated.size()-offset,&instruction)) ||
                     instruction.meta.category==ZYDIS_CATEGORY_CALL) {
-                hook_.reset();
-                label_hook_.reset();
-                present_hook_.reset();
+                for(auto* hook:hookset()) hook->reset();
                 throw std::runtime_error("Render detour cannot retain a relocated external CALL");
             }
             offset+=instruction.length;
@@ -139,19 +147,14 @@ void RenderProbe::enable() {
     frame_boundary_seen_=false;
     AcquireSRWLockExclusive(&frames_lock_);frames_written_=0;ReleaseSRWLockExclusive(&frames_lock_);
     missed_frames_=0;
+    pass_commands_.clear();
     accepting_=true;
-    if(!label_hook_.enable()) {accepting_=false;throw std::runtime_error("Graph label detour enable failed");}
-    if(!hook_.enable()) {
+    for(auto* hook:hookset()) {
+        if(hook->enable()) continue;
         accepting_=false;
-        if(!label_hook_.disable()) last_error_="Graph label rollback failed";
-        throw std::runtime_error("Render detour enable failed");
-    }
-    if(!present_hook_.enable()) {
-        accepting_=false;
-        const auto render_disabled=hook_.disable();
-        const auto label_disabled=label_hook_.disable();
-        if(!render_disabled || !label_disabled) last_error_="Render hook rollback failed";
-        throw std::runtime_error("Present detour enable failed");
+        for(auto* rollback:hookset())
+            if(rollback->enabled() && !rollback->disable()) last_error_="Render hook rollback failed";
+        throw std::runtime_error("Render observer enable failed");
     }
     last_error_.clear();
     log("Render probe enabled at OMSetRenderTargets argument preparation");
@@ -161,24 +164,23 @@ void RenderProbe::disable() noexcept {
         std::lock_guard lock(control_);
         accepting_=false;
         frame_boundary_seen_=false;
-        if(hook_.enabled()) {
-            if(!hook_.disable()) last_error_="Render detour disable failed";
-            else log("Render probe disabled; original game instructions restored");
+        bool changed=false;
+        for(auto* hook:hookset()) if(hook->enabled()) {
+            changed=true;
+            if(!hook->disable()) last_error_="Render observer disable failed";
         }
-        if(label_hook_.enabled() && !label_hook_.disable()) last_error_="Graph label detour disable failed";
-        if(present_hook_.enabled() && !present_hook_.disable()) last_error_="Present detour disable failed";
-        gpu_.cancel();
+        if(changed) log("Render probe disable requested for all hook sites");
+        for(auto* camera:cameras()) camera->cancel();
     } catch(...) { accepting_=false; }
 }
 bool RenderProbe::quiescent() noexcept {
     if(callbacks.load()) return false;
-    CodeRanges ranges{{{{module_begin_,module_end_},
-        {hook_.stub().address(),hook_.stub().address()+hook_.stub().size()},
-        {hook_.trampoline().address(),hook_.trampoline().address()+hook_.trampoline().size()},
-        {label_hook_.stub().address(),label_hook_.stub().address()+label_hook_.stub().size()},
-        {label_hook_.trampoline().address(),label_hook_.trampoline().address()+label_hook_.trampoline().size()},
-        {present_hook_.stub().address(),present_hook_.stub().address()+present_hook_.stub().size()},
-        {present_hook_.trampoline().address(),present_hook_.trampoline().address()+present_hook_.trampoline().size()}}}};
+    CodeRanges ranges{};ranges.ranges[0]={module_begin_,module_end_};
+    size_t range=1;
+    for(const auto* hook:hookset()) {
+        ranges.ranges[range++]={hook->stub().address(),hook->stub().address()+hook->stub().size()};
+        ranges.ranges[range++]={hook->trampoline().address(),hook->trampoline().address()+hook->trampoline().size()};
+    }
     Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0));
     if(!snapshot) return false;
     THREADENTRY32 entry{sizeof(entry)};
@@ -198,15 +200,14 @@ bool RenderProbe::quiescent() noexcept {
 }
 bool RenderProbe::close() noexcept {
     disable();
-    if(!hook_ && !label_hook_ && !present_hook_) return true;
-    if(hook_.enabled() || label_hook_.enabled() || present_hook_.enabled()) return false;
+    const auto all=hookset();
+    if(std::none_of(all.begin(),all.end(),[](auto* h){return static_cast<bool>(*h);})) return true;
+    if(std::any_of(all.begin(),all.end(),[](auto* h){return h->enabled();})) return false;
     const auto deadline=GetTickCount64()+2000;
     do {
         if(quiescent()) {
             observer.store(nullptr);
-            hook_.reset();
-            label_hook_.reset();
-            present_hook_.reset();
+            for(auto* hook:hookset()) hook->reset();
             log("Render probe drained; trampoline and stub released");
             return true;
         }
@@ -220,16 +221,25 @@ void RenderProbe::callback(safetyhook::Context& context) noexcept {
     if(auto* self=observer.load();self && self->accepting_.load()) self->observe(context);
     callbacks.fetch_sub(1);
 }
-void RenderProbe::label_callback(safetyhook::Context& context) noexcept {
-    callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load())
-        self->gpu_.label_image(context.rdi,context.rbx+0x34);
-    callbacks.fetch_sub(1);
-}
 void RenderProbe::present_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
     if(auto* self=observer.load();self && self->accepting_.load())
         self->present(static_cast<HRESULT>(context.rax));
+    callbacks.fetch_sub(1);
+}
+void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept {
+    callbacks.fetch_add(1);
+    if(auto* self=observer.load();self && self->accepting_.load()) {
+        uintptr_t input{},output{};uint16_t id{};
+        if(read_memory(context.r10,input) && read_memory(context.rsp+0x58,output) &&
+           read_memory(context.rbp+0x240,id))
+            self->pass_commands_.begin(context.rbp,input,output,id);
+    }
+    callbacks.fetch_sub(1);
+}
+void RenderProbe::compile_end_callback(safetyhook::Context& context) noexcept {
+    callbacks.fetch_add(1);
+    if(auto* self=observer.load();self && self->accepting_.load()) self->pass_commands_.end(context.rbp);
     callbacks.fetch_sub(1);
 }
 void RenderProbe::present(HRESULT result) noexcept {
@@ -260,14 +270,22 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     record.render_frame=frame_boundary_seen_.load()?presents_.load()+1:0;
     record.thread=GetCurrentThreadId();
     record.count=static_cast<uint32_t>(context.rdx);
+    uintptr_t cursor{},data{};
+    const auto index=static_cast<uint32_t>(context.r13);
+    if(index && read_memory(context.rbp-0x30,cursor) && read_memory(cursor,record.compiled_id) &&
+       read_memory(context.r12,data)) {
+        record.token=data+(index-1)*4;
+        record.pass=pass_commands_.lookup(record.compiled_id,record.token);
+    }
     if(record.count>record.targets.size() ||
        !read_memory(context.rax+0x363FCF0,record.context) ||
        !read_memory(context.rbp+0xA8,record.depth) ||
        (record.count && !copy_memory(context.r8,record.targets.data(),record.count*sizeof(uintptr_t)))) {
         missed_.fetch_add(1);return;
     }
-    gpu_.observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
-                 record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,observation_session_);
+    for(auto* camera:cameras())
+        camera->observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
+            record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,observation_session_,record.pass.get());
     if(!TryAcquireSRWLockExclusive(&records_lock_)) {missed_.fetch_add(1);return;}
     records_[records_written_%records_.size()]=record;
     ++records_written_;
@@ -276,7 +294,45 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
 json RenderProbe::capture(const std::string& action) {
     std::lock_guard lock(control_);
     if(action=="arm" && !hook_.enabled()) throw std::runtime_error("Enable the render probe before arming capture");
+    if(action=="arm") {
+        for(auto* camera:cameras()) {
+            const auto phase=camera->command("status").at("phase");
+            if(phase=="armed" || phase=="waiting_gpu") throw std::runtime_error("A camera capture is already pending");
+        }
+        bundle_frame_=0;
+    }
     return gpu_.command(action);
+}
+json RenderProbe::capture_views(const std::string& action) {
+    std::lock_guard lock(control_);
+    if(action=="arm") {
+        if(!hook_.enabled()) throw std::runtime_error("Enable the render probe before arming capture");
+        for(auto* camera:cameras()) {
+            const auto phase=camera->command("status").at("phase");
+            if(phase=="armed" || phase=="waiting_gpu") throw std::runtime_error("A camera capture is already pending");
+        }
+        // Skip the interval already in progress so every requested view has a
+        // chance to render after all four requests have been armed.
+        bundle_frame_=presents_.load()+2;
+        try {for(auto* camera:cameras()) camera->command("arm",bundle_frame_);}
+        catch(...) {for(auto* camera:cameras()) camera->cancel();bundle_frame_=0;throw;}
+    } else if(action=="cancel") {
+        for(auto* camera:cameras()) camera->cancel();
+        bundle_frame_=0;
+    } else if(action!="status" && action!="save") throw std::runtime_error("Unknown camera bundle action");
+    json views=json::array();bool ready=true,error=false,pending=false;
+    for(auto* camera:cameras()) {
+        auto state=camera->command("status");const auto phase=state.at("phase");
+        ready=ready && phase=="ready";error=error || phase=="error";
+        pending=pending || phase=="armed" || phase=="waiting_gpu";
+        views.push_back(std::move(state));
+    }
+    if(action=="save") {
+        if(!bundle_frame_ || !ready) throw std::runtime_error("No complete camera bundle to save");
+        views=json::array();for(auto* camera:cameras()) views.push_back(camera->command("save"));
+    }
+    return {{"phase",!bundle_frame_?"idle":error?"error":ready?"ready":pending?"pending":"idle"},
+        {"render_frame_id",bundle_frame_},{"observation_session_qpc",observation_session_},{"views",views}};
 }
 json RenderProbe::status() {
     std::lock_guard lock(control_);
@@ -288,16 +344,21 @@ json RenderProbe::status() {
         entries.push_back({{"sequence",record.sequence},{"sdk_frame_hint",record.sdk_frame_hint},
             {"render_frame_id",record.render_frame?json(record.render_frame):json(nullptr)},
             {"thread_id",record.thread},{"context",record.context},{"render_target_count",record.count},
+            {"compiled_buffer_id",record.compiled_id},{"command_token",record.token},
+            {"logical_pass",record.pass?*record.pass:json(nullptr)},
             {"render_targets",std::vector<uintptr_t>(record.targets.begin(),record.targets.begin()+record.count)},
             {"depth_view",record.depth}});
     }
-    return {{"active",(hook_.enabled()?1:0)+(label_hook_.enabled()?1:0)+(present_hook_.enabled()?1:0)},
+    const auto all=hookset();
+    return {{"active",std::count_if(all.begin(),all.end(),[](auto* h){return h->enabled();})},
         {"callbacks_in_flight",callbacks.load()},
+        {"pass_commands",pass_commands_.status()},
         {"hooks",json::array({{{"name","dx11.omset_before_bind"},{"tier",1},{"rva",hook_rva},
             {"enabled",hook_.enabled()},{"calls",calls_.load()},{"missed_records",missed_.load()}},
-            {{"name","rendergraph.image_name"},{"tier",1},{"rva",label_hook_rva},{"enabled",label_hook_.enabled()}},
             {{"name","dxgi.present_return"},{"tier",1},{"rva",present_hook_rva},{"enabled",present_hook_.enabled()},
-             {"calls",presents_.load()}}})},
+             {"calls",presents_.load()}},
+            {{"name","dx11.compile_pass_begin"},{"tier",1},{"rva",compile_begin_rva},{"enabled",compile_begin_hook_.enabled()}},
+            {{"name","dx11.compile_pass_end"},{"tier",1},{"rva",compile_end_rva},{"enabled",compile_end_hook_.enabled()}}})},
         {"last_error",last_error_},{"render_coherent",false},{"capture",gpu_.command("status")},
         {"recent_bindings",entries}};
 }
