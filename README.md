@@ -1,4 +1,4 @@
-# ETS2 자율주행 연구와 Windows 개발 준비
+# ETS2 자율주행 연구
 
 이 공개 저장소에는 자체 DLL·Python 소스, 설계·분석 문서, 연구 스크립트와 라이선스를 보존한 의존 코드가 들어 있습니다. 개발 중인 연구 프로젝트이며 빌드·실험 상태는 [ot 문서](ot/README.md)를 기준으로 확인합니다.
 
@@ -6,7 +6,7 @@ RenderDoc 실행 설정은 `research/ets2-mirrors.cap.example`을 `research/ets2
 
 게임 파일·추출 자산, 공식 SDK 원본, 다운로드한 도구·참고 저장소, 원시 메모리 기록·RenderDoc 캡처·GPU 배열, 빌드 결과와 로컬 백업은 Git에서 제외합니다. 문서의 `research/live/`·`research/findings/` 자료 링크 일부는 로컬 실험 자료를 가리키며 공개 저장소에는 없습니다. 빌드에는 별도 ETS2 설치와 [공식 SDK](https://modding.scssoft.com/wiki/Documentation/Engine/SDK)가 필요합니다. 의존 코드의 라이선스와 고정 revision은 [THIRD_PARTY](ot/THIRD_PARTY.md), 빌드 방법은 [ot 사용법](ot/README.md)에 있습니다. 문서·스크립트의 Windows 경로는 원래 연구 PC 기준이므로 자신의 설치 경로에 맞춰야 합니다.
 
-**2026-10-08 구현 갱신:** SDK 플러그인 [`ot_core.dll`](ot/dist/ot_core.dll)을 설치하고 실제 게임 연결을 확인했습니다. 1분 정차 중 597표본에서 9개 SDK 채널을 모두 수신했고 정상 종료 시 자원 해제도 확인했습니다. 0.2에는 내부 물리 자세 읽기와 설정 재로딩을 추가했습니다. 30분 주행과 내부 값 대조, GPU 픽셀은 남아 있습니다. [빌드·설치·사용법](ot/README.md), [13번 계획과 M0 진행 상태](docs/13_game_operating_table.md)를 따릅니다.
+**2026-10-08 구현 상태:** 0.7.0 상주 메타로더가 기능 DLL을 외부 API로 교체합니다. 일반 DX11에서 미러 0·1·2·5의 RGB·카메라 Z·재질 원본을 같은 Present 구간으로 수집했고, mirror5는 5초·50표본·10 Hz 기록을 확인했습니다. SDK 9채널, 내부 자차 자세 대조, hook 복원과 DLL 해제도 실제 게임에서 확인했습니다. 다음 작업은 hook 비용 측정, 영상과 pass 상수 연결, 주행 검증 및 센서 데이터 전달입니다. [빌드·설치·사용법과 실측 기록](ot/README.md), [전체 M0–M6 계획](docs/13_game_operating_table.md)을 참고하세요.
 
 2026년 10월 8일 기준. RTX 3060 Ti와 FHD 모니터 한 대에서 ETS2 운전석 화면을 유지하고, 차체에 고정한 4~6개 카메라로 BEV와 E2E 자율주행을 실험하기 위한 작업 문서입니다.
 
@@ -14,9 +14,9 @@ RenderDoc 실행 설정은 `research/ets2-mirrors.cap.example`을 `research/ets2
 
 설치된 **ETS2 1.61.1.1 / Steam build 25482642**에 대한 기초 오프라인 분석을 완료했습니다. 게임 정의·미러 UI·재질을 추출했고, 공식 SDK 채널 108개와 ETS2LA 공유 메모리 계약을 정리했습니다. ETS2LA Windows 패턴 11개 및 기존 카메라 함수 후보를 실제 실행 파일과 대조했습니다.
 
-이후 사용자의 DX11 수동 주행과 도로 정차 중 **외부 읽기 전용 메모리 관측**도 수행했습니다. 내 트럭의 위치·속도·조향, 주변 AI, 주차 차량 21개, 신호등 29개와 차단기 2개를 읽었습니다. 별도 소유 구조에 있는 **실제 미러 카메라 6개와 텍스처 descriptor 7개**를 찾아 pose·projection·게임 재질 이름까지 연결했습니다. 게임에 DLL을 추가하거나 입력·메모리를 쓰지 않았습니다. RGB/depth와 독립 센서 렌더는 아직 미구현입니다. 실측 수치·그림·한계는 [도로 상태 데이터 문서](docs/11_idle_memory_and_telemetry.md)에 있습니다.
+초기 DX11 수동 주행과 도로 정차 중에는 **외부 읽기 전용 메모리 관측**을 수행했습니다. 내 트럭의 위치·속도·조향, 주변 AI, 주차 차량 21개, 신호등 29개와 차단기 2개를 읽었습니다. 별도 소유 구조에 있는 **실제 미러 카메라 6개와 텍스처 descriptor 7개**를 찾아 pose·projection·게임 재질 이름까지 연결했습니다. 이 초기 조사는 DLL·입력·메모리 쓰기 없이 수행했으며, 이후 DLL에서 픽셀 수집으로 확장했습니다. 초기 실측은 [도로 상태 데이터 문서](docs/11_idle_memory_and_telemetry.md)에 있습니다.
 
-후속 조사에서 **미러 4개의 실제 DX11 색상·깊이 텍스처**까지 연결했습니다. 미러 0·2의 중간 리소스 재사용, 셰이더의 Z 복원식과 실제 복원 상수도 확인했습니다. 미러별 렌더 작업의 투영행렬·viewport·기본 카메라 자세·ray를 연결했으며, reversed Z와 0.01–0.9 깊이 범위, main 실내의 별도 범위·투영을 구별했습니다. 후속 원본 렌더 객체 표본에서는 카메라·ray를 덮어쓰는 추가 상태와 카메라 변환을 무시하는 필터가 발견되지 않았습니다. 픽셀 수집과 같은 프레임의 상수 연결은 아직 수행하지 않았습니다. 최신 결과는 [DX11 미러 렌더 경로](docs/12_dx11_mirror_render_path.md), 일반 객체 실측은 [도로 정차 상태 데이터](docs/11_idle_memory_and_telemetry.md)에 있습니다. 참고 소스·SDK·추출본은 [research](research/README.md)에 있습니다.
+후속 조사에서 **미러 4개의 실제 DX11 색상·깊이 텍스처**까지 연결했습니다. 미러 0·2의 중간 리소스 재사용, 셰이더의 Z 복원식과 실제 복원 상수도 확인했습니다. 미러별 렌더 작업의 투영행렬·viewport·기본 카메라 자세·ray를 연결했으며, reversed Z와 0.01–0.9 깊이 범위, main 실내의 별도 범위·투영을 구별했습니다. 후속 원본 렌더 객체 표본에서는 카메라·ray를 덮어쓰는 추가 상태와 카메라 변환을 무시하는 필터가 발견되지 않았습니다. 이 정적·외부 관측 이후 RenderDoc과 DLL로 픽셀을 확보했습니다. DLL 영상과 같은 pass의 최종 상수 연결은 다음 작업입니다. 최신 결과는 [DX11 미러 렌더 경로](docs/12_dx11_mirror_render_path.md), 일반 객체 실측은 [도로 정차 상태 데이터](docs/11_idle_memory_and_telemetry.md)에 있습니다. 참고 소스·SDK·추출본은 [research](research/README.md)에 있습니다.
 
 추가로 미러 생성·갱신·제출의 9슬롯 제한과 원본 카메라·출력의 의존성을 확인했습니다. 관측된 일반 미러 모드 0은 현재 운전석 위치로 반사 방향을 계산합니다. 디지털미러 모드 1에는 사용자 좌석 보정 전의 기준 위치를 사용하는 경로가 있으며, 좌석 조절 UI에서도 기준과 보정이 분리됩니다. 이 결과는 코드 추적이며 디지털미러 영상의 차체 고정 여부나 추가 센서 렌더를 실행한 검증은 아닙니다. 독립 센서의 자세 생성과 활성 조건은 여전히 구현·실측 대상입니다.
 
@@ -36,7 +36,9 @@ RenderDoc 실행 설정은 `research/ets2-mirrors.cap.example`을 `research/ets2
 
 | 문서 | 다루는 내용 |
 | --- | --- |
-| [DX11 미러 렌더 경로](docs/12_dx11_mirror_render_path.md) | 실제 color/depth 리소스, alias 연결, 버퍼 재사용, 남은 픽셀 수집 작업 |
+| [구현과 실측 기록](ot/README.md) | 상주 로더 API, 네 뷰 수집, 빌드·설치·실험 결과 |
+| [게임 수술대 계획](docs/13_game_operating_table.md) | M0–M6 목표와 현재 진행 범위 |
+| [DX11 미러 렌더 경로](docs/12_dx11_mirror_render_path.md) | 실제 color/depth 리소스, 상수 전달, 버퍼 재사용 |
 | [설치 파일 정적 분석](docs/10_installed_game_static_analysis.md) | 실제 1.61.1.1 파일, 카메라·미러 정의, 메모리 패턴과 함수 후보 |
 | [도로 정차 상태 데이터](docs/11_idle_memory_and_telemetry.md) | 공식 SDK·내부 메모리·shared memory·GPU 접근과 첫 관찰 순서 |
 | [요구사항과 결정](docs/01_requirements_and_decisions.md) | 사용자가 확정한 방향, 작업 가정, 제외한 접근 |
@@ -49,7 +51,6 @@ RenderDoc 실행 설정은 `research/ets2-mirrors.cap.example`을 `research/ets2
 | [미해결 사항](docs/08_open_questions.md) | 실행 전 정할 수 있는 것과 실행해야 알 수 있는 것 |
 | [Assetto Corsa 별도 방향](docs/09_assetto_corsa.md) | 회로 주행, 제어, 가상 센서의 후속 프로젝트 |
 | [출처와 읽을 위치](SOURCES.md) | 공식 문서, 개발자 답변, 공개 소스의 용도 |
-| [Windows 작업 인계](WINDOWS_HANDOFF.md) | 폴더 복사, 다음 세션 시작 문구와 첫 작업 |
 
 ## 현재 결정
 
@@ -66,8 +67,4 @@ RenderDoc 실행 설정은 `research/ets2-mirrors.cap.example`을 `research/ets2
 
 공식 문서·소스에서 확인한 내용, 모더의 경험 보고, 이 프로젝트의 설계 제안을 구분했습니다. main 브랜치 링크는 바뀔 수 있습니다. 실제 개발을 시작할 때 사용할 게임 빌드와 관련 저장소 commit을 함께 기록해야 합니다.
 
-사용자가 실행한 게임을 관측한 뒤 플러그인 빌드·설치·실제 SDK 연결·1분 정차 수집까지 진행했습니다. GPU 캡처와 FPS 영향 측정은 수행하지 않았습니다. `research`에는 로컬 조사용 SDK·도구·참고 소스·선택 추출본·메모리 실측 기록이 있습니다. 자체 GPU 센서 수집과 학습 데이터는 아직 없습니다. 추출 게임 파일과 제3자 자료는 Git 추적에서 제외하는 설정을 두었습니다.
-
-## 저장 위치
-
-현재 작업본은 C:\Users\kikiw\Desktop\ETS2-Autonomy-Lab 에 저장돼 있습니다. 초기 WSL 전달 단계는 끝났으며, 다음 작업은 [Windows 인계](WINDOWS_HANDOFF.md)를 따릅니다.
+`research`에는 로컬 SDK·도구·참고 소스·추출본·메모리 및 GPU 실측 기록이 있습니다. 현재 픽셀 자료는 주로 차고 정차 표본이며, 학습용 주행 데이터셋은 아직 없습니다. 약 30 Hz 제출 간격의 초기 실험에는 백그라운드 FPS 제한이 적용됐을 가능성이 있어 hook 자체 비용과 GPU 여유를 다시 측정합니다. 추출 게임 파일과 원시 실험 자료는 Git 추적에서 제외합니다.
