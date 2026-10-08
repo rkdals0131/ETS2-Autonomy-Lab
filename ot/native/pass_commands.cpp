@@ -35,12 +35,17 @@ std::vector<PassCommands::Block> PassCommands::blocks(uintptr_t output) {
 }
 std::shared_ptr<const json> PassCommands::describe(uintptr_t input) {
     const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    // The input command buffer is embedded at pass+0x2E8. The constructor
+    // stores its graph index at +0x1F8; confirm membership in the live array
+    // before interpreting it as a pass. Non-pass command buffers stay unnamed.
+    if(input<0x2E8) return {};
+    const auto pass=input-0x2E8;
+    uint32_t index{};
+    if(!read_memory(pass+0x1F8,index)) return {};
     for(unsigned b=0;b<3;++b) {
         const auto manager=base+0x304FC50+b*0x2A8;
         const auto passes=array(manager+0xF0);
-        for(uint64_t i=0;i<passes.size;++i) {
-            const auto pass=read<uintptr_t>(passes.data+i*8);
-            if(!pass || pass+0x2E8!=input) continue;
+        if(index<passes.size && read<uintptr_t>(passes.data+index*8)==pass) {
             json result={{"pass_address",pass},{"command_buffer",input},{"graph_buffer",b},
                 {"pass_name",string_at(read<uintptr_t>(pass+0x20))},
                 {"pass_namespace",string_at(read<uintptr_t>(pass+0xC0))}};

@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <cstring>
 
 namespace ot {
 HMODULE module{};
@@ -64,8 +65,16 @@ json dump_process() {
     return {{"path",path.generic_string()},{"kind","manual_minidump"}};
 }
 bool copy_memory(uintptr_t address,void* data,size_t size) noexcept {
-    SIZE_T done=0;
-    return ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(address),data,size,&done) && done==size;
+    // Game-owned storage is in this process. A stale/unmapped source remains
+    // a failed read; callers discard the destination when this returns false.
+    __try {
+        std::memcpy(data,reinterpret_cast<const void*>(address),size);
+        return true;
+    } __except((GetExceptionCode()==EXCEPTION_ACCESS_VIOLATION ||
+                GetExceptionCode()==EXCEPTION_IN_PAGE_ERROR)
+                   ?EXCEPTION_EXECUTE_HANDLER:EXCEPTION_CONTINUE_SEARCH) {
+        return false;
+    }
 }
 }
 BOOL WINAPI DllMain(HINSTANCE instance,DWORD reason,LPVOID) {
