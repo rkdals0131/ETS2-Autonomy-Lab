@@ -9,10 +9,15 @@ from pathlib import Path
 
 import numpy as np
 
-from .reconstruction import reconstruct_capture
+from .reconstruction import load_view, reconstruct_view
 
 
-def compare_boxes(directory, objects, *, pose_source="actor"):
+def compare_boxes(directory, objects, *, pose_source="actor", camera=None):
+    meta, read_data = load_view(directory, camera)
+    return compare_view_boxes(meta, read_data, objects, pose_source=pose_source)
+
+
+def compare_view_boxes(meta, read_data, objects, *, pose_source="actor"):
     """Compare {address, placement, aabb_raw} records in game world units.
 
     placement uses world_xyz and quaternion_wxyz, as in the external memory
@@ -23,8 +28,7 @@ def compare_boxes(directory, objects, *, pose_source="actor"):
     """
     if pose_source not in ("actor", "model"):
         raise ValueError("pose_source must be actor or model")
-    arrays, description = reconstruct_capture(directory)
-    meta = json.loads((Path(directory) / "images.json").read_text(encoding="utf-8"))
+    arrays, description = reconstruct_view(meta, read_data)
     camera = meta["geometry_pass"]["camera_at_compile"]
     projection = np.asarray(camera["projection_row_major"]).reshape(4, 4)
     rotation = np.asarray(camera["camera_rotation_row_major"]).reshape(4, 4)[:3, :3]
@@ -132,6 +136,10 @@ def compare_boxes(directory, objects, *, pose_source="actor"):
         supported = hit & arrays["valid"]
         rows.append({
             "address": item["address"], "segments_px": segments,
+            "kind": item.get("kind"), "lod_index": item.get("lod_index"),
+            "box_world_center_xyz": (position + model @ bounds.mean(axis=0)).tolist(),
+            "box_size_xyz": (bounds[1]-bounds[0]).tolist(),
+            "box_rotation_row_major": model.ravel().tolist(),
             "actor_origin_range_game_units": float(np.linalg.norm(position-origin)),
             "pixels_in_projected_box": int(hit.sum()),
             "pixels_without_valid_depth": int((hit & ~arrays["valid"]).sum()),
@@ -148,31 +156,74 @@ def compare_boxes(directory, objects, *, pose_source="actor"):
             "interpretation": "Depth inside an actor box is overlap evidence, not an object-ID label; nearer depth is occlusion"}
 
 
-def save_box_comparison(directory, objects_file, output, *, pose_source="actor"):
+def captured_objects(meta, pose_source):
+    snapshot = meta["geometry_pass"].get("vehicles_at_compile")
+    if snapshot is None:
+        raise ValueError("Capture has no vehicle metadata; supply --objects or capture with render_probe on --vehicles")
+    if "error" in snapshot:
+        raise ValueError("Vehicle metadata read failed: " + snapshot["error"])
+    objects = [{"address": hex(v["actor_address"]), "kind": v["kind"], "lod_index": v["lod_index"],
+                **v["actor_observation"]} for v in snapshot["vehicles"]]
+    if pose_source == "model":
+        for item, vehicle in zip(objects, snapshot["vehicles"]):
+            item.update({key: vehicle[key] for key in
+                         ("model_world_xyz", "model_rotation_row_major", "model_reference_offset_raw")})
+    source = {"pose_source": "model_component_at_compile" if pose_source == "model" else
+                            "simulation_actor_observations_at_compile",
+              "geometry_scope": snapshot["geometry_scope"], "read_errors": snapshot["errors"],
+              "truncated_for_read_budget": snapshot["truncated_for_read_budget"]}
+    return objects, source
+
+
+def draw_box_overlay(meta, read_data, comparison):
+    from PIL import Image, ImageDraw, ImageFont
+    from .color import read_color
+    rgb, encoding = read_color(meta, read_data)
+    rgb = np.maximum(np.nan_to_num(rgb.astype(np.float32)), 0)
+    if encoding == "linear_hdr":
+        rgb /= max(float(np.percentile(rgb[::16, ::16], 99)), 1e-7)
+        rgb /= 1+rgb
+    srgb = np.where(rgb <= .0031308, 12.92*rgb, 1.055*rgb**(1/2.4)-.055)
+    image = Image.fromarray(np.uint8(np.clip(srgb, 0, 1)*255))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype("segoeui.ttf", 14)
+    for row in comparison["objects"]:
+        if not row["segments_px"]:
+            continue
+        color = "#56edbc" if row["depth_inside_box"] else "#ffc65b"
+        for segment in row["segments_px"]:
+            draw.line([tuple(p) for p in segment], fill=color, width=2)
+        points = np.asarray(row["segments_px"]).reshape(-1, 2)
+        x, y = points.min(axis=0)
+        label = f"{str(row['address'])[-6:]} {row['kind'] or ''} | {row['actor_origin_range_game_units']:.1f} units"
+        y = max(24, y-17)
+        draw.text((max(0, x), y), label, font=font, fill=color, stroke_width=1, stroke_fill="black")
+    draw.rectangle((0, 0, image.width, 23), fill="#101820")
+    draw.text((6, 2), f"{meta['camera']} frame {meta['render_frame_id']} | {comparison['pose_source']} pose | green: DSV inside box; amber: no inside depth",
+              font=font, fill="white")
+    return image
+
+
+def save_box_comparison(directory, objects_file, output, *, pose_source="actor", camera=None, overlay=None, actor=None):
+    meta, read_data = load_view(directory, camera)
     source = {"pose_source": "external_actor_records"}
     if objects_file:
         if pose_source != "actor":
             raise ValueError("--pose model uses captured vehicle metadata and cannot be combined with --objects")
         objects = json.loads(Path(objects_file).read_text(encoding="utf-8"))
     else:
-        meta = json.loads((Path(directory) / "images.json").read_text(encoding="utf-8"))
-        snapshot = meta["geometry_pass"].get("vehicles_at_compile")
-        if snapshot is None:
-            raise ValueError("Capture has no vehicle metadata; supply --objects or capture with render_probe on --vehicles")
-        if "error" in snapshot:
-            raise ValueError("Vehicle metadata read failed: " + snapshot["error"])
-        objects = [{"address": hex(v["actor_address"]), **v["actor_observation"]} for v in snapshot["vehicles"]]
-        if pose_source == "model":
-            for item, vehicle in zip(objects, snapshot["vehicles"]):
-                item.update({key: vehicle[key] for key in
-                             ("model_world_xyz", "model_rotation_row_major", "model_reference_offset_raw")})
-        source = {"pose_source": "model_component_at_compile" if pose_source == "model" else
-                                "simulation_actor_observations_at_compile",
-                  "geometry_scope": snapshot["geometry_scope"], "read_errors": snapshot["errors"],
-                  "truncated_for_read_budget": snapshot["truncated_for_read_budget"]}
-    result = compare_boxes(directory, objects, pose_source=pose_source)
+        objects, source = captured_objects(meta, pose_source)
+    if actor is not None:
+        objects = [item for item in objects if int(str(item["address"]), 0) == actor]
+        if not objects:
+            raise ValueError("Actor is absent from the captured object records: " + hex(actor))
+    result = compare_view_boxes(meta, read_data, objects, pose_source=pose_source)
     result["object_source"] = source
     with open(output, "x", encoding="utf-8") as stream:
         json.dump(result, stream, ensure_ascii=False, indent=2, allow_nan=False)
+    if overlay:
+        image = draw_box_overlay(meta, read_data, result)
+        with open(overlay, "xb") as stream:
+            image.save(stream, format="PNG")
     return {"output": str(output), "objects_intersecting_view": len(result["objects"]),
-            "scope": result["scope"]}
+            "scope": result["scope"], "overlay": str(overlay) if overlay else None}

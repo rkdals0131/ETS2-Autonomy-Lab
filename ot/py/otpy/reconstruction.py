@@ -10,13 +10,19 @@ import numpy as np
 from .color import read_color
 
 
-def reconstruct_capture(directory, depth_source="geometry"):
-    """Return image-aligned point arrays and their coordinate/source metadata.
+def load_view(directory, camera=None):
+    """Load one camera's metadata and binary reader from a folder or bundle."""
+    if camera is not None:
+        from .bundles import load_bundle
+        bundle = load_bundle(directory)
+        view = next((v for v in bundle["manifest"]["views"] if v["camera"] == camera), None)
+        if view is None:
+            raise ValueError("Camera is absent from the bundle: " + camera)
+        files = {item["file"]: item["data"] for item in bundle["files"] if item["camera"] == camera}
 
-    World coordinates use the pass's base camera, not a per-draw override trace.
-    Invalid points are NaN. Lengths retain game units; no metric calibration is
-    inferred from agreement between two rendering paths.
-    """
+        def read_data(filename, dtype):
+            return np.frombuffer(files[filename], dtype=dtype)
+        return view["metadata"], read_data
     directory = Path(directory).resolve()
     meta = json.loads((directory / "images.json").read_text(encoding="utf-8"))
 
@@ -25,7 +31,17 @@ def reconstruct_capture(directory, depth_source="geometry"):
         if not path.is_relative_to(directory):
             raise ValueError("Image file is outside the capture directory")
         return np.fromfile(path, dtype=dtype)
+    return meta, read_data
 
+
+def reconstruct_capture(directory, depth_source="geometry"):
+    """Return image-aligned point arrays and their coordinate/source metadata.
+
+    World coordinates use the pass's base camera, not a per-draw override trace.
+    Invalid points are NaN. Lengths retain game units; no metric calibration is
+    inferred from agreement between two rendering paths.
+    """
+    meta, read_data = load_view(directory)
     return reconstruct_view(meta, read_data, depth_source)
 
 

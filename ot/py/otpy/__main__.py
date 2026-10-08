@@ -73,11 +73,14 @@ def main():
     birdseye.add_argument("--radius", type=float, default=40.0, help="Crop radius in game world units")
     birdseye.add_argument("--stride", type=int, default=1, help="Sample every Nth source pixel without resizing depth")
     boxes = sub.add_parser("project_boxes", help="Offline actor box projection and DSV occlusion comparison (NumPy)")
-    boxes.add_argument("directory", help="Capture directory containing images.json")
+    boxes.add_argument("directory", help="Camera directory, or bundle directory/.zip/.tar.zst with --camera")
+    boxes.add_argument("--camera", help="Select one camera from a bundle, e.g. mirror2")
+    boxes.add_argument("--actor", type=lambda value: int(value, 0), help="Only this actor address, e.g. 0x1234")
     boxes.add_argument("--objects", help="JSON actor records; default: actor observations in the capture's vehicle metadata")
     boxes.add_argument("--pose", choices=("actor", "model"), default="actor",
                        help="actor: simulation pose; model: captured model transform with actor-box origin correction")
     boxes.add_argument("--output", required=True, help="New JSON file containing projected edges and depth counts")
+    boxes.add_argument("--overlay", help="New PNG showing projected boxes on captured RGB")
     watch = sub.add_parser("watch", help="Print newest shared state as JSON lines; Ctrl+C closes the reader")
     watch.add_argument("--hz", type=float, default=10.0)
     watch.add_argument("--duration", type=float, help="Stop after this many seconds")
@@ -102,7 +105,8 @@ def main():
             result = run_preview(args.config, args.hz, args.duration, args.snapshot, args.format, args.color_gain)
         elif args.command == "project_boxes":
             from .projection import save_box_comparison
-            result = save_box_comparison(args.directory, args.objects, args.output, pose_source=args.pose)
+            result = save_box_comparison(args.directory, args.objects, args.output, pose_source=args.pose,
+                                         camera=args.camera, overlay=args.overlay, actor=args.actor)
         elif args.command == "loader":
             client = LoaderClient(timeout=args.timeout)
             result = client.status() if args.action == "status" else client.control(args.action)
