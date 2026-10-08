@@ -18,8 +18,10 @@ public:
     uint32_t in_flight() const noexcept { return in_flight_.load(); }
     uint32_t mask() const noexcept { auto c=configuration_.load();return c?c->mask:0; }
 private:
+    enum class Basis { world,chassis,cabin };
     struct View {
-        bool enabled=false,chassis=false;
+        bool enabled=false;
+        Basis basis=Basis::world;
         std::array<double,3> position{};
         std::array<double,4> rotation{};
         float hfov{},vfov{};

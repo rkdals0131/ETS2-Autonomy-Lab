@@ -41,6 +41,14 @@ bool chassis_pose(uintptr_t interior,Placement& pose) noexcept {
        (flags&0x20) || (((handle>>52)^flags)&15)) return false;
     return read_memory(placements+index*0x24,pose);
 }
+bool cabin_pose(uintptr_t interior,Placement& pose) noexcept {
+    uintptr_t vehicle{},camera{};
+    // The engine has already composed body interpolation and cabin suspension
+    // into this parent, before applying the driver's head pose. Model-local
+    // positions use neutral chassis axes/origin, as do native mirror locators.
+    return read_memory(interior+0x118,vehicle) && vehicle &&
+        read_memory(vehicle+0x1098,camera) && camera && read_memory(camera+0x4d4,pose);
+}
 }
 
 json CameraRig::configure(const json& request) {
@@ -52,8 +60,9 @@ json CameraRig::configure(const json& request) {
             throw std::runtime_error("Camera rig slots must be unique and between 0 and 5");
         auto& view=config->views[slot];
         const auto basis=item.value("basis",std::string("chassis"));
-        if(basis!="world" && basis!="chassis") throw std::runtime_error("Camera basis must be world or chassis");
-        view.chassis=basis=="chassis";
+        if(basis!="world" && basis!="chassis" && basis!="cabin")
+            throw std::runtime_error("Camera basis must be world, chassis or cabin");
+        view.basis=basis=="world"?Basis::world:basis=="cabin"?Basis::cabin:Basis::chassis;
         view.position=item.at("position").get<V>();
         view.rotation=item.at("quaternion_wxyz").get<Q>();
         double norm=0;
@@ -83,7 +92,7 @@ json CameraRig::status() {
         json view={{"slot",slot},{"applied",applied_[slot].load()}};
         if(config && config->views[slot].enabled) {
             const auto& v=config->views[slot];
-            view.update({{"basis",v.chassis?"chassis":"world"},{"position",v.position},
+            view.update({{"basis",v.basis==Basis::world?"world":v.basis==Basis::cabin?"cabin":"chassis"},{"position",v.position},
                 {"quaternion_wxyz",v.rotation},{"hfov_deg",v.hfov},{"vfov_deg",v.vfov},
                 {"base_resolution",v.resolution}});
         }
@@ -101,9 +110,10 @@ void CameraRig::begin(safetyhook::Context& context) noexcept {
     if(!config || slot>=6 || !config->views[slot].enabled) return;
     if(submission.owner) {++unavailable_;return;}
     const auto& view=config->views[slot];V position=view.position;Q rotation=view.rotation;
-    if(view.chassis) {
+    if(view.basis!=Basis::world) {
         Placement body{};
-        if(!chassis_pose(context.r14-0x13a8,body)) {++unavailable_;return;}
+        const auto interior=context.r14-0x13a8;
+        if(!(view.basis==Basis::cabin?cabin_pose(interior,body):chassis_pose(interior,body))) {++unavailable_;return;}
         Q q{body.w,body.qx,body.qy,body.qz};
         const auto relative=rotate(q,position);
         position={body.cx*512.0+body.x+relative[0],body.y+relative[1],body.cz*512.0+body.z+relative[2]};

@@ -17,6 +17,8 @@
 | `live/2026-10-08-idle/` | 정차 중 월드 60초, 미러 포함 30초, AI 전체 배열 마지막 5초 기록. summary.json, world-observation.png, mirror-parameters.csv, 미러 descriptor·이름·disassembly. 초기 탐색 실패 후보도 포함 |
 | `tools/scs_packer.exe` | SCS 공식 1.55+ packer, 조사용 추출에 사용 |
 | `tools/extractor/extractor.exe` | sk-zk Extractor 2026-07-29, 선택 추출·3nK decode에 사용 |
+| `tools/converterpix-3cd4e73a86d0/` | ConverterPIX의 고정 revision과 LICENSE·취득 기록. FH5 모델을 PIM으로 읽어 외판·미러 장착점 계측 |
+| `extracted/fh5-mount-models/` | chs_4x2, sleeper_2021, mirror_01의 로컬 변환본. 게임 자산으로 Git 제외 |
 | `sdk/` | 공식 SDK 1.15 헤더, 예제, readme, 라이선스 |
 | `sources/` | GitHub commit을 고정해 받은 참고 소스. submodule dependency까지 빌드용으로 설치한 것은 아님 |
 | `extracted/` | 원본 게임 아카이브에서 추출한 조사 대상. 공개 배포용이 아님 |
@@ -39,6 +41,8 @@
 - [Extractor Windows 2026-07-29](https://github.com/sk-zk/Extractor/releases/download/2026-07-29/extractor-2026-07-29-win-x64.zip)
 
 공식 SDK ZIP의 취득 시 SHA256은 `77504f14d2ac1405ba70ee3a97351662adbb39c0cf9d3a085423f01d37bc28ec`, packer ZIP은 `82f716a0261d1fd1582f2df30f536612a52ac267c74f1fd3c0f93115bf49d1ce`다. 공식 서버에서 받은 파일의 식별 기록이며 별도 게시 digest와의 대조 주장은 아니다. Extractor는 GitHub asset digest와 대조했고 값은 `findings/extractor_download.json`에 있다.
+
+FH5 외판 계측에는 [ConverterPIX](https://github.com/mwl4/ConverterPIX/tree/3cd4e73a86d0c6bd28e117664c50a36cabeccf38)를 사용했습니다. Windows x64 실행 파일을 취득할 때 Git blob ID `e17435fedee7cf9236f35bab56ab4f7c18915ec5`와 대조했고 SHA256·revision을 도구 폴더의 `acquisition.json`에 기록했습니다. 설치 아카이브를 읽어 `chs_4x2`, `sleeper_2021`, `mirror_01`을 변환했습니다. 로케이터·외판 삼각형·바깥쪽 법선과 실행 중 원본 미러 좌표의 연결은 `live/2026-10-08-camera-rig/fh5-model-locators.json`, `fh5-surface-mounts.json`, `fh5-model-live-alignment.json`에 있습니다.
 
 선택 추출 예:
 

@@ -4,10 +4,16 @@ import math
 
 
 def resolve_layout(config, client):
-    if not any("position_base_link" in view for view in config["views"]):
+    has_base_link = any("position_base_link" in view for view in config["views"])
+    if not has_base_link and not config.get("truck_id"):
         return config
     truck = client.request("truck_config")
     attributes = {(a["name"], a["index"]): a["value"] for a in truck["attributes"]}
+    expected_truck = config.get("truck_id")
+    if expected_truck and attributes.get(("id", None)) != expected_truck:
+        raise ValueError("This mounting layout is calibrated for " + expected_truck)
+    if not has_base_link:
+        return config
     indices = config.get("base_link_wheels")
     if indices is None:
         indices = [index for (name, index), value in attributes.items()
@@ -36,11 +42,14 @@ def resolve_layout(config, client):
         x, y, z = view.pop("position_base_link")
         # REP-103 (+forward,+left,+up) -> SDK (+right,+up,+back).
         view["position"] = [origin[0]-y, origin[1]+z, origin[2]-x]
-        view["basis"] = "chassis"
+        basis = view.get("basis", "chassis")
+        if basis not in ("chassis", "cabin"):
+            raise ValueError("position_base_link requires chassis or cabin attachment")
+        view["basis"] = basis
     result["mount_calibration"] = {
         "sdk_truck_id": attributes.get(("id", None)), "reference_wheel_indices": indices,
         "base_link_origin_in_chassis": origin,
-        "method": "SDK nominal wheel centers minus radii; ground/suspension not measured",
+        "method": "SDK nominal wheel centers minus radii; fixed body reference, not measured road contact",
         "base_link_axes": "x forward, y left, z up",
     }
     return result

@@ -82,7 +82,9 @@ class RigEditor(tk.Frame):
 
     def load_fields(self):
         view = self.layout["views"][self.index]
-        self.basis.set("World XYZ" if view.get("basis", "chassis") == "world" else "Chassis: X right · Y up · Z back")
+        basis = view.get("basis", "chassis")
+        self.basis.set({"world": "World XYZ", "chassis": "Chassis: X right · Y up · Z back",
+                        "cabin": "Cabin attachment · neutral chassis XYZ"}[basis])
         values = list(view["position"]) + angles_from_quaternion(view["quaternion_wxyz"]) + [view["hfov_deg"], view["vfov_deg"]]
         self.loading = True
         try:

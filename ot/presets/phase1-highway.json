@@ -1,19 +1,19 @@
 {
-  "description": "Phase 1 highway: front narrow/wide and tractor-mounted side-rear pods; mounting positions are starting values",
+  "description": "Volvo FH5 4x2 sleeper: front painted windscreen header and left/right mirror housing mounts, 35 mm standoffs; follows cabin suspension",
   "views": [
     {
       "slot": 0,
       "name": "C_FN front narrow",
       "mount": "M_FC",
-      "basis": "chassis",
+      "basis": "cabin",
       "position_base_link": [
-        4.95,
-        0,
-        2.9
+        5.037747120918433,
+        0.0003534076077349167,
+        3.0921491007947646
       ],
       "quaternion_wxyz": [
-        0.9999619230641713,
-        -0.008726535498373935,
+        0.999914327574007,
+        -0.013089595571344441,
         0.0,
         0.0
       ],
@@ -28,15 +28,15 @@
       "slot": 1,
       "name": "C_FW front wide",
       "mount": "M_FC",
-      "basis": "chassis",
+      "basis": "cabin",
       "position_base_link": [
-        4.95,
-        0,
-        2.9
+        5.037747120918433,
+        0.0003534076077349167,
+        3.0921491007947646
       ],
       "quaternion_wxyz": [
-        0.9990482215818578,
-        -0.043619387365336,
+        0.9975640502598242,
+        -0.0697564737441253,
         0.0,
         0.0
       ],
@@ -51,20 +51,20 @@
       "slot": 2,
       "name": "C_RL left pod",
       "mount": "M_PL",
-      "basis": "chassis",
+      "basis": "cabin",
       "position_base_link": [
-        4.7,
-        1.55,
-        2.3
+        4.652793128701049,
+        1.4843929975627195,
+        2.6446900365893216
       ],
       "quaternion_wxyz": [
-        0.13020823697602715,
-        -0.00910504690051869,
-        0.9890297515213482,
-        0.06915969744117015
+        0.2990585016712216,
+        -0.03143231511785278,
+        0.9484923895029768,
+        0.09969056725402452
       ],
-      "hfov_deg": 70,
-      "vfov_deg": 42.99566141876367,
+      "hfov_deg": 100,
+      "vfov_deg": 67.67274797076357,
       "base_resolution": [
         480,
         270
@@ -74,24 +74,26 @@
       "slot": 5,
       "name": "C_RR right pod",
       "mount": "M_PR",
-      "basis": "chassis",
+      "basis": "cabin",
       "position_base_link": [
-        4.7,
-        -1.55,
-        2.3
+        4.652793128701049,
+        -1.48439299756272,
+        2.6446900365893216
       ],
       "quaternion_wxyz": [
-        0.13020823697602715,
-        -0.00910504690051869,
-        -0.9890297515213482,
-        -0.06915969744117015
+        0.2990585016712216,
+        -0.03143231511785278,
+        -0.9484923895029768,
+        -0.09969056725402452
       ],
-      "hfov_deg": 70,
-      "vfov_deg": 42.99566141876367,
+      "hfov_deg": 100,
+      "vfov_deg": 67.67274797076357,
       "base_resolution": [
         480,
         270
       ]
     }
-  ]
+  ],
+  "truck_id": "vehicle.volvo.fh_2021",
+  "vehicle_configuration": "4x2 / l2h1 sleeper / LHD / mirror_01; other configurations need body-fit calibration"
 }

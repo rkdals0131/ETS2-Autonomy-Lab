@@ -6,9 +6,9 @@ RenderDoc 실행 설정은 `research/ets2-mirrors.cap.example`을 `research/ets2
 
 게임 파일·추출 자산, 공식 SDK 원본, 다운로드한 도구·참고 저장소, 원시 메모리 기록·RenderDoc 캡처·GPU 배열, 빌드 결과와 로컬 백업은 Git에서 제외합니다. 문서의 `research/live/`·`research/findings/` 자료 링크 일부는 로컬 실험 자료를 가리키며 공개 저장소에는 없습니다. 빌드에는 별도 ETS2 설치와 [공식 SDK](https://modding.scssoft.com/wiki/Documentation/Engine/SDK)가 필요합니다. 의존 코드의 라이선스와 고정 revision은 [THIRD_PARTY](ot/THIRD_PARTY.md), 빌드 방법은 [ot 사용법](ot/README.md)에 있습니다. 문서·스크립트의 Windows 경로는 원래 연구 PC 기준이므로 자신의 설치 경로에 맞춰야 합니다.
 
-**2026-10-08 / 0.15.0:** **Phase 1은 전방 협각·광각과 좌우 포드의 측후방 4뷰입니다.** 정후방 카메라는 두지 않으며 BEV/E2E는 후속 연구입니다. 현재 게임에서 전방 1280×720 두 장과 측후방 960×544 두 장의 RGB-D를 같은 Present 구간으로 확보했습니다. `ot\preview.cmd`의 기본 배치에 반영했고, SDK 바퀴 구성으로 후축 기준 장착 좌표를 변환합니다. 첫 준비 뒤 GPU 복사·변환 자원을 재사용하며, 별도 5초 미리보기 수집 worker는 16묶음·누락/오류 0회였습니다. 샤시 상대·월드 고정 자유 배치, 6뷰 연구 프리셋, 리그 전용 4-hook 모드와 메타로더 교체도 지원합니다. 다음은 연속 수집, 전경 성능 비교와 트레일러 가림·주행 중 누락입니다. [4뷰 사용법과 실측](ot/README.md#phase-1-고속도로-4뷰), [센서 설계](docs/14_phase1_highway_sensors.md), [추출 경로 M0–M6](docs/13_game_operating_table.md)를 참고하세요.
+**2026-10-08 / 0.16.0:** **Phase 1은 전방 협각·광각과 좌우 포드의 측후방 4뷰입니다.** 정후방 카메라는 두지 않으며 BEV/E2E는 후속 연구입니다. 현재 게임에서 전방 1280×720 두 장과 측후방 960×544 두 장의 RGB-D를 같은 Present 구간으로 확보했습니다. `ot\preview.cmd`의 기본 배치는 현재 FH5 4×2의 실제 전면 도장 외판과 미러 하우징에 맞췄습니다. 후축 아래 명목 지면을 `base_link`로 정하고, 센서는 캐빈 서스펜션을 따라갑니다. 문서의 예시 치수를 그대로 적용하지 않습니다. 첫 준비 뒤 GPU 복사·변환 자원을 재사용하며, 별도 5초 미리보기 수집 worker는 16묶음·누락/오류 0회였습니다. 샤시·캐빈 부착과 월드 고정 자유 배치, 6뷰 연구 프리셋, 리그 전용 4-hook 모드와 메타로더 교체도 지원합니다. 다음은 연속 수집, 전경 성능 비교와 트레일러 가림·주행 중 누락입니다. [4뷰 사용법과 실측](ot/README.md#phase-1-고속도로-4뷰), [센서 설계](docs/14_phase1_highway_sensors.md), [추출 경로 M0–M6](docs/13_game_operating_table.md)를 참고하세요.
 
-![Phase 1 전방 두 뷰와 좌우 포드의 실제 도로 영상](docs/images/phase1-four-0.15.0.png)
+![Phase 1 전방 두 뷰와 좌우 포드의 실제 도로 영상](docs/images/fh5-body-fit-0.16.0.png)
 
 RTX 3060 Ti와 FHD 모니터 한 대에서 ETS2 운전석 화면을 유지하며, 고속도로 주행보조부터 시내·주차로 확장하는 연구입니다. Phase 1 인지는 뷰별 경량 모델과 객체 수준 융합으로 구성합니다. 가상 LiDAR·레이더·자차 센서와 주행 제어는 설계 단계이며 아직 RGB-D 수집 구현과 구별합니다.
 
