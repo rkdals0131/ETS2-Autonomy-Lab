@@ -1,4 +1,4 @@
-"""Project externally observed actor boxes onto saved mirror captures.
+"""Project actor boxes using simulation or captured model poses.
 
 This measures geometric overlap and occlusion, not object identity, detection
 accuracy, or synchronization between simulation and rendering.
@@ -12,13 +12,17 @@ import numpy as np
 from .reconstruction import reconstruct_capture
 
 
-def compare_boxes(directory, objects):
+def compare_boxes(directory, objects, *, pose_source="actor"):
     """Compare {address, placement, aabb_raw} records in game world units.
 
     placement uses world_xyz and quaternion_wxyz, as in the external memory
-    reader. The local AABB follows min_xyz, max_xyz. Output edges preserve the
-    original image rows; pixel coordinates refer to image boundaries.
+    reader. The local AABB follows min_xyz, max_xyz. With pose_source="model",
+    records also contain the native model_world_xyz, model_rotation_row_major,
+    and model_reference_offset_raw fields. Output edges preserve the original
+    image rows; pixel coordinates refer to image boundaries.
     """
+    if pose_source not in ("actor", "model"):
+        raise ValueError("pose_source must be actor or model")
     arrays, description = reconstruct_capture(directory)
     meta = json.loads((Path(directory) / "images.json").read_text(encoding="utf-8"))
     camera = meta["geometry_pass"]["camera_at_compile"]
@@ -52,18 +56,31 @@ def compare_boxes(directory, objects):
     rows = []
     for item in objects:
         # Decode each external record once, before its numerical operations.
-        position = np.asarray(item["placement"]["world_xyz"], dtype=np.float64).reshape(3)
-        quaternion = np.asarray(item["placement"]["quaternion_wxyz"], dtype=np.float64).reshape(4)
         bounds = np.asarray(item["aabb_raw"], dtype=np.float64).reshape(2, 3)
-        norm = np.linalg.norm(quaternion)
-        if (not all(np.isfinite(a).all() for a in (position, quaternion, bounds))
-                or not np.isfinite(norm) or norm == 0 or np.any(bounds[0] > bounds[1])):
-            raise ValueError("Invalid actor placement or local AABB: " + str(item.get("address")))
-        w, qx, qy, qz = quaternion / norm
-        model = np.array([
-            [1-2*(qy*qy+qz*qz), 2*(qx*qy-w*qz), 2*(qx*qz+w*qy)],
-            [2*(qx*qy+w*qz), 1-2*(qx*qx+qz*qz), 2*(qy*qz-w*qx)],
-            [2*(qx*qz-w*qy), 2*(qy*qz+w*qx), 1-2*(qx*qx+qy*qy)]])
+        if not np.isfinite(bounds).all() or np.any(bounds[0] > bounds[1]):
+            raise ValueError("Invalid local AABB: " + str(item.get("address")))
+        if pose_source == "model":
+            model_position = np.asarray(item["model_world_xyz"], dtype=np.float64).reshape(3)
+            model = np.asarray(item["model_rotation_row_major"], dtype=np.float64).reshape(4, 4)[:3, :3]
+            offset = np.asarray(item["model_reference_offset_raw"], dtype=np.float64).reshape(3)
+            if not all(np.isfinite(a).all() for a in (model_position, model, offset)):
+                raise ValueError("Invalid model transform: " + str(item.get("address")))
+            # Model slot +0x90 adds this offset to mesh bounds before the actor
+            # stores them. Undo that basis change using the captured transform:
+            # world = P_model + R_model @ (point_actor - offset).
+            position = model_position - model @ offset
+        else:
+            position = np.asarray(item["placement"]["world_xyz"], dtype=np.float64).reshape(3)
+            quaternion = np.asarray(item["placement"]["quaternion_wxyz"], dtype=np.float64).reshape(4)
+            norm = np.linalg.norm(quaternion)
+            if (not all(np.isfinite(a).all() for a in (position, quaternion))
+                    or not np.isfinite(norm) or norm == 0):
+                raise ValueError("Invalid actor placement: " + str(item.get("address")))
+            w, qx, qy, qz = quaternion / norm
+            model = np.array([
+                [1-2*(qy*qy+qz*qz), 2*(qx*qy-w*qz), 2*(qx*qz+w*qy)],
+                [2*(qx*qy+w*qz), 1-2*(qx*qx+qz*qz), 2*(qy*qz-w*qx)],
+                [2*(qx*qz-w*qy), 2*(qy*qz+w*qx), 1-2*(qx*qx+qy*qy)]])
         corners = (bounds[0] + selectors * (bounds[1]-bounds[0])) @ model.T + position
         eye_corners = (corners-origin) @ rotation.T
         clip_corners = np.column_stack((eye_corners, np.ones(8))) @ projection.T
@@ -93,8 +110,9 @@ def compare_boxes(directory, objects):
                                           vp["y"]+(1-ndc[:, 1])*vp["height"]/2))
                 segments.append(pixels.tolist())
 
-        local_eye = (origin-position) @ model
-        local_rays = rays_world @ model
+        inverse_model = np.linalg.inv(model)
+        local_eye = (origin-position) @ inverse_model.T
+        local_rays = rays_world @ inverse_model.T
         enter, leave = np.maximum(frustum_near, 0), frustum_far.copy()
         for axis in range(3):
             direction = local_rays[..., axis]
@@ -121,15 +139,20 @@ def compare_boxes(directory, objects):
             "occluded_by_nearer_depth": int((supported & (depth < enter)).sum()),
             "depth_beyond_box": int((supported & (depth > leave)).sum()),
         })
-    return {"capture": description, "objects": rows,
-            "scope": "Geometric comparison with supplied actor poses; timestamps are not synchronized",
+    scope = ("Actor-local bounds transformed by the model component observed at pass compilation; "
+             "final per-draw GPU transforms not verified" if pose_source == "model" else
+             "Geometric comparison with supplied actor poses; timestamps are not synchronized")
+    return {"capture": description, "objects": rows, "pose_source": pose_source,
+            "scope": scope,
             "depth_comparison": "DSV distance along each pixel ray versus its clipped OBB entry/exit interval",
             "interpretation": "Depth inside an actor box is overlap evidence, not an object-ID label; nearer depth is occlusion"}
 
 
-def save_box_comparison(directory, objects_file, output):
+def save_box_comparison(directory, objects_file, output, *, pose_source="actor"):
     source = {"pose_source": "external_actor_records"}
     if objects_file:
+        if pose_source != "actor":
+            raise ValueError("--pose model uses captured vehicle metadata and cannot be combined with --objects")
         objects = json.loads(Path(objects_file).read_text(encoding="utf-8"))
     else:
         meta = json.loads((Path(directory) / "images.json").read_text(encoding="utf-8"))
@@ -138,13 +161,16 @@ def save_box_comparison(directory, objects_file, output):
             raise ValueError("Capture has no vehicle metadata; supply --objects or capture with render_probe on --vehicles")
         if "error" in snapshot:
             raise ValueError("Vehicle metadata read failed: " + snapshot["error"])
-        # Actor boxes have a known local frame. Do not attach them to the model
-        # origin until the actor-to-model transform has been established.
         objects = [{"address": hex(v["actor_address"]), **v["actor_observation"]} for v in snapshot["vehicles"]]
-        source = {"pose_source": "simulation_actor_observations_at_compile; model transforms are not substituted",
+        if pose_source == "model":
+            for item, vehicle in zip(objects, snapshot["vehicles"]):
+                item.update({key: vehicle[key] for key in
+                             ("model_world_xyz", "model_rotation_row_major", "model_reference_offset_raw")})
+        source = {"pose_source": "model_component_at_compile" if pose_source == "model" else
+                                "simulation_actor_observations_at_compile",
                   "geometry_scope": snapshot["geometry_scope"], "read_errors": snapshot["errors"],
                   "truncated_for_read_budget": snapshot["truncated_for_read_budget"]}
-    result = compare_boxes(directory, objects)
+    result = compare_boxes(directory, objects, pose_source=pose_source)
     result["object_source"] = source
     with open(output, "x", encoding="utf-8") as stream:
         json.dump(result, stream, ensure_ascii=False, indent=2, allow_nan=False)

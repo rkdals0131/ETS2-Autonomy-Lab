@@ -35,6 +35,8 @@ def main():
     boxes = sub.add_parser("project_boxes", help="Offline actor box projection and DSV occlusion comparison (NumPy)")
     boxes.add_argument("directory", help="Capture directory containing images.json")
     boxes.add_argument("--objects", help="JSON actor records; default: actor observations in the capture's vehicle metadata")
+    boxes.add_argument("--pose", choices=("actor", "model"), default="actor",
+                       help="actor: simulation pose; model: captured model transform with actor-box origin correction")
     boxes.add_argument("--output", required=True, help="New JSON file containing projected edges and depth counts")
     watch = sub.add_parser("watch", help="Print newest shared state as JSON lines; Ctrl+C closes the reader")
     watch.add_argument("--hz", type=float, default=10.0)
@@ -48,7 +50,7 @@ def main():
             result = save_reconstruction(args.directory, args.output, args.depth_source)
         elif args.command == "project_boxes":
             from .projection import save_box_comparison
-            result = save_box_comparison(args.directory, args.objects, args.output)
+            result = save_box_comparison(args.directory, args.objects, args.output, pose_source=args.pose)
         elif args.command == "loader":
             client = LoaderClient(timeout=args.timeout)
             result = client.status() if args.action == "status" else client.control(args.action)

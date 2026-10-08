@@ -1,4 +1,4 @@
-# ot 0.8.2 — 네 미러 영상·CPU/GPU 상수·실제 깊이 버퍼
+# ot 0.8.3 — 네 미러 영상·깊이·차량 모델 자세
 
 > **확정:** SDK/IPC·내부 자차 pose 대조. mirror5 10 Hz 기록·네 미러 같은 Present 구간 수집. 0.8.0은 명령 구간을 통해 영상과 pass 기본 카메라 상태를 연결. 콘솔 없는 기능 DLL 교체, hook 시간 계측·내부 읽기 비용 감소도 실측.
 > **남은 검증:** draw별 상수 변경 범위·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
@@ -21,7 +21,7 @@
 
 최종 빌드에서도 옵션을 끈 네 뷰 수집이 완료됐고 차량 필드는 생성되지 않았습니다. 같은 hook을 유지하며 옵션을 켠 다음 묶음에는 모델 2·4·5·0개가 들어왔고 오류·생략은 없었습니다. 패닉 후 hook·callback 수 0, 옵션 꺼짐, 로더를 통한 완전한 core 교체·재로딩과 SDK/FFB 유지도 확인했습니다. 최종 표본은 `final-build-capture.json`입니다.
 
-actor와 model 원점은 같지 않습니다. 첫 표본에서 모델 기준점 보정을 뺀 잔차는 AI에서 약 0.029–0.108 게임 단위, 주차 차량에서 약 0.006–0.033단위였습니다. 이 잔차 전체를 보간 오차라고 단정하지 않습니다. `project_boxes`의 기본 입력은 아래처럼 **actor 관측값**이며, 렌더 모델 원점으로 바꾸어 넣지 않습니다. 원점 변환과 최종 GPU draw 연결이 다음 정합 과제입니다. 실행 자료는 `research/live/2026-10-08-object-projection/0.8.3/`에 있습니다.
+actor와 model 원점은 같지 않습니다. 첫 표본에서 모델 기준점 보정을 뺀 잔차는 AI에서 약 0.029–0.108 게임 단위, 주차 차량에서 약 0.006–0.033단위였습니다. 이 잔차 전체를 보간 오차라고 단정하지 않습니다. 후속 코드 추적으로 actor 박스가 모델 박스에 같은 기준점 이동량을 더한 값임을 확인했습니다. `project_boxes --pose model`은 `P_model + R_model × (actor_local_point − offset)`으로 투영합니다. 기본값 `--pose actor`는 기존 simulation 관측값을 사용합니다. [변환 근거와 실제 비교](../docs/12_dx11_mirror_render_path.md#actor-박스를-렌더-모델-자세로-옮기는-변환)를 참고하세요. 최종 GPU draw 상수와의 대조는 남아 있습니다. 실행 자료는 `research/live/2026-10-08-object-projection/0.8.3/` 및 `origin/`에 있습니다.
 
 ### 오프라인 객체 박스 투영과 가림 판정
 
@@ -32,6 +32,13 @@ actor와 model 원점은 같지 않습니다. 첫 표본에서 모델 기준점 
 ```
 
 NumPy를 사용하는 오프라인 명령이며 게임 연결 없이 저장된 0.8.2 이후 캡처를 읽습니다. `actors.json`은 외부 메모리 reader와 같은 필드의 JSON 배열입니다. 각 항목에는 `address`, `placement.world_xyz`(3개), `placement.quaternion_wxyz`(4개), `aabb_raw`(로컬 min XYZ, max XYZ 순서의 6개)가 필요합니다. 추가 필드는 무시합니다. `--objects`를 생략하면 0.8.3 차량 메타데이터의 actor 관측값과 읽기 범위를 사용합니다. 좌표는 게임 월드 단위이며, simulation actor pose를 받았다고 해서 렌더 시각으로 보간하지 않습니다.
+
+```powershell
+# 0.8.3 --vehicles 캡처의 모델 자세와 기준점 보정 사용; DLL 재교체 불필요
+.\ot\ot.cmd project_boxes '<capture-directory>' --pose model --output model-boxes.json
+```
+
+`--pose model`은 캡처에 저장된 AI·주차 차량 body model 성분을 사용하므로 `--objects`와 함께 쓰지 않습니다. 결과의 `actor_origin_range_game_units`는 선택한 자세에서 actor 로컬 박스 원점의 거리입니다. actor 모드에서는 simulation 원점, model 모드에서는 `P_model − R_model × offset` 기준입니다. 최종 draw의 GPU 자세·trailer·부가 모델·픽셀 객체 ID를 확인한 결과로 해석하지 않습니다. 실제 여섯 캡처에서 두 모드의 박스와 DSV 비교를 실행했고, 노란 주차 트럭의 RGB 겹침을 확인했습니다. 두 연속 표본의 AI 박스는 모두 앞의 깊이에 가려져 움직이는 AI의 영상 정합은 미검증입니다.
 
 출력은 카메라 frustum으로 잘라낸 박스의 12개 모서리 중 보이는 선분, 투영 영역의 픽셀 수, 유효 깊이 부재·박스 내부 깊이·앞의 가림·박스 뒤 깊이 개수입니다. 깊이는 DSV에서 복원하며 각 픽셀 광선의 OBB(회전한 3D 상자) 진입/이탈 거리와 비교합니다. 박스 중심까지의 거리를 표면 깊이 정답으로 삼지 않습니다. `segments_px`는 원시 영상 행 방향을 보존한 픽셀 경계 좌표입니다. 기존 출력은 덮어쓰지 않습니다.
 

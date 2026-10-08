@@ -1136,8 +1136,34 @@ DLL 0.8.2로 Present 구간 55의 미러 0·1·2·5를 수집하고 외부 객�
 
 초기 캡처의 Present 구간 19에서 미러 0·1·2·5의 준비된 geometry 수는 492·833·605·345였다. 각 pass에는 그룹 7개가 있었고 상태 override는 0개였다. 연결한 차량 모델 수는 3·3·4·0개로, 중복을 제거하면 AI 3대와 주차 차량 3대다. 조사한 actor 후보 70개에서 배열 생략이나 읽기 오류는 없었다. 후보 전체 수와 미러에서 선택된 모델 수는 서로 다른 값이다.
 
-같은 표본에서 모델 원점에서 `R_model * model_reference_offset_raw`를 뺀 값과 simulation actor 원점의 잔차는 AI 0.029–0.108, 주차 차량 0.006–0.033 게임 단위였다. 이 보정값은 초기화 경로 `0x975328..0x975330`에서 X/Y=0, Z=참조 위치 배열 첫 원소의 Z 음수로 설정한다. 배열의 게임 내 필드명은 아직 연결하지 않았다. 모델 갱신에서 LOD 기준점에 사용하는 값이라는 앞선 해석과 일치한다. actor와 모델의 수직 차이·서스펜션·보간까지 이 벡터 하나로 설명한 것은 아니다. 이 때문에 `project_boxes`는 현재 actor 좌표계의 AABB를 유지한다.
+같은 표본에서 모델 원점에서 `R_model * model_reference_offset_raw`를 뺀 값과 simulation actor 원점의 잔차는 AI 0.029–0.108, 주차 차량 0.006–0.033 게임 단위였다. 이 보정값은 초기화 경로 `0x975328..0x975330`에서 X/Y=0, Z=참조 위치 배열 첫 원소의 Z 음수로 설정한다. 배열의 게임 내 필드명은 아직 연결하지 않았다. 모델 갱신에서 LOD 기준점에 사용하는 값이라는 앞선 해석과 일치한다. actor와 모델의 수직 차이·서스펜션·보간까지 이 벡터 하나로 설명한 것은 아니다. 아래 후속 조사에서 박스 좌표계 변환을 연결해 모델 자세를 선택하는 오프라인 옵션을 추가했다.
 
 추가 두 캡처(같은 관측 세션의 구간 16·49)에서 AI `0x2968e6c4348`의 모델 원점이 약 5.40단위 움직이면서 mirror1의 준비된 목록에 계속 연결됐다. 그 actor 관측값을 사용한 투영 영역은 각각 21·30픽셀이었고 모두 앞의 깊이에 가렸다. 움직이는 RGB 차량과 정확히 겹치는 정답 박스를 확보한 사례로 세지 않는다. 반면 앞서 확인한 주차 트럭의 박스 내부 깊이는 두 표본에서 각각 80·81픽셀이었다.
 
 현재 데이터는 **해당 pass의 compile 시점에 읽은 준비 모델 성분**이다. 개별 draw의 GPU 상수·픽셀 ID를 직접 대조한 것과 구별한다. trailer·부가 model object의 actor 대응 및 원점 변환도 남아 있다. 첫 세 묶음의 차량 읽기 자체는 pass당 0.194–0.285ms였으며 전후 GPU 지연 비교는 아니다. 최종 빌드에서 opt-out/opt-in 수집과 패닉·core 재로딩을 추가 확인했다. 자료는 `research/live/2026-10-08-object-projection/0.8.3/`에 보존한다.
+
+### actor 박스를 렌더 모델 자세로 옮기는 변환
+
+AI·주차 차량 body model의 actor 박스를 저장된 모델 자세로 투영하는 경로를 연결했다. 원점을 옮기는 벡터를 `d`, `pp_model_simple`에서 읽은 위치·회전을 `P_m`, `R_m`이라 하면 다음과 같다.
+
+```text
+actor_local_bounds = model_local_bounds + d
+point_world = P_m + R_m × (point_actor_local − d)
+            = (P_m − R_m × d) + R_m × point_actor_local
+```
+
+근거는 위치가 우연히 비슷한 표본이 아니라 실제 setter의 데이터 흐름이다. 모델의 bounds getter virtual `+0x90 → 0x978530`은 resource의 mesh bounds를 얻고 성공 경로 `0x9786B7..0x978722`에서 min·max 양쪽에 `M+0x1A0`을 더한다. AI의 model interface `A+0x208`에서 `0x923B60`이 이 getter를 호출한 뒤 actor virtual `+0x88 → 0x918F30`으로 전달한다. 주차 차량의 model interface도 `0x95B4D0`에서 같은 두 getter/setter를 연결한다. `0x918F30`은 입력 6개 float를 actor `+0x48`에 그대로 복사한다. 모델 리소스 로딩 실패 시 getter의 대체 박스 분기는 성공 경로와 구별하며, 현재 사용한 geometry와 model component가 연결된 캡처를 대상으로 한다.
+
+공통 자세 setter `0x955790`은 요청된 경우 입력 배치에 `d`를 로컬 이동으로 적용하고 모델 frame state에 게시한다. getter `0x955870`의 대응 옵션은 같은 벡터의 음수를 적용한다. AI의 `0x9227F0`과 주차 차량의 `0x95BA10`도 body 상대 배치를 합성한 뒤 이 기준점 이동을 적용한다. 따라서 simulation actor와 모델 원점의 차이를 단순 평행 이동 하나나 보간 오차만으로 설명하지 않는다. 위 투영식은 이미 관측한 모델 성분을 쓰므로 그 두 자세가 같아야 한다는 가정을 요구하지 않는다.
+
+`otpy project_boxes --pose model`이 이 식을 사용하며 기본 `--pose actor`와 외부 `--objects` 입력은 유지한다. 행렬을 다시 quaternion으로 근사하지 않고 캡처된 3×3 성분과 역행렬로 점·광선을 변환한다. 기존 0.8.3 `--vehicles` 캡처로 실행할 수 있다. 네 뷰 첫 묶음과 mirror1 연속 표본 두 개, 총 여섯 캡처에서 양쪽 모드를 실행했다.
+
+| 표본 / 대상 | actor → model 투영 픽셀 | actor → model 박스 내부 깊이 픽셀 | 박스 edge 끝점 최대 이동(px) |
+| --- | ---: | ---: | ---: |
+| 첫 mirror0 / 노란 주차 트럭 | 421 → 421 | 108 → 108 | 0.02758 |
+| 첫 mirror1 / 같은 트럭 | 236 → 236 | 80 → 80 | 0.01799 |
+| 첫 mirror0 / 차고 벽 뒤 차량 | 515 → 504 | 0 → 0 | 0.30297 |
+| 연속 구간 16 / AI `0x2968e6c4348` | 21 → 21 | 0 → 0 | 0.09413 |
+| 연속 구간 49 / 같은 AI | 30 → 32 | 0 → 0 | 0.29107 |
+
+[실제 RGB 위 두 방식의 박스](../research/live/2026-10-08-object-projection/origin/projections/model-box-comparison.png)에서 주차 트럭의 겹침을 확인했다. AI는 두 표본 모두 더 가까운 깊이에 가려졌다. 이 자료로 움직이는 차량의 정확도 향상을 주장하지 않는다. 최종 draw가 사용한 GPU 모델 상수와 compile 시점 성분의 일치 여부가 다음 과제다. 원시 disassembly와 출력 JSON은 `research/live/2026-10-08-object-projection/origin/`에 있다.
