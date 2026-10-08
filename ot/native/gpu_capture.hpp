@@ -16,6 +16,8 @@ struct CaptureOptions {
 // thread; file I/O runs only in the existing command worker.
 class GpuCapture {
 public:
+    enum class Phase { idle,armed,waiting_gpu,ready,error };
+    Phase phase() const noexcept {return phase_.load();}
     explicit GpuCapture(std::string camera):camera_(std::move(camera)) {}
     json command(const std::string& action,uint64_t requested_frame=0,bool metadata=true,const CaptureOptions& options={});
     void cancel() noexcept;
@@ -24,7 +26,6 @@ public:
                  uint64_t binding_sequence, uint64_t sdk_frame, uint64_t render_frame,
                  uint64_t observation_session,const json* pass) noexcept;
 private:
-    enum class Phase { idle,armed,waiting_gpu,ready,error };
     template<class T> using Com=Microsoft::WRL::ComPtr<T>;
     struct Image {
         Com<ID3D11Texture2D> source,staging;
@@ -41,6 +42,7 @@ private:
     void collect(ID3D11DeviceContext* context);
     void geometry_constants(ID3D11DeviceContext* context,uint64_t binding_sequence);
     void vehicle_constants(ID3D11DeviceContext* context,ID3D11Device* device);
+    void clear_vehicle_constants();
     void release_gpu();
     void release_sources();
     void prepare_staging(Image& image,const D3D11_TEXTURE2D_DESC& desc,ID3D11Device* device);
@@ -58,6 +60,7 @@ private:
     uint32_t depth_pixel_bytes_=0;
     std::array<Constants,2> geometry_constants_; // VS/PS slot 0 at G-buffer exit
     std::vector<Constants> vehicle_constants_; // VS slot 0 of matched vehicle draw items
+    size_t vehicle_constants_used_=0;
     Com<ID3D11Query> completion_;
     Com<ID3D11DeviceContext> context_;
     Com<ID3D11Device> device_;

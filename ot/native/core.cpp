@@ -98,7 +98,7 @@ bool Runtime::shutdown() noexcept {
         if(channel.registration==SCS_RESULT_ok) api_.unregister_from_channel(channel.name.c_str(),SCS_U32_NIL,channel.type);
         channel.registration=SCS_RESULT_not_found;
     }
-    if(transport_) {transport_->stop();transport_.reset();log("ot_core shutdown: worker joined, pipe and mapping released");}
+    if(transport_) transport_->stop();
     if(render_probe_) {
         if(render_probe_->close()) render_probe_.reset();
         else {
@@ -108,6 +108,8 @@ bool Runtime::shutdown() noexcept {
             return false;
         }
     }
+    // The stream publisher must finish before its shared mapping is destroyed.
+    if(transport_) {transport_.reset();log("ot_core shutdown: workers joined, pipe and mapping released");}
     return true;
 }
 void Runtime::panic() noexcept {
@@ -241,7 +243,7 @@ json Runtime::command(const json& request) {
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","capture_mirrors","manual_dump","panic"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","capture_mirrors","stream","manual_dump","panic"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0},
         {"field_writes",false},{"camera_rig",render_probe_->camera_rig(json::object())},{"channels",registration_}};
@@ -266,20 +268,21 @@ json Runtime::command(const json& request) {
         }
         return render_probe_->camera_rig(request);
     }
-    if(cmd=="capture_mirror5" || cmd=="capture_mirrors") {
+    if(cmd=="capture_mirror5" || cmd=="capture_mirrors" || cmd=="stream") {
         std::lock_guard lock(control_);
         const auto action=request.value("action",std::string("status"));
-        if(action=="arm" && (tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_))
+        if((action=="arm" || action=="start") && (tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_))
             throw std::runtime_error("Mirror5 capture requires the permitted Tier 1 render probe");
         CaptureOptions options;
-        if(action=="arm") {
-            options.format=request.value("format",std::string("raw"));
+        if(action=="arm" || action=="start") {
+            options.format=request.value("format",std::string(cmd=="stream"?"rgbd8":"raw"));
             options.color_gain=request.value("color_gain",1.0f);
             if(options.format!="raw" && options.format!="rgbd8" && options.format!="raw+rgbd8")
                 throw std::runtime_error("Capture format must be raw, rgbd8 or raw+rgbd8");
             if(!std::isfinite(options.color_gain) || options.color_gain<=0)
                 throw std::runtime_error("Color gain must be finite and positive");
         }
+        if(cmd=="stream") return render_probe_->stream(request,*transport_,options);
         return cmd=="capture_mirrors"?render_probe_->capture_views(action,transport_.get(),request.value("metadata",true),options):render_probe_->capture(action,options);
     }
     if(cmd=="render_probe") {

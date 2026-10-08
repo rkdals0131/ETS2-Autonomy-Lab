@@ -2,6 +2,7 @@
 #include <tlhelp32.h>
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <span>
 #include <stdexcept>
 #include <Zydis.h>
@@ -107,6 +108,7 @@ void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool fram
     if(accepting_ && std::all_of(all.begin(),all.end(),[&](auto* hook){return hook->enabled()==selected(hook);})) return;
     if(GetModuleHandleW(L"renderdoc.dll"))
         throw std::runtime_error("RenderDoc is loaded; restart ETS2 normally before enabling ot render hooks");
+    if(auto stream=stream_.load()) stream->stop();
     if(accepting_ && rig_select_hook_.enabled() && rig_begin_hook_.enabled() &&
        rig_end_hook_.enabled() && rig_dimensions_hook_.enabled()) {
         // Keep camera submission continuous while changing observation modes.
@@ -236,6 +238,7 @@ void RenderProbe::disable() noexcept {
 bool RenderProbe::disable_locked(bool clear_rig) {
     accepting_=false;
     observing_=false;
+    if(auto stream=stream_.load()) stream->stop();
     if(clear_rig) rig_.clear();
     vehicle_metadata_=false;
     frame_boundary_seen_=false;
@@ -363,6 +366,10 @@ void RenderProbe::rig_dimensions_callback(safetyhook::Context& context) noexcept
 json RenderProbe::camera_rig(const json& request) {
     std::lock_guard lock(control_);
     if(request.contains("views") || request.contains("enabled")) {
+        if(auto stream=stream_.load();stream && stream->running()) {
+            if(request.value("enabled",true)) throw std::runtime_error("Stop the capture stream before changing cameras");
+            stream->stop();
+        }
         if(request.value("enabled",true) && !rig_end_hook_.enabled())
             throw std::runtime_error("Enable the render probe before configuring cameras");
         return rig_.configure(request);
@@ -444,6 +451,9 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     for(auto* camera:cameras())
         camera->observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
             record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,observation_session_,record.pass.get());
+    if(auto stream=stream_.load())
+        stream->observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
+            record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,record.pass.get());
     if(!TryAcquireSRWLockExclusive(&records_lock_)) {missed_.fetch_add(1);return;}
     records_[records_written_%records_.size()]=record;
     ++records_written_;
@@ -451,6 +461,8 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
 }
 json RenderProbe::capture(const std::string& action,const CaptureOptions& options) {
     std::lock_guard lock(control_);
+    if(auto stream=stream_.load();action!="status" && stream && stream->running())
+        throw std::runtime_error("Stop the capture stream before a manual capture command");
     if(action=="arm" && !hook_.enabled()) throw std::runtime_error("Capture requires render_probe observe mode");
     if(action=="arm") {
         for(auto* camera:cameras()) {
@@ -463,6 +475,8 @@ json RenderProbe::capture(const std::string& action,const CaptureOptions& option
 }
 json RenderProbe::capture_views(const std::string& action,Transport* publisher,bool metadata,const CaptureOptions& options) {
     std::lock_guard lock(control_);
+    if(auto stream=stream_.load();action!="status" && stream && stream->running())
+        throw std::runtime_error("Stop the capture stream before a manual capture command");
     if(action=="arm") {
         if(!hook_.enabled()) throw std::runtime_error("Capture requires render_probe observe mode");
         for(auto* camera:cameras()) {
@@ -524,6 +538,33 @@ json RenderProbe::capture_views(const std::string& action,Transport* publisher,b
     }
     return {{"phase",!bundle_frame_?"idle":error?"error":ready?"ready":pending?"pending":"idle"},
         {"render_frame_id",bundle_frame_},{"observation_session_qpc",observation_session_},{"views",views}};
+}
+json RenderProbe::stream(const json& request,Transport& publisher,const CaptureOptions& options) {
+    std::lock_guard lock(control_);
+    const auto action=request.value("action",std::string("status"));
+    auto stream=stream_.load();
+    if(action=="start") {
+        if(stream && stream->running()) throw std::runtime_error("A capture stream is already running");
+        if(!hook_.enabled()) throw std::runtime_error("Capture stream requires render_probe observe mode");
+        // The IPC command is the boundary for rates and bounded lifetime.
+        const auto hz=request.at("hz").get<double>(),duration=request.at("duration").get<double>();
+        if(!std::isfinite(hz) || hz<=0 || !std::isfinite(duration) || duration<=0)
+            throw std::runtime_error("Stream hz and duration must be finite and positive");
+        for(auto* camera:cameras()) {
+            const auto phase=camera->phase();
+            if(phase==GpuCapture::Phase::armed || phase==GpuCapture::Phase::waiting_gpu)
+                throw std::runtime_error("A manual camera capture is still pending");
+        }
+        if(stream) stream->stop();
+        for(auto* camera:cameras()) camera->cancel();
+        bundle_frame_=0;published_bundle_=nullptr;
+        auto mask=rig_.mask();if(!mask) mask=0x27;
+        stream=std::make_shared<CaptureStream>(mask,options,hz,duration,presents_,observation_session_,publisher);
+        stream_.store(stream);stream->start();
+    } else if(action=="stop") {
+        if(stream) stream->stop();
+    } else if(action!="status") throw std::runtime_error("Unknown capture stream action");
+    return stream?stream->status():json{{"running",false}};
 }
 json RenderProbe::status() {
     std::lock_guard lock(control_);

@@ -1,6 +1,7 @@
 #pragma once
 #include "ot.hpp"
 #include "gpu_capture.hpp"
+#include "capture_stream.hpp"
 #include "pass_commands.hpp"
 #include "camera_rig.hpp"
 #include <array>
@@ -21,6 +22,7 @@ public:
     json capture(const std::string& action,const CaptureOptions& options={});
     json capture_views(const std::string& action,Transport* publisher=nullptr,bool metadata=true,const CaptureOptions& options={});
     json camera_rig(const json& request);
+    json stream(const json& request,Transport& publisher,const CaptureOptions& options={});
     ~RenderProbe();
 private:
     struct Record {
@@ -69,6 +71,7 @@ private:
     safetyhook::MidHook draw_batch_hook_;
     safetyhook::MidHook rig_select_hook_,rig_begin_hook_,rig_end_hook_,rig_dimensions_hook_;
     CameraRig rig_;
+    std::atomic<std::shared_ptr<CaptureStream>> stream_;
     std::array<safetyhook::MidHook*,9> hookset() noexcept {
         return {&hook_,&present_hook_,&compile_begin_hook_,&compile_end_hook_,&draw_batch_hook_,
             &rig_select_hook_,&rig_begin_hook_,&rig_end_hook_,&rig_dimensions_hook_};

@@ -3,6 +3,7 @@ import ctypes as C
 import json
 from pathlib import Path
 import struct
+from zipfile import ZipFile, ZIP_STORED
 
 from .client import W, _api, _open_mapping, _map, _unmap, _close, _free_library, _wait
 
@@ -136,9 +137,36 @@ def save_bundle(bundle, directory):
     return directory
 
 
+def save_bundle_archive(bundle, filename):
+    """One uncompressed ZIP per frame avoids opening hundreds of small files.
+
+    Its paths match save_bundle(), so ordinary ZIP extraction also exposes
+    images.json and the binary files to existing per-camera tools.
+    """
+    with ZipFile(filename, "x", compression=ZIP_STORED) as archive:
+        for item in bundle["files"]:
+            archive.writestr(item["camera"] + "/" + item["file"], item["data"])
+        for view in bundle["manifest"]["views"]:
+            archive.writestr(view["camera"] + "/images.json", json.dumps(view["metadata"], ensure_ascii=False))
+        archive.writestr("bundle.json", json.dumps(
+            {"sequence": bundle["sequence"], **bundle["manifest"]}, ensure_ascii=False))
+    return Path(filename)
+
+
 def load_bundle(directory):
     """Read a bundle saved by save_bundle into the same immutable byte interface."""
     directory = Path(directory).resolve()
+    if directory.is_file():
+        with ZipFile(directory) as archive:
+            manifest = json.loads(archive.read("bundle.json"))
+            names = {_component(view["camera"]) for view in manifest["views"]}
+            files = []
+            for item in manifest["files"]:
+                camera, name = _component(item["camera"]), _component(item["file"])
+                if camera not in names:
+                    raise ValueError("Bundle image is outside its camera directory")
+                files.append({"camera": camera, "file": name, "data": archive.read(camera + "/" + name)})
+            return {"sequence": manifest["sequence"], "manifest": manifest, "files": files}
     manifest = json.loads((directory / "bundle.json").read_text(encoding="utf-8"))
     names = {_component(view["camera"]) for view in manifest["views"]}
     files = []

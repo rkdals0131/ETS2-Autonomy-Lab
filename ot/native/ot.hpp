@@ -53,6 +53,8 @@ public:
     json publish_bundle(json manifest,const std::vector<BundleBlob>& blobs);
     json bundle_status() const;
 private:
+    json bundle_status_locked() const;
+    mutable std::mutex bundle_mutex_;
     void serve() noexcept;
     bool io(HANDLE pipe, bool write, void* buffer, DWORD size, DWORD& transferred);
     bool wait_io(HANDLE event, DWORD timeout);

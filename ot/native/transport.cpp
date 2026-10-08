@@ -132,8 +132,9 @@ json Transport::status() const {
         {"dropped",InterlockedCompareExchange64(&ring_->header.dropped,0,0)}};
 }
 json Transport::publish_bundle(json manifest,const std::vector<BundleBlob>& blobs) {
-    // Called only by the pipe worker, while RenderProbe owns the completed
-    // samples. No game/render thread waits for this copy or performs file I/O.
+    std::lock_guard lock(bundle_mutex_);
+    // Pipe and stream workers serialize publication while owning completed
+    // CPU samples. No game/render thread performs this copy or file I/O.
     size_t binary_bytes=0;
     auto& files=manifest["files"]=json::array();
     for(const auto& blob:blobs) {
@@ -185,12 +186,16 @@ json Transport::publish_bundle(json manifest,const std::vector<BundleBlob>& blob
         InterlockedExchange(&slot->state,2);
         InterlockedExchange64(&bundles_->published,static_cast<LONG64>(sequence));
         bundle_cursor_=(index+1)%bundle_slots;
-        return {{"published",true},{"sequence",sequence},{"bytes",length},{"ring",bundle_status()}};
+        return {{"published",true},{"sequence",sequence},{"bytes",length},{"ring",bundle_status_locked()}};
     }
     InterlockedIncrement64(&bundles_->dropped);
-    return {{"published",false},{"reason","queue_full"},{"ring",bundle_status()}};
+    return {{"published",false},{"reason","queue_full"},{"ring",bundle_status_locked()}};
 }
 json Transport::bundle_status() const {
+    std::lock_guard lock(bundle_mutex_);
+    return bundle_status_locked();
+}
+json Transport::bundle_status_locked() const {
     if(!bundles_) return {{"enabled",false}};
     return {{"enabled",true},{"abi",1},{"slots",bundle_slots},{"slot_bytes",bundle_capacity_},
         {"published",InterlockedCompareExchange64(&bundles_->published,0,0)},

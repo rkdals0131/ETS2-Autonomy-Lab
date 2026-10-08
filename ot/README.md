@@ -1,4 +1,4 @@
-# ot 0.16.0 — FH5 외판에 맞춘 전방·좌우 포드 4뷰
+# ot 0.17.0 — FH5 전방·좌우 4뷰 연속 RGB-D 기록
 
 > **확정:** 기존 미러 슬롯 0–5를 임의 위치·회전·FOV의 센서로 전용했습니다. 서로 다른 샤시 상대 위치의 여섯 영상을 같은 Present 구간 27에서 수집했습니다. 월드 고정 카메라도 동작합니다.
 > **0.11.0:** 여섯 RGB·깊이 버퍼를 각각 640×360으로 맞추고 공유 메모리로 실시간 표시했습니다. 약 10.3초에 완전한 6뷰 묶음 45개, 누락 0개였습니다.
@@ -8,7 +8,8 @@
 > **0.14.0:** GPU에서 RGBA8·R32F로 변환하는 `rgbd8` 형식을 추가했습니다. 640×360 6뷰 픽셀 전송량은 44.24 → 11.06 MB로 75% 감소했습니다. 같은 프레임의 원본과 경량 깊이·복원 좌표를 대조했습니다.
 > **0.15.0:** 기본 리그를 고속도로용 전방 협각·광각과 좌우 포드 4뷰로 변경했습니다. SDK 바퀴 구성으로 후축 기준 장착 좌표를 변환합니다. 같은 해상도에서 GPU 복사·변환 자원을 재사용하며 실제 4뷰 수집·크기/형식 전환을 확인했습니다.
 > **0.16.0:** 현재 FH5의 모델 외판·미러 하우징에 장착점을 맞췄습니다. `basis: cabin`은 운전자 고개 회전 전의 캐빈 parent를 사용해 서스펜션 운동을 따릅니다. 실제 4뷰 수집과 종료 복구를 확인했습니다.
-> **다음:** 연속 수집, 전경 성능 비교, 트레일러 가림·주행 중 가시성 누락. 가상 LiDAR·레이더와 주행보조 모델은 후속 구현입니다.
+> **0.17.0:** 3슬롯 GPU ring과 native 수집 worker를 추가했습니다. 차량 메타데이터를 포함한 4뷰 RGB-D를 5초·50묶음·실측 10.006 Hz로 Python에 저장했고 누락은 0개였습니다. 수집 중 패닉·payload unload도 확인했습니다.
+> **다음:** 전경 성능 비교, 트레일러 가림·주행 중 가시성 누락과 장시간 저장량 절감. 가상 LiDAR·레이더와 주행보조 모델은 후속 구현입니다.
 
 ### Phase 1 고속도로 4뷰
 
@@ -49,7 +50,31 @@
 
 4뷰 경량 픽셀은 묶음당 **23,101,440 B**(현재 원본의 25%)입니다. 고해상도 두 전방 뷰 때문에 기존 640×360 6뷰보다 픽셀 수는 많습니다. 컴퓨트 입력·출력·shader·상수 버퍼, staging과 완료 query를 재사용합니다. 기본 차량 draw 추적이 꺼진 상태에서 첫 형식별 준비 뒤 추가 GPU 자원 생성 없이 반복 수집했습니다. 해상도 변경은 필요한 자원만 다시 만들며 raw/경량 전환 후 실제 출력도 확인했습니다. 같은 프레임의 원본 DSV와 경량 깊이 차이는 유효 픽셀에서 0이었습니다.
 
-이는 카메라별 자원 재사용이며 여러 GPU 표본을 동시에 처리하는 연속 ring은 아직 없습니다. 차량별 draw 상수 추적 옵션은 여전히 표본마다 별도 staging을 만들 수 있습니다. 패닉·관측 종료·payload unload에서 보유 GPU 자원을 해제합니다. 원본은 로컬 `research/live/2026-10-08-camera-rig/phase1-first-run.json`, `phase1-resource-reuse.json`, `phase1-preview-run.json`, `phase1-first/`에 있습니다.
+0.15.0에서 도입한 카메라별 자원 재사용에 이어, 0.17.0은 아래의 연속 ring과 차량 draw 상수 staging 재사용까지 지원합니다. 패닉·관측 종료·payload unload에서 보유 GPU 자원을 해제합니다. 0.15.0 원본은 로컬 `research/live/2026-10-08-camera-rig/phase1-first-run.json`, `phase1-resource-reuse.json`, `phase1-preview-run.json`, `phase1-first/`에 있습니다.
+
+### 연속 4뷰 기록
+
+미리보기 창 없이 기록하며 포커스를 바꾸지 않습니다. 게임이 실제로 렌더링 중이어야 합니다. 새 출력 디렉터리를 지정합니다.
+
+```powershell
+.\ot\ot.cmd record_bundles --config .\ot\presets\phase1-highway.json --hz 10 --duration 5 --vehicles --output .\research\live\my-road-run
+```
+
+한 번의 `stream start`로 DLL이 촬영을 예약하고, Python은 `OT_Bundles`를 읽어 저장합니다. 묶음마다 arm/poll/publish 명령을 보내지 않습니다. 3개 GPU 슬롯은 필요한 자원을 첫 사용에 준비한 뒤 순환 재사용하며, immediate-context 복사와 readback은 기존 렌더 callback에서만 수행합니다. native worker는 완성된 CPU 데이터의 공유 메모리 발행을 담당합니다. 차량 상수도 기존 staging을 재사용하고 실제 크기가 바뀔 때만 다시 만듭니다.
+
+출력은 `frame-<Present 구간>.zip`, `index.jsonl`, `run.json`입니다. ZIP은 **비압축 묶음**이며 내부의 카메라별 `images.json`·RGB·깊이·상수 파일은 기존 디렉터리 형식과 같습니다. `otpy.bundles.load_bundle()`과 `birdseye`는 디렉터리와 ZIP을 모두 읽습니다. 카메라별 기존 분석 명령에는 일반 ZIP 도구로 푼 디렉터리를 넘길 수 있습니다. 파일 덮어쓰기는 하지 않습니다.
+
+기본 `rgbd8`은 첫 raw 표본으로 공통 노출을 계산해 실행 내내 고정합니다. `--color-gain`을 주면 이 준비 표본을 생략합니다. `--vehicles`는 같은 pass의 차량 모델 자세·draw 상수 수집을 켜며 생략하면 카메라 데이터만 기록합니다. `raw`·`raw+rgbd8`도 선택할 수 있습니다. 색상 gain은 물리적 카메라 노출 모델이 아닙니다.
+
+`--duration` 뒤에는 새 촬영을 멈추고 진행 중인 복사를 최대 1초 더 회수합니다. 종료·예외·Ctrl+C에서 stream을 멈추고 Tier 0으로 돌아갑니다. 수집 중 배치 변경은 거절하며 `stream stop` 후 수정합니다. 소비가 밀리면 공유 메모리의 새 묶음을 버리고 `queue_dropped`에 기록합니다. 이미 소비 중인 슬롯을 덮어쓰거나 다른 Present 구간의 뷰를 합치지 않습니다.
+
+직접 API를 쓰는 경우, 적용된 observe 리그에서 `stream start --hz 10 --duration 5 --color-gain 0.55`, `stream status`, `stream stop`을 사용할 수 있습니다. 자동 기간 종료는 worker와 GPU 자원을 정리하지만 카메라 리그는 유지합니다. 원래 미러 복귀는 `panic`입니다. 기록 CLI는 이 복귀까지 수행합니다. 공유 메모리 크기를 키워야 하면 기존 reader를 닫고 core를 reload합니다.
+
+실제 FH5 정차 실험에서는 전방 1280×720 두 장·측후방 960×544 두 장과 차량 메타데이터를 **5초에 50묶음, 저장 누락/수집 오류 0회**로 기록했습니다. 복사 제출 시각의 실측 간격은 중앙값 101.65ms, 전체 처리율은 10.006Hz였습니다. 50묶음의 200뷰 모두 묶음의 Present 구간·세션과 일치했고, 첫·중간·마지막 묶음의 기존 점군 복원과 마지막 RGB를 확인했습니다. 30분 주행·전경 FPS 결과는 아닙니다.
+
+초기 파일별 저장은 2초·20수집 중 14저장·6누락이었습니다. 111개 파일을 여닫는 비용과 반복 JSON 쓰기를 ZIP 한 개로 묶어 해결했습니다. 같은 묶음의 오프라인 저장은 약 0.246초 → 0.043초였고, 원본 파일 바이트와 metadata를 다시 읽어 대조했습니다. 최종 50묶음의 바이너리는 1,155,725,568B로 **약 231MB/s**입니다. ZIP은 저장량을 줄이지 않으므로 이 설정의 30분 전체 기록은 약 416GB가 필요합니다. 장시간 운행 기록에는 추가 압축 또는 표본량 조정이 필요합니다.
+
+수집 중 패닉에서 worker 종료·hook 0, 수집 중 메타로더 unload에서 core와 pipe 해제를 확인했습니다. 다시 로드하면 Tier 0이며 SDK·기존 FFB가 유지됩니다. 로컬 원본은 `research/live/2026-10-08-camera-rig/stream-017-archive/`와 `stream-017-lifecycle.json`입니다.
 
 ### 화면을 보며 카메라 배치 조절
 
@@ -209,7 +234,7 @@ RGBA8의 alpha는 255입니다. 색상은 음수·비유한 성분을 0으로 �
 
 CLI로 6뷰 리그를 적용한 상태에서 메타로더 `unload`/`load`도 실제 실행했습니다. private 제출 호출·여덟 hook의 임시 코드가 정리됐고, 새 모듈은 Tier 0·hook 0·SDK 9채널로 돌아왔습니다. 기존 FFB는 유지됐습니다. 기록은 로컬 `active-unload.json`입니다.
 
-0.9.0의 `OT_Bundles`는 선택적 공유 메모리 전달입니다. `publish` 후 `otpy.BundleReader`로 읽고 `otpy.bundles.save_bundle`로 Python에서 저장할 수 있습니다. `save_partial`/`publish_partial`은 누락 뷰를 명시한 진단 표본에만 사용하며 완전한 센서 묶음으로 간주하지 않습니다. 연속 GPU staging ring과 기록 CLI는 후순위입니다.
+0.9.0의 `OT_Bundles`는 선택적 공유 메모리 전달입니다. `publish` 후 `otpy.BundleReader`로 읽고 `otpy.bundles.save_bundle`로 Python에서 저장할 수 있습니다. `save_partial`/`publish_partial`은 누락 뷰를 명시한 진단 표본에만 사용하며 완전한 센서 묶음으로 간주하지 않습니다. 연속 GPU ring과 기록 CLI는 후속 0.17.0에서 추가했습니다.
 
 ### 0.8.4 — 차량별 GPU 변환 상수
 

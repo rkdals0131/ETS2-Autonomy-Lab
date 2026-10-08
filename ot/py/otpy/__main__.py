@@ -46,6 +46,20 @@ def main():
     record.add_argument("--hz", type=float, default=10.0)
     record.add_argument("--duration", type=float, required=True)
     record.add_argument("--output", required=True, help="New JSONL index; raw images are saved by the DLL")
+    stream = sub.add_parser("stream", help="Bounded native GPU ring; consumes via OT_Bundles")
+    stream.add_argument("action", choices=("start", "status", "stop"), default="status", nargs="?")
+    stream.add_argument("--hz", type=float, default=10.0)
+    stream.add_argument("--duration", type=float, help="Required for start; native stop deadline in seconds")
+    stream.add_argument("--format", choices=("raw", "rgbd8", "raw+rgbd8"), default="rgbd8")
+    stream.add_argument("--color-gain", type=float, default=1.0)
+    bundles = sub.add_parser("record_bundles", help="Native continuous camera recording; Python writes files and restores Tier 0")
+    bundles.add_argument("--config", required=True)
+    bundles.add_argument("--hz", type=float, default=10.0)
+    bundles.add_argument("--duration", type=float, required=True)
+    bundles.add_argument("--output", required=True, help="New recording directory")
+    bundles.add_argument("--format", choices=("raw", "rgbd8", "raw+rgbd8"), default="rgbd8")
+    bundles.add_argument("--color-gain", type=float, help="Omit to calibrate a fixed exposure from one raw sample")
+    bundles.add_argument("--vehicles", action="store_true", help="Include same-pass vehicle model metadata for box projection")
     reconstruct = sub.add_parser("reconstruct", help="Offline pass-camera point cloud from a saved DLL capture (NumPy)")
     reconstruct.add_argument("directory", help="Capture directory containing images.json")
     reconstruct.add_argument("--output", required=True, help="New NPZ file; existing files are not overwritten")
@@ -95,6 +109,19 @@ def main():
                 parser.error("--hz and --duration must be finite and positive")
             record_mirror5(client, args.hz, args.duration, args.output)
             return 0
+        elif args.command == "stream":
+            if args.action == "start" and args.duration is None:
+                parser.error("stream start requires --duration")
+            options = dict(hz=args.hz, duration=args.duration, format=args.format, color_gain=args.color_gain) if args.action == "start" else {}
+            result = client.request("stream", action=args.action, **options)
+        elif args.command == "record_bundles":
+            if not (math.isfinite(args.hz) and args.hz > 0 and math.isfinite(args.duration) and args.duration > 0):
+                parser.error("--hz and --duration must be finite and positive")
+            if args.color_gain is not None and (not math.isfinite(args.color_gain) or args.color_gain <= 0):
+                parser.error("--color-gain must be finite and positive")
+            from .recording import record_bundles
+            result = record_bundles(client, args.config, args.hz, args.duration, args.output,
+                                    args.format, args.color_gain, args.vehicles)
         elif args.command == "watch":
             if not 0 < args.hz <= 240:
                 parser.error("--hz must be in (0, 240]")
