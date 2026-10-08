@@ -1,0 +1,108 @@
+{
+  "description": "Volvo FH5 4x2 sleeper: front sunshield_01 outer face and left/right mirror housing mounts with 35 mm standoffs; independent sensor outputs preserve native mirrors",
+  "views": [
+    {
+      "slot": 3,
+      "name": "C_FN front narrow",
+      "mount": "M_FC",
+      "basis": "cabin",
+      "position_base_link": [
+        5.175060248568551,
+        -0.0003312042223462428,
+        3.016591044163528
+      ],
+      "quaternion_wxyz": [
+        0.999914327574007,
+        -0.013089595571344441,
+        0.0,
+        0.0
+      ],
+      "hfov_deg": 30,
+      "vfov_deg": 17.142372262265418,
+      "base_resolution": [
+        1280,
+        720
+      ],
+      "source_slot": 0,
+      "camera_id": "C_FN"
+    },
+    {
+      "slot": 4,
+      "name": "C_FW front wide",
+      "mount": "M_FC",
+      "basis": "cabin",
+      "position_base_link": [
+        5.175060248568551,
+        -0.0003312042223462428,
+        3.016591044163528
+      ],
+      "quaternion_wxyz": [
+        0.9975640502598242,
+        -0.0697564737441253,
+        0.0,
+        0.0
+      ],
+      "hfov_deg": 120,
+      "vfov_deg": 88.50715548032275,
+      "base_resolution": [
+        1280,
+        720
+      ],
+      "source_slot": 1,
+      "camera_id": "C_FW"
+    },
+    {
+      "slot": 6,
+      "name": "C_RL left pod",
+      "mount": "M_PL",
+      "basis": "cabin",
+      "position_base_link": [
+        4.652793128701049,
+        1.4843929975627195,
+        2.6446900365893216
+      ],
+      "quaternion_wxyz": [
+        0.2990585016712216,
+        -0.03143231511785278,
+        0.9484923895029768,
+        0.09969056725402452
+      ],
+      "hfov_deg": 100,
+      "vfov_deg": 67.67274797076357,
+      "base_resolution": [
+        960,
+        540
+      ],
+      "source_slot": 2,
+      "camera_id": "C_RL"
+    },
+    {
+      "slot": 7,
+      "name": "C_RR right pod",
+      "mount": "M_PR",
+      "basis": "cabin",
+      "position_base_link": [
+        4.652793128701049,
+        -1.48439299756272,
+        2.6446900365893216
+      ],
+      "quaternion_wxyz": [
+        0.2990585016712216,
+        -0.03143231511785278,
+        -0.9484923895029768,
+        -0.09969056725402452
+      ],
+      "hfov_deg": 100,
+      "vfov_deg": 67.67274797076357,
+      "base_resolution": [
+        960,
+        540
+      ],
+      "source_slot": 5,
+      "camera_id": "C_RR"
+    }
+  ],
+  "truck_id": "vehicle.volvo.fh_2021",
+  "vehicle_configuration": "4x2 / l2h1 sleeper / LHD / mirror_01 / sunshield_01; other configurations need body-fit calibration",
+  "private_outputs": true
+}

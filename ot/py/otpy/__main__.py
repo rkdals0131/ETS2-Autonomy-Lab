@@ -23,7 +23,7 @@ def main():
     probe.add_argument("--mode", dest="hook_mode", choices=("observe", "rig"), default="observe",
                        help="observe: capture hooks; rig: only the four camera placement hooks")
     probe.add_argument("--frames", action="store_true", help="With rig mode: also observe Present intervals")
-    rig = sub.add_parser("camera_rig", help="Place up to six cameras; +X right, +Y up, -Z forward")
+    rig = sub.add_parser("camera_rig", help="Place cameras in slots 0–8; +X right, +Y up, -Z forward")
     rig.add_argument("mode", choices=("status", "apply", "off"), default="status", nargs="?")
     rig.add_argument("--config", help="JSON containing views with slot, basis, position, quaternion_wxyz and FOVs")
     rig.add_argument("--rig-only", action="store_true", help="Apply without pass observation or GPU readback hooks")

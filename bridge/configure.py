@@ -8,7 +8,8 @@ if path.exists():
     raise SystemExit(f"Existing settings preserved: {path}")
 path.write_text(json.dumps({
     "token": secrets.token_hex(32), "state_port": 17401, "bulk_port": 17400,
-    "rig": "../../ot/presets/phase1-highway.json", "slots": [0],
+    "rig": "../../ot/presets/phase1-highway-private.json", "slots": [3, 4, 6, 7],
+    "lidar": "../../ot/presets/phase1-lidar-private.json",
     "duration_s": 60, "color_gain": 1.0, "auto_exposure": True, "shared_gpu": True,
 }, indent=2) + "\n", encoding="utf-8")
 print(path)
