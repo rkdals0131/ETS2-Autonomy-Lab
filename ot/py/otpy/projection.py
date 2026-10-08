@@ -128,8 +128,24 @@ def compare_boxes(directory, objects):
 
 
 def save_box_comparison(directory, objects_file, output):
-    objects = json.loads(Path(objects_file).read_text(encoding="utf-8"))
+    source = {"pose_source": "external_actor_records"}
+    if objects_file:
+        objects = json.loads(Path(objects_file).read_text(encoding="utf-8"))
+    else:
+        meta = json.loads((Path(directory) / "images.json").read_text(encoding="utf-8"))
+        snapshot = meta["geometry_pass"].get("vehicles_at_compile")
+        if snapshot is None:
+            raise ValueError("Capture has no vehicle metadata; supply --objects or capture with render_probe on --vehicles")
+        if "error" in snapshot:
+            raise ValueError("Vehicle metadata read failed: " + snapshot["error"])
+        # Actor boxes have a known local frame. Do not attach them to the model
+        # origin until the actor-to-model transform has been established.
+        objects = [{"address": hex(v["actor_address"]), **v["actor_observation"]} for v in snapshot["vehicles"]]
+        source = {"pose_source": "simulation_actor_observations_at_compile; model transforms are not substituted",
+                  "geometry_scope": snapshot["geometry_scope"], "read_errors": snapshot["errors"],
+                  "truncated_for_read_budget": snapshot["truncated_for_read_budget"]}
     result = compare_boxes(directory, objects)
+    result["object_source"] = source
     with open(output, "x", encoding="utf-8") as stream:
         json.dump(result, stream, ensure_ascii=False, indent=2, allow_nan=False)
     return {"output": str(output), "objects_intersecting_view": len(result["objects"]),

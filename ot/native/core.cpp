@@ -235,7 +235,7 @@ json Runtime::command(const json& request) {
             if(request.at("enabled").get<bool>()) {
                 if(tier_!=1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_)
                     throw std::runtime_error("Render probe requires Tier 1, matching EXE, singleplayer_research, allow_tier1 and allow_render_probe");
-                render_probe_->enable();
+                render_probe_->enable(request.value("vehicle_metadata",false));
             } else render_probe_->disable();
         }
         return render_probe_->status();

@@ -7,7 +7,7 @@ namespace ot {
 // Names travel with compiled command ranges, independently of reused textures.
 class PassCommands {
 public:
-    void begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id) noexcept;
+    void begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,bool vehicles=false) noexcept;
     void end(uintptr_t frame) noexcept;
     std::shared_ptr<const json> lookup(uint16_t id,uintptr_t token) noexcept;
     void clear();
@@ -22,7 +22,7 @@ private:
         std::shared_ptr<const json> pass;
     };
     static std::vector<Block> blocks(uintptr_t output);
-    static std::shared_ptr<const json> describe(uintptr_t input);
+    static std::shared_ptr<const json> describe(uintptr_t input,bool vehicles);
     std::mutex mutex_;
     std::unordered_map<uintptr_t,Pending> pending_;
     std::unordered_map<uint16_t,std::vector<Span>> compiled_;

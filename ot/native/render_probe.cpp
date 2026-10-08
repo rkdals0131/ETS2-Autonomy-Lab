@@ -84,9 +84,9 @@ RenderProbe::~RenderProbe() {
     for(auto* hook:hookset()) hook->reset();
     if(module_reference_) FreeLibrary(module_reference_);
 }
-void RenderProbe::enable() {
+void RenderProbe::enable(bool vehicle_metadata) {
     std::lock_guard lock(control_);
-    if(hook_.enabled()) return;
+    if(hook_.enabled()) {vehicle_metadata_=vehicle_metadata;return;}
     if(GetModuleHandleW(L"renderdoc.dll"))
         throw std::runtime_error("RenderDoc is loaded; restart ETS2 normally before enabling ot render hooks");
     if(!hook_) {
@@ -149,10 +149,12 @@ void RenderProbe::enable() {
     AcquireSRWLockExclusive(&frames_lock_);frames_written_=0;ReleaseSRWLockExclusive(&frames_lock_);
     missed_frames_=0;
     pass_commands_.clear();
+    vehicle_metadata_=vehicle_metadata;
     accepting_=true;
     for(auto* hook:hookset()) {
         if(hook->enable()) continue;
         accepting_=false;
+        vehicle_metadata_=false;
         for(auto* rollback:hookset())
             if(rollback->enabled() && !rollback->disable()) last_error_="Render hook rollback failed";
         throw std::runtime_error("Render observer enable failed");
@@ -164,6 +166,7 @@ void RenderProbe::disable() noexcept {
     try {
         std::lock_guard lock(control_);
         accepting_=false;
+        vehicle_metadata_=false;
         frame_boundary_seen_=false;
         bool changed=false;
         for(auto* hook:hookset()) if(hook->enabled()) {
@@ -242,7 +245,7 @@ void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept 
         uintptr_t input{},output{};uint16_t id{};
         if(read_memory(context.r10,input) && read_memory(context.rsp+0x58,output) &&
            read_memory(context.rbp+0x240,id))
-            self->pass_commands_.begin(context.rbp,input,output,id);
+            self->pass_commands_.begin(context.rbp,input,output,id,self->vehicle_metadata_.load());
         self->compile_begin_timing_.add(qpc_now()-start);
     }
     callbacks.fetch_sub(1);
@@ -380,6 +383,7 @@ json RenderProbe::status() {
     }
     const auto all=hookset();
     return {{"active",std::count_if(all.begin(),all.end(),[](auto* h){return h->enabled();})},
+        {"vehicle_metadata_enabled",vehicle_metadata_.load()},
         {"callbacks_in_flight",callbacks.load()},
         {"qpc_frequency",qpc_frequency()},
         {"timing_scope","callback_body_elapsed; cumulative per module; excludes detour and counter bookkeeping"},

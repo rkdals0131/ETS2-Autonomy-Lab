@@ -1129,3 +1129,15 @@ DLL 0.8.2로 Present 구간 55의 미러 0·1·2·5를 수집하고 외부 객�
 노란 주차 트럭의 마지막 LOD 성분은 `[10393.0456, 44.4072, -9239.4701]`로 해당 model object cache와 같았다. actor 원점과는 약 1.5408단위 차이가 있었다. 따라서 actor 기준 AABB를 model 원점에 그대로 붙여서도 안 된다. 원점 변환을 연결하고, 실제 미러 제출 목록의 `Q` 및 그 component를 같은 compile 구간에서 읽는 것이 다음 단계다. 외부에서 시차를 두고 읽은 성분과 GPU 영상이 동일 시각이라는 증거는 아직 없다.
 
 외부 읽기는 2,199회·66,546 bytes·약 12.80ms였고 handle을 닫았다. 자료는 `vehicle-render-components.json`, `model-component-setter.txt`, `model-view-input.txt`, `draw-prepare-uniform.txt`다. 이어 외부에서 source pass를 찾으려던 순간에는 대응 미러 pass를 포착하지 못했으므로 `vehicle-source-pass-matches.json`의 빈 결과를 미러 제출 없음의 증거로 사용하지 않는다. 기존 compile hook에서 읽을 필요가 있다.
+
+### 0.8.3에서 pass와 차량 모델 연결
+
+후속 DLL은 위 외부 읽기를 기존 compile-begin callback으로 옮겼다. opt-in `vehicle_metadata`가 켜진 경우에만 준비된 draw 그룹의 항목과 각 차량 model object의 geometry 목록을 교차시킨다. source geometry가 있지만 그룹이 준비되지 않은 경우에는 자료를 대체하지 않고 메타데이터 오류를 남긴다. `Q → additional batch → pp_model_simple`의 실제 참조를 확인하고 성분의 회전·원점을 저장한다. actor pose와 AABB는 별도 `actor_observation`이며 자동으로 렌더 자세에 붙이지 않는다.
+
+초기 캡처의 Present 구간 19에서 미러 0·1·2·5의 준비된 geometry 수는 492·833·605·345였다. 각 pass에는 그룹 7개가 있었고 상태 override는 0개였다. 연결한 차량 모델 수는 3·3·4·0개로, 중복을 제거하면 AI 3대와 주차 차량 3대다. 조사한 actor 후보 70개에서 배열 생략이나 읽기 오류는 없었다. 후보 전체 수와 미러에서 선택된 모델 수는 서로 다른 값이다.
+
+같은 표본에서 모델 원점에서 `R_model * model_reference_offset_raw`를 뺀 값과 simulation actor 원점의 잔차는 AI 0.029–0.108, 주차 차량 0.006–0.033 게임 단위였다. 이 보정값은 초기화 경로 `0x975328..0x975330`에서 X/Y=0, Z=참조 위치 배열 첫 원소의 Z 음수로 설정한다. 배열의 게임 내 필드명은 아직 연결하지 않았다. 모델 갱신에서 LOD 기준점에 사용하는 값이라는 앞선 해석과 일치한다. actor와 모델의 수직 차이·서스펜션·보간까지 이 벡터 하나로 설명한 것은 아니다. 이 때문에 `project_boxes`는 현재 actor 좌표계의 AABB를 유지한다.
+
+추가 두 캡처(같은 관측 세션의 구간 16·49)에서 AI `0x2968e6c4348`의 모델 원점이 약 5.40단위 움직이면서 mirror1의 준비된 목록에 계속 연결됐다. 그 actor 관측값을 사용한 투영 영역은 각각 21·30픽셀이었고 모두 앞의 깊이에 가렸다. 움직이는 RGB 차량과 정확히 겹치는 정답 박스를 확보한 사례로 세지 않는다. 반면 앞서 확인한 주차 트럭의 박스 내부 깊이는 두 표본에서 각각 80·81픽셀이었다.
+
+현재 데이터는 **해당 pass의 compile 시점에 읽은 준비 모델 성분**이다. 개별 draw의 GPU 상수·픽셀 ID를 직접 대조한 것과 구별한다. trailer·부가 model object의 actor 대응 및 원점 변환도 남아 있다. 첫 세 묶음의 차량 읽기 자체는 pass당 0.194–0.285ms였으며 전후 GPU 지연 비교는 아니다. 최종 빌드에서 opt-out/opt-in 수집과 패닉·core 재로딩을 추가 확인했다. 자료는 `research/live/2026-10-08-object-projection/0.8.3/`에 보존한다.

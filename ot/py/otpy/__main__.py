@@ -17,8 +17,9 @@ def main():
         sub.add_parser(name)
     sub.add_parser("read").add_argument("field")
     sub.add_parser("tier").add_argument("value", type=int, choices=(0, 1), nargs="?")
-    sub.add_parser("render_probe", help="Inspect or switch the Tier 1 render-call observer").add_argument(
-        "mode", choices=("on", "off", "status"), default="status", nargs="?")
+    probe = sub.add_parser("render_probe", help="Inspect or switch the Tier 1 render-call observer")
+    probe.add_argument("mode", choices=("on", "off", "status"), default="status", nargs="?")
+    probe.add_argument("--vehicles", action="store_true", help="With on: read vehicle model metadata at mirror pass compilation")
     sub.add_parser("capture_mirror5", help="One requested mirror5 GPU readback").add_argument(
         "action", choices=("arm", "status", "save", "cancel"), default="status", nargs="?")
     sub.add_parser("capture_mirrors", help="Request mirror 0/1/2/5 in one Present interval").add_argument(
@@ -33,7 +34,7 @@ def main():
     reconstruct.add_argument("--depth-source", choices=("geometry", "attributes"), default="geometry")
     boxes = sub.add_parser("project_boxes", help="Offline actor box projection and DSV occlusion comparison (NumPy)")
     boxes.add_argument("directory", help="Capture directory containing images.json")
-    boxes.add_argument("--objects", required=True, help="JSON list of address, placement and aabb_raw records")
+    boxes.add_argument("--objects", help="JSON actor records; default: actor observations in the capture's vehicle metadata")
     boxes.add_argument("--output", required=True, help="New JSON file containing projected edges and depth counts")
     watch = sub.add_parser("watch", help="Print newest shared state as JSON lines; Ctrl+C closes the reader")
     watch.add_argument("--hz", type=float, default=10.0)
@@ -77,6 +78,10 @@ def main():
             result = client.tier(args.value)
         elif args.command == "render_probe":
             options = {} if args.mode == "status" else {"enabled": args.mode == "on"}
+            if args.vehicles:
+                if args.mode != "on":
+                    parser.error("--vehicles requires render_probe on")
+                options["vehicle_metadata"] = True
             result = client.request("render_probe", **options)
         elif args.command in ("capture_mirror5", "capture_mirrors"):
             result = client.request(args.command, action=args.action)

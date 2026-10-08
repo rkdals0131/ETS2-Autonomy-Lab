@@ -4,13 +4,34 @@
 > **남은 검증:** draw별 상수 변경 범위·GPU 실행/표시 시간·제한 없는 FPS 영향·월드 정합·30분 주행. 키 테스트는 사용자 요청으로 생략.
 > **다음:** draw별 변경 범위·월드 정합·AI 박스 대조, 주행 및 연속 데이터 전달.
 
+### 0.8.3 — 미러 pass의 차량 렌더 모델 관측
+
+`render_probe on --vehicles`로 선택한 경우에만 차량 메타데이터를 추가로 읽습니다. Python API는 `Client().request("render_probe", enabled=True, vehicle_metadata=True)`입니다. Tier 1 권한은 기존과 같으며 `panic` 또는 probe off가 추가 읽기도 끕니다. 일반 `render_probe on`과 로더 재로딩의 기본값은 꺼짐입니다.
+
+기존 compile-begin hook에서 pass의 준비된 draw 항목 `Q`와 AI·주차 차량 본체의 LOD geometry를 교차시킵니다. 각 Q의 추가 component 묶음이 실제 `pp_model_simple` 성분을 참조하는지 확인한 뒤 `images.json`의 `geometry_pass.vehicles_at_compile`에 다음을 저장합니다.
+
+- actor·model·model object·component 주소, LOD index, 해당 geometry 주소
+- 렌더 성분의 회전·local XYZ·cell·월드 원점, 모델의 기준점 보정값
+- 별도로 읽은 simulation actor pose와 그 원점 기준 AABB
+- compile 관측 QPC 구간, 읽기 오류·한도에 의한 생략, pass의 상태 override 수
+
+사용하지 않는 LOD 전체를 현재 자세로 출력하지 않습니다. 소스 geometry가 있는데 준비된 draw 그룹이 없으면 차량 메타데이터에 오류를 남깁니다. 픽셀 수집은 계속 가능하며, 차량 메타데이터를 요청하지 않은 캡처의 경로는 유지합니다. trailer·부가 부품, 개별 draw의 최종 GPU 상수 및 픽셀 객체 ID는 이 기능의 수집 범위에 포함되지 않습니다.
+
+실제 게임에서 네 뷰 묶음 3개를 수집했습니다. 첫 Present 구간 19의 미러 0·1·2·5는 각각 차량 모델 3·3·4·0개였으며 중복을 제거하면 AI 3대·주차 차량 3대였습니다. 각 pass의 준비 그룹은 7개, 상태 override 기록은 0개였고 오류·생략은 없었습니다. 이후 구간 16·49는 별도 관측 세션의 번호이며, 같은 AI 모델 원점이 두 표본 사이 약 5.40 게임 단위 이동했습니다. 차량 메타데이터 읽기 시간은 이 12개 pass에서 0.194–0.285ms였습니다. 전체 GPU 비용이나 장기 FPS 영향의 측정값은 아닙니다.
+
+최종 빌드에서도 옵션을 끈 네 뷰 수집이 완료됐고 차량 필드는 생성되지 않았습니다. 같은 hook을 유지하며 옵션을 켠 다음 묶음에는 모델 2·4·5·0개가 들어왔고 오류·생략은 없었습니다. 패닉 후 hook·callback 수 0, 옵션 꺼짐, 로더를 통한 완전한 core 교체·재로딩과 SDK/FFB 유지도 확인했습니다. 최종 표본은 `final-build-capture.json`입니다.
+
+actor와 model 원점은 같지 않습니다. 첫 표본에서 모델 기준점 보정을 뺀 잔차는 AI에서 약 0.029–0.108 게임 단위, 주차 차량에서 약 0.006–0.033단위였습니다. 이 잔차 전체를 보간 오차라고 단정하지 않습니다. `project_boxes`의 기본 입력은 아래처럼 **actor 관측값**이며, 렌더 모델 원점으로 바꾸어 넣지 않습니다. 원점 변환과 최종 GPU draw 연결이 다음 정합 과제입니다. 실행 자료는 `research/live/2026-10-08-object-projection/0.8.3/`에 있습니다.
+
 ### 오프라인 객체 박스 투영과 가림 판정
 
 ```powershell
 .\ot\ot.cmd project_boxes '<capture-directory>' --objects actors.json --output boxes.json
+# 0.8.3에서 --vehicles를 켜서 저장한 캡처는 내장 actor 관측값 사용 가능
+.\ot\ot.cmd project_boxes '<capture-directory>' --output boxes.json
 ```
 
-NumPy를 사용하는 오프라인 명령이며 게임 연결 없이 저장된 0.8.2 캡처를 읽습니다. `actors.json`은 외부 메모리 reader와 같은 필드의 JSON 배열입니다. 각 항목에는 `address`, `placement.world_xyz`(3개), `placement.quaternion_wxyz`(4개), `aabb_raw`(로컬 min XYZ, max XYZ 순서의 6개)가 필요합니다. 추가 필드는 무시합니다. 좌표는 게임 월드 단위이며, simulation actor pose를 받았다고 해서 렌더 시각으로 보간하지 않습니다.
+NumPy를 사용하는 오프라인 명령이며 게임 연결 없이 저장된 0.8.2 이후 캡처를 읽습니다. `actors.json`은 외부 메모리 reader와 같은 필드의 JSON 배열입니다. 각 항목에는 `address`, `placement.world_xyz`(3개), `placement.quaternion_wxyz`(4개), `aabb_raw`(로컬 min XYZ, max XYZ 순서의 6개)가 필요합니다. 추가 필드는 무시합니다. `--objects`를 생략하면 0.8.3 차량 메타데이터의 actor 관측값과 읽기 범위를 사용합니다. 좌표는 게임 월드 단위이며, simulation actor pose를 받았다고 해서 렌더 시각으로 보간하지 않습니다.
 
 출력은 카메라 frustum으로 잘라낸 박스의 12개 모서리 중 보이는 선분, 투영 영역의 픽셀 수, 유효 깊이 부재·박스 내부 깊이·앞의 가림·박스 뒤 깊이 개수입니다. 깊이는 DSV에서 복원하며 각 픽셀 광선의 OBB(회전한 3D 상자) 진입/이탈 거리와 비교합니다. 박스 중심까지의 거리를 표면 깊이 정답으로 삼지 않습니다. `segments_px`는 원시 영상 행 방향을 보존한 픽셀 경계 좌표입니다. 기존 출력은 덮어쓰지 않습니다.
 

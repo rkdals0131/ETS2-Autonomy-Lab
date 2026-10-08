@@ -9,7 +9,7 @@ namespace ot {
 class RenderProbe {
 public:
     RenderProbe()=default;
-    void enable();
+    void enable(bool vehicle_metadata=false);
     void disable() noexcept;
     // On failure the caller must retain this object and its module reference.
     // Code may still be returning through the hook; destruction would be unsafe.
@@ -52,6 +52,7 @@ private:
     uint64_t records_written_=0;
     std::atomic<uint64_t> calls_{0},missed_{0},sdk_frame_{0};
     std::atomic<bool> accepting_{false};
+    std::atomic<bool> vehicle_metadata_{false};
     safetyhook::MidHook hook_;
     safetyhook::MidHook present_hook_;
     safetyhook::MidHook compile_begin_hook_,compile_end_hook_;
