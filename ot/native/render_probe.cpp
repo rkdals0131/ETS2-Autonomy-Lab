@@ -17,6 +17,8 @@ constexpr uintptr_t compile_begin_rva=0x2B1B40,compile_end_rva=0x2B266A;
 constexpr uintptr_t draw_batch_rva=0x2E6243;
 constexpr uintptr_t rig_select_rva=0x5389CD,rig_begin_rva=0x538B11,rig_end_rva=0x538CE3;
 constexpr uintptr_t rig_dimensions_rva=0x1610250;
+constexpr uintptr_t rig_ego_parts_rva=0xA3CADE;
+constexpr std::array<uint8_t,11> rig_ego_parts_signature={0x49,0x8B,0xF8,0x48,0x8B,0xD9,0x74,0x0F,0x49,0x8B,0xD0};
 constexpr std::array<uint8_t,17> rig_dimensions_signature={0x48,0x83,0xEC,0x58,0xF3,0x0F,0x10,0x0D,0x3C,0xC2,0xF0,0,0x0F,0x57,0xC0,0x8B,0xC2};
 constexpr std::array<uint8_t,12> rig_select_signature={0x44,0x39,0xA9,0xC0,0x0A,0,0,0x76,0x05,0x83,0xFF,0x02};
 constexpr std::array<uint8_t,13> rig_begin_signature={0xBA,1,0,0,0,0x49,0x8B,0xCF,0xE8,0x42,0xAD,0xF5,0xFF};
@@ -100,7 +102,7 @@ void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool fram
     if(mode!="observe" && mode!="rig") throw std::runtime_error("Render mode must be observe or rig");
     if(mode=="rig" && vehicle_metadata) throw std::runtime_error("Vehicle metadata requires observe mode");
     const auto selected=[&](const safetyhook::MidHook* hook) {
-        if(hook==&rig_select_hook_ || hook==&rig_begin_hook_ || hook==&rig_end_hook_ || hook==&rig_dimensions_hook_) return true;
+        if(hook==&rig_select_hook_ || hook==&rig_begin_hook_ || hook==&rig_end_hook_ || hook==&rig_dimensions_hook_ || hook==&rig_ego_parts_hook_) return true;
         if(mode=="observe") return hook!=&draw_batch_hook_ || (vehicle_metadata && draw_metadata);
         return frame_timing && hook==&present_hook_;
     };
@@ -177,11 +179,12 @@ void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool fram
             throw std::runtime_error("Cannot create draw binding observer");
         }
         draw_batch_hook_=std::move(*draw_result);
-        const std::array<std::tuple<safetyhook::MidHook*,uintptr_t,safetyhook::MidHookFn>,4> rig_hooks={{
+        const std::array<std::tuple<safetyhook::MidHook*,uintptr_t,safetyhook::MidHookFn>,5> rig_hooks={{
             {&rig_select_hook_,find_target(rig_select_signature,0,rig_select_rva),&rig_select_callback},
             {&rig_begin_hook_,find_target(rig_begin_signature,0,rig_begin_rva),&rig_begin_callback},
             {&rig_end_hook_,find_target(rig_end_signature,0,rig_end_rva),&rig_end_callback},
-            {&rig_dimensions_hook_,find_target(rig_dimensions_signature,0,rig_dimensions_rva),&rig_dimensions_callback}}};
+            {&rig_dimensions_hook_,find_target(rig_dimensions_signature,0,rig_dimensions_rva),&rig_dimensions_callback},
+            {&rig_ego_parts_hook_,find_target(rig_ego_parts_signature,0,rig_ego_parts_rva),&rig_ego_parts_callback}}};
         for(const auto& [destination,address,function]:rig_hooks) {
             auto rig_result=safetyhook::MidHook::create(address,function,safetyhook::MidHook::StartDisabled);
             if(!rig_result) {
@@ -361,6 +364,11 @@ void RenderProbe::rig_end_callback(safetyhook::Context&) noexcept {
 void RenderProbe::rig_dimensions_callback(safetyhook::Context& context) noexcept {
     ++callbacks;
     if(auto* self=observer.load();self && self->accepting_.load()) self->rig_.dimensions(context);
+    --callbacks;
+}
+void RenderProbe::rig_ego_parts_callback(safetyhook::Context& context) noexcept {
+    ++callbacks;
+    if(auto* self=observer.load();self && self->accepting_.load()) self->rig_.ego_parts(context);
     --callbacks;
 }
 json RenderProbe::camera_rig(const json& request) {
@@ -607,7 +615,8 @@ json RenderProbe::status() {
             {{"name","camera.sensor_selection"},{"tier",2},{"rva",rig_select_rva},{"enabled",rig_select_hook_.enabled()}},
             {{"name","camera.sensor_submission_begin"},{"tier",2},{"rva",rig_begin_rva},{"enabled",rig_begin_hook_.enabled()}},
             {{"name","camera.sensor_submission_end"},{"tier",2},{"rva",rig_end_rva},{"enabled",rig_end_hook_.enabled()}},
-            {{"name","camera.sensor_dimensions"},{"tier",2},{"rva",rig_dimensions_rva},{"enabled",rig_dimensions_hook_.enabled()}}})},
+            {{"name","camera.sensor_dimensions"},{"tier",2},{"rva",rig_dimensions_rva},{"enabled",rig_dimensions_hook_.enabled()}},
+            {{"name","camera.sensor_ego_parts"},{"tier",2},{"rva",rig_ego_parts_rva},{"enabled",rig_ego_parts_hook_.enabled()}}})},
         {"last_error",last_error_},{"render_coherent",false},{"capture",gpu_.command("status")},
         {"recent_bindings",entries}};
 }

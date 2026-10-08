@@ -44,6 +44,7 @@ private:
     static void rig_begin_callback(safetyhook::Context& context) noexcept;
     static void rig_end_callback(safetyhook::Context& context) noexcept;
     static void rig_dimensions_callback(safetyhook::Context& context) noexcept;
+    static void rig_ego_parts_callback(safetyhook::Context& context) noexcept;
     struct Timing {
         std::atomic<uint64_t> count{0},total{0},maximum{0};
         // Bucket 0 includes 0 and 1 tick; bucket k contains [2^k, 2^(k+1)).
@@ -70,11 +71,12 @@ private:
     safetyhook::MidHook compile_begin_hook_,compile_end_hook_;
     safetyhook::MidHook draw_batch_hook_;
     safetyhook::MidHook rig_select_hook_,rig_begin_hook_,rig_end_hook_,rig_dimensions_hook_;
+    safetyhook::MidHook rig_ego_parts_hook_;
     CameraRig rig_;
     std::atomic<std::shared_ptr<CaptureStream>> stream_;
-    std::array<safetyhook::MidHook*,9> hookset() noexcept {
+    std::array<safetyhook::MidHook*,10> hookset() noexcept {
         return {&hook_,&present_hook_,&compile_begin_hook_,&compile_end_hook_,&draw_batch_hook_,
-            &rig_select_hook_,&rig_begin_hook_,&rig_end_hook_,&rig_dimensions_hook_};
+            &rig_select_hook_,&rig_begin_hook_,&rig_end_hook_,&rig_dimensions_hook_,&rig_ego_parts_hook_};
     }
     PassCommands pass_commands_;
     std::atomic<std::shared_ptr<const json>> sdk_state_;

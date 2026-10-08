@@ -15,6 +15,7 @@ public:
     void begin(safetyhook::Context& context) noexcept;
     void end() noexcept;
     void dimensions(safetyhook::Context& context) noexcept;
+    void ego_parts(safetyhook::Context& context) noexcept;
     uint32_t in_flight() const noexcept { return in_flight_.load(); }
     uint32_t mask() const noexcept { auto c=configuration_.load();return c?c->mask:0; }
 private:
@@ -27,10 +28,11 @@ private:
         float hfov{},vfov{};
         std::array<uint32_t,2> resolution{};
     };
-    struct Configuration { std::array<View,6> views;uint32_t mask=0; };
+    struct Configuration { std::array<View,6> views;uint32_t mask=0;bool ego_full_model=false; };
     std::atomic<std::shared_ptr<const Configuration>> configuration_;
     std::atomic<uint32_t> in_flight_{0};
     std::array<std::atomic<uint64_t>,6> applied_{};
     std::atomic<uint64_t> unavailable_{0};
+    std::atomic<uint64_t> ego_parts_applied_{0};
 };
 }

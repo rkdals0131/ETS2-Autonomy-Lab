@@ -131,3 +131,37 @@ this change. A separate LiDAR-only → depth-only transition received 89 of each
 LiDAR and 111 depth messages. The first mixed functional run exhausted its capture
 duration before its final two subscription phases; those phases were repeated in
 the separate run. All owned processes exited and the plugin returned to Tier 0.
+
+The repeated 60.18-second foreground window with the same full-resolution outputs
+gave **23.26 FPS**, frame p50 / p95 / p99 **41.33 / 61.50 / 75.67 ms**. All 1,400
+Present records were foreground; none were missing. Game / relay / whole-system
+CPU averaged 167.3% / 77.9% / 41.4%. All sensor topics delivered 606 bundles, with
+zero relay queue drops and zero GPU failures. Compared with 0.20.2's 9.73 FPS,
+the repeated copies were a substantial cost, but the remaining frame-time tail
+still limits driving use. Raw results are `perf-opt.json` and `perf-opt-relay.log`.
+
+## Ego body submission — core 0.20.4
+
+The missing body panels came from cached per-mirror geometry subsets. The live
+player's two cached body models at vehicle +0x1020/+0x1028 had 32/30 full-list
+geometry entries. Vehicle submission `0x646C00` uses `0xA3CAD0` for mirror views;
+that function chooses a subset keyed by the original mirror mask. Moving the
+camera does not rebuild that subset.
+
+A scoped hook at `0xA3CADE` selects the engine's existing full-list path by clearing
+ZF after its full-list test. It applies only to the two verified body submission
+callers, the current player's vehicle, and view masks owned by the configured rig.
+No cached model flags or camera fields are modified. The normal hook drain,
+panic and unload lifecycle includes this hook. The bridge enables it explicitly;
+the general camera-rig API keeps it opt-in.
+
+Same-scene off/on/off captures restored the cabin/body in both RGB side views.
+Metric depth gained 52,401 / 51,623 near-occluder pixels in the left/right views,
+with median optical depth 0.901 / 0.897 m. On restoration, those pixels returned
+to their original depths with median absolute differences 0.000019 / 0.000028 m.
+This is a render submission fix, not a mask. Attached/articulated trailers remain
+untested. Local outputs are under `ego-parts/` in the ROS run directory.
+
+The earlier fixed night gain (841.55) overexposed the current daylight scene.
+The body comparison was also captured with gain 1 for inspection. Automatic
+exposure is not implemented; local gain must still match the lighting conditions.

@@ -199,6 +199,7 @@ int main(int argc,char** argv) {
         const auto token=config.at("token").get<std::string>();if(token.size()<32) throw std::runtime_error("Missing pairing token");
         std::ifstream preset(path.parent_path()/config.at("rig").get<std::string>());json rig;preset>>rig;
         rig=resolve_rig(rig,command({{"cmd","truck_config"}}),config.value("slots",json::array({0})));
+        rig["ego_full_model"]=true;
         const auto base=rig.at("base_origin").get<std::array<double,3>>();
         std::ifstream lidar_file(path.parent_path()/config.value("lidar",std::string("../../ot/presets/phase1-lidar.json")));json lidar_profile;lidar_file>>lidar_profile;
         const auto patterns=lidar_patterns(rig,lidar_profile);

@@ -54,6 +54,7 @@ bool cabin_pose(uintptr_t interior,Placement& pose) noexcept {
 json CameraRig::configure(const json& request) {
     if(!request.value("enabled",true)) {clear();return status();}
     auto config=std::make_shared<Configuration>();
+    config->ego_full_model=request.value("ego_full_model",false);
     for(const auto& item:request.at("views")) {
         const int slot=item.at("slot").get<int>();
         if(slot<0 || slot>=6 || config->views[slot].enabled)
@@ -99,6 +100,7 @@ json CameraRig::status() {
         views.push_back(std::move(view));
     }
     return {{"enabled",config!=nullptr},{"selected_mask",config?config->mask:0},
+        {"ego_full_model",config && config->ego_full_model},{"ego_parts_applied",ego_parts_applied_.load()},
         {"in_flight",in_flight_.load()},{"unavailable",unavailable_.load()},{"views",views},
         {"source","private submission copy; persistent mirror fields unchanged"}};
 }
@@ -151,5 +153,23 @@ void CameraRig::dimensions(safetyhook::Context& context) noexcept {
     if(!config || slot>=6 || !config->views[slot].enabled) return;
     const auto& size=config->views[slot].resolution;
     if(size[0]) {context.rdx=size[0];context.r8=size[1];}
+}
+void CameraRig::ego_parts(safetyhook::Context& context) noexcept {
+    const auto config=configuration_.load();
+    if(!config || !config->ego_full_model) return;
+    uintptr_t caller{},mask{},controller{},actor{},vehicle{};
+    const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    // A3CADE follows the cached-model "all parts" test. Limit the override to
+    // the two body model calls made by the player's 646C00 submission, and to
+    // camera slots owned by this rig. Other models and normal mirrors keep
+    // their native per-mirror subsets. No model/camera memory is changed.
+    if(!read_memory(context.rsp+0x48,caller) ||
+       (caller!=base+0x646DC9 && caller!=base+0x646E57) ||
+       !read_memory(context.r8+0x18,mask) || !(mask&(uint64_t(config->mask)<<10)) ||
+       !read_memory(base+0x36AE6D8,controller) || !controller ||
+       !read_memory(controller+0x31B0,actor) || !actor ||
+       !read_memory(actor+0x18,vehicle) || context.rsi!=vehicle) return;
+    context.rflags&=~uintptr_t{0x40}; // ZF=0: use the engine's full-list path.
+    ++ego_parts_applied_;
 }
 }

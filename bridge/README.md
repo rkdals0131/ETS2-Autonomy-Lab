@@ -5,8 +5,8 @@ CameraInfo, JPEG previews, render-camera TF, frame correspondence, `/clock`, SDK
 state and observed ego pose. Windows uses Fast-CDR 2.2.5 with explicit XCDRv1;
 Linux uses Jazzy GenericPublisher and the XML SHM transport profile. The
 implementation connects GPU LiDAR and per-pass vehicle GT, a cabin/base TF tree,
-subscription control and reconnection. Full-resolution foreground performance and
-the missing ego exterior are still blocking practical driving use.
+subscription control and reconnection. The sensor views now submit the full ego
+body. Foreground frame times and attached-trailer validation still limit driving use.
 
 ## Build
 
@@ -107,8 +107,15 @@ A full MCAP subsequently contained 79 aligned bundles and was played through
 Jazzy with all 79 image/depth/point/GT/frame/TF messages and all 147 original clock
 messages received. Foxglove WebSocket reception and ROS decoding of preview,
 point cloud, MarkerArray, TF and diagnostics also passed. Pause-containing replay
-and ego/trailer rendering still need verification.
+and attached-trailer rendering still need verification.
 
-The first full-resolution foreground run was only **9.73 FPS** (frame p95 126.51 ms)
-and dropped 38 queued bundles over the run. This configuration is not yet suitable
-for driving; see [measurements](../docs/16_ros2_bridge.md) for the current limits.
+Core 0.20.4 fixes missing ego body panels by using the engine's full body-part list
+for this rig's views, instead of the subset prepared for the original mirror.
+Both side views show the body and its actual metric depth. This changes submission,
+not the truck model or camera memory, and does not synthesize an occlusion mask.
+Other research callers can opt in with `camera_rig.ego_full_model=true`.
+
+Buffer reuse and direct packet serialization improved full-resolution foreground
+performance from **9.73 to 23.26 FPS**, with zero relay queue drops in the repeat.
+Frame p95 was still 61.50 ms; driving performance needs further improvement.
+See [measurements](../docs/16_ros2_bridge.md) for the current limits.
