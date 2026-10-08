@@ -56,6 +56,8 @@ def main():
     bundles.add_argument("--config", required=True)
     bundles.add_argument("--hz", type=float, default=10.0)
     bundles.add_argument("--duration", type=float, required=True)
+    bundles.add_argument("--start-delay", type=float, default=0.0,
+                         help="Wait before enabling capture, allowing time to return to the game")
     bundles.add_argument("--output", required=True, help="New recording directory")
     bundles.add_argument("--format", choices=("raw", "rgbd8", "raw+rgbd8"), default="rgbd8")
     bundles.add_argument("--color-gain", type=float, help="Omit to calibrate a fixed exposure from one raw sample")
@@ -129,6 +131,8 @@ def main():
             options = dict(hz=args.hz, duration=args.duration, format=args.format, color_gain=args.color_gain) if args.action == "start" else {}
             result = client.request("stream", action=args.action, **options)
         elif args.command == "record_bundles":
+            if not math.isfinite(args.start_delay) or args.start_delay < 0:
+                parser.error("--start-delay must be finite and nonnegative")
             if args.workers is not None and args.workers < 1:
                 parser.error("--workers must be positive")
             if not (math.isfinite(args.hz) and args.hz > 0 and math.isfinite(args.duration) and args.duration > 0):
@@ -136,6 +140,9 @@ def main():
             if args.color_gain is not None and (not math.isfinite(args.color_gain) or args.color_gain <= 0):
                 parser.error("--color-gain must be finite and positive")
             from .recording import record_bundles
+            if args.start_delay:
+                print(f"Capture starts in {args.start_delay:g} seconds; return to the game.", file=sys.stderr)
+                time.sleep(args.start_delay)
             result = record_bundles(client, args.config, args.hz, args.duration, args.output,
                                     args.format, args.color_gain, args.vehicles, args.archive, args.workers, args.lidar_config)
         elif args.command == "watch":
