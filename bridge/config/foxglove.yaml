@@ -1,0 +1,14 @@
+foxglove_bridge:
+  ros__parameters:
+    port: 8765
+    topic_whitelist:
+      - '^/ets2/camera/[^/]+/preview/.*$'
+      - '^/ets2/lidar/.*$'
+      - '^/ets2/ground_truth/.*$'
+      - '^/ets2/vehicle/state$'
+      - '^/ets2/frame_info$'
+      - '^/tf$'
+      - '^/tf_static$'
+      - '^/clock$'
+      - '^/diagnostics$'
+    capabilities: [connectionGraph]

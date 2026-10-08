@@ -26,6 +26,7 @@ public:
     void value(const Channel& channel,const scs_value_t* value);
     json command(const json& request);
     json reload_permissions();
+    void poll_lease();
     static void SCSAPIFUNC event_callback(scs_event_t event,const void* data,scs_context_t context) noexcept {
         auto& self=*static_cast<Runtime*>(context);
         try {self.event(event,data);} catch(const std::exception& e) {self.panic();log(std::string("SDK event error: ")+e.what());}
@@ -44,6 +45,8 @@ private:
     std::string executable_hash_,gate_error_;
     bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,allow_camera_rig_=false,paused_=true;
     std::mutex control_;
+    std::string lease_;
+    uint64_t lease_deadline_=0;
     std::atomic<int> tier_{0};
     uint64_t frame_=0,generation_=0;
     scs_telemetry_frame_start_t clock_{};
@@ -85,7 +88,7 @@ void Runtime::initialize() {
         if(api_.register_for_event(id,event_callback,this)!=SCS_RESULT_ok) throw std::runtime_error("SDK event registration failed");
         events_.push_back(id);
     }
-    transport_=std::make_unique<Transport>([this](const json& r){return command(r);},[this]{panic();},key);
+    transport_=std::make_unique<Transport>([this](const json& r){return command(r);},[this]{panic();},key,L"\\\\.\\pipe\\ot",[this]{poll_lease();});
     transport_->start(config_.value("publish_shared_state",true));
     log("ot_core initialized: SDK callbacks registered, pipe ready, tier="+std::to_string(tier_.load()));
     if(api_.common.log) api_.common.log(SCS_LOG_TYPE_message,"[ot_core] SDK plugin ready; local pipe \\\\.\\pipe\\ot");
@@ -115,10 +118,16 @@ bool Runtime::shutdown() noexcept {
 void Runtime::panic() noexcept {
     try {
         std::lock_guard lock(control_);
+        lease_.clear();lease_deadline_=0;
         tier_=0;
         if(render_probe_) render_probe_->disable();
         log("Panic: Tier 0; SDK remains active; render hook disable requested");
     } catch(...) {tier_=0;}
+}
+void Runtime::poll_lease() {
+    bool expired=false;
+    {std::lock_guard lock(control_);expired=lease_deadline_ && GetTickCount64()>=lease_deadline_;}
+    if(expired) {log("Bridge lease expired; releasing capture and rig");panic();}
 }
 void Runtime::value(const Channel& channel,const scs_value_t* value) {
     json item={{"available",value!=nullptr},{"observed_frame",frame_},{"value",nullptr}};
@@ -170,7 +179,6 @@ void Runtime::event(scs_event_t event,const void* data) {
         // Explicitly distinguish a missing callback in this frame from a fresh zero.
         for(auto& item:values_.items()) item.value()["available"]=false;
     } else if(event==SCS_TELEMETRY_EVENT_frame_end) {
-        if(render_probe_) render_probe_->sdk_frame(frame_);
         json state={{"frame_id",frame_},{"truck_generation",generation_},{"phase","sdk_frame_end"},
             {"render_frame_id",nullptr},{"render_coherent",false},{"paused",paused_},
             {"render_time_us",clock_.render_time},{"simulation_time_us",clock_.simulation_time},
@@ -180,6 +188,7 @@ void Runtime::event(scs_event_t event,const void* data) {
         if(tier_==0) state.erase("engine");
         auto stored=std::make_shared<const json>(std::move(state));
         latest_.store(stored);
+        if(render_probe_) render_probe_->sdk_frame(stored);
         if(transport_) transport_->publish(stored->dump(),frame_);
     }
 }
@@ -239,6 +248,23 @@ json Runtime::snapshot() const {
 }
 json Runtime::command(const json& request) {
     const auto cmd=request.at("cmd").get<std::string>();
+    if(cmd=="lease") {
+        const auto action=request.at("action").get<std::string>();
+        const auto owner=request.at("owner").get<std::string>();
+        if(owner.empty() || owner.size()>128) throw std::runtime_error("Invalid lease owner");
+        {
+            std::lock_guard lock(control_);
+            if(action=="claim") {
+                if(!lease_.empty() || tier_!=0) throw std::runtime_error("Capture must be idle before claiming a bridge lease");
+                lease_=owner;
+            } else if(owner!=lease_) throw std::runtime_error("Lease ended; explicit restart required");
+            if(action!="claim" && action!="heartbeat" && action!="release")
+                throw std::runtime_error("Unknown lease action");
+            lease_deadline_=GetTickCount64()+5000;
+        }
+        if(action=="release") panic();
+        return {{"active",action!="release"},{"expires_in_ms",5000}};
+    }
     if(cmd=="ping") return {{"plugin","ot_core"},{"pid",GetCurrentProcessId()}};
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
@@ -277,8 +303,8 @@ json Runtime::command(const json& request) {
         if(action=="arm" || action=="start") {
             options.format=request.value("format",std::string(cmd=="stream"?"rgbd8":"raw"));
             options.color_gain=request.value("color_gain",1.0f);
-            if(options.format!="raw" && options.format!="rgbd8" && options.format!="raw+rgbd8")
-                throw std::runtime_error("Capture format must be raw, rgbd8 or raw+rgbd8");
+            if(options.format!="raw" && options.format!="rgbd8" && options.format!="raw+rgbd8" && options.format!="ros")
+                throw std::runtime_error("Capture format must be raw, rgbd8, raw+rgbd8 or ros");
             if(!std::isfinite(options.color_gain) || options.color_gain<=0)
                 throw std::runtime_error("Color gain must be finite and positive");
         }

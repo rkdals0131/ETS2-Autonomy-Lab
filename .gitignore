@@ -27,6 +27,8 @@ venv/
 /ot/build/
 /ot/dist/
 /ot/backup/
+/bridge/build/
+/bridge/dist/
 *.dll
 *.exe
 *.pdb

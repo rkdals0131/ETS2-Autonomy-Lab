@@ -247,7 +247,7 @@ std::vector<PassCommands::Block> PassCommands::blocks(uintptr_t output) {
             throw std::runtime_error("Compiled command block changed or is invalid");
     return result;
 }
-std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles) {
+std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles,const std::shared_ptr<const json>& sdk) {
     DrawBatch draw_batch;
     {
         std::lock_guard lock(draws_mutex_);
@@ -303,6 +303,12 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
                     image.at("namespace").get_ref<const std::string&>().starts_with("mirror");
             });
             if(mirror_surface) {
+                if(sdk) {
+                    auto& sample=result["sdk_at_compile"]=json::object();
+                    for(const auto* key:{"frame_id","truck_generation","paused","render_time_us","simulation_time_us",
+                            "paused_simulation_time_us","timer_flags","sdk"}) sample[key]=sdk->at(key);
+                    sample["association"]="last SDK frame_end before pass compilation";
+                }
                 auto camera=camera_at_compile(pass,base);
                 if(vehicles && camera.at("available").get<bool>()) {
                     result["vehicles_at_compile"]=vehicles_at_compile(camera.at("work_address").get<uintptr_t>(),base);
@@ -331,11 +337,11 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
     }
     return {};
 }
-void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,bool vehicles) noexcept {
+void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,bool vehicles,std::shared_ptr<const json> sdk) noexcept {
     try {
         auto before=blocks(output);
         const bool empty=std::all_of(before.begin(),before.end(),[](const Block& b){return b.size==0;});
-        auto pass=describe(input,vehicles);
+        auto pass=describe(input,vehicles,sdk);
         std::lock_guard lock(mutex_);
         ++inputs_;if(pass) ++named_;
         // The engine resets an allocated compiled buffer before filling it.

@@ -9,7 +9,8 @@ namespace ot {
 struct CaptureOptions {
     std::string format="raw";
     float color_gain=1;
-    bool raw() const {return format!="rgbd8";}
+    bool raw() const {return format=="raw" || format=="raw+rgbd8";}
+    bool metric() const {return format=="ros";}
     bool packed() const {return format!="raw";}
 };
 // One requested camera sample. All context calls run on the game's render

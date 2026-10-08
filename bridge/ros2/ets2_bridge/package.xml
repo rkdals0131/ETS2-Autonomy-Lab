@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>ets2_bridge</name><version>0.1.0</version>
+  <description>Serialized ETS2 sensor transport from the Windows relay.</description>
+  <maintainer email="maintainers@example.invalid">ETS2 Autonomy Lab</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend><depend>ets2_msgs</depend>
+  <exec_depend>sensor_msgs</exec_depend><exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>vision_msgs</exec_depend><exec_depend>rosgraph_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend><exec_depend>tf2_msgs</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

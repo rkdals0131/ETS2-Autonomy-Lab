@@ -44,7 +44,7 @@ struct BundleBlob {std::string camera,file;const uint8_t* data;size_t bytes;};
 class Transport {
 public:
     Transport(std::function<json(const json&)> handler, std::function<void()> panic, int panic_key,
-              std::wstring pipe_name=L"\\\\.\\pipe\\ot");
+              std::wstring pipe_name=L"\\\\.\\pipe\\ot",std::function<void()> poll={});
     ~Transport();
     void start(bool shared_state);
     void stop() noexcept;
@@ -60,7 +60,7 @@ private:
     bool wait_io(HANDLE event, DWORD timeout);
     void poll_panic();
     std::function<json(const json&)> handler_;
-    std::function<void()> panic_;
+    std::function<void()> panic_,poll_;
     int panic_key_;
     std::wstring pipe_name_;
     Handle stop_event_, pipe_, mapping_;

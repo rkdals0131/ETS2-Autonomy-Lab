@@ -2,6 +2,7 @@
 #include "pack_depth.hpp"
 #include "pack_color.hpp"
 #include <stdexcept>
+#include <DirectXMath.h>
 
 namespace ot {
 namespace {
@@ -45,15 +46,27 @@ void GpuPack::release_gpu() {
 }
 void GpuPack::depth(ID3D11DeviceContext1* context,ID3D11Texture2D* source,
                     ID3D11Texture2D* attributes,ID3D11Texture2D* material,
-                    const D3D11_VIEWPORT& vp,const std::string& camera) {
-    dispatch(context,{source,attributes,material},{0,0,0,0,vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height,
-        vp.MinDepth,vp.MaxDepth,0,0},true,camera);
+                    const D3D11_VIEWPORT& vp,const std::string& camera,const json* projection) {
+    std::array<float,28> values{0,0,0,0,vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height,vp.MinDepth,vp.MaxDepth};
+    if(projection) {
+        const auto p=projection->get<std::array<float,16>>();
+        DirectX::XMFLOAT4X4 matrix;std::memcpy(&matrix,p.data(),sizeof(matrix));
+        auto m=DirectX::XMLoadFloat4x4(&matrix);
+        const auto correction=DirectX::XMMatrixSet(1,0,0,0,0,1,0,0,0,0,-.5f,.5f,0,0,0,1);
+        DirectX::XMVECTOR determinant;
+        const auto inverse=DirectX::XMMatrixInverse(&determinant,DirectX::XMMatrixMultiply(correction,m));
+        if(!std::isfinite(DirectX::XMVectorGetX(determinant)) || DirectX::XMVectorGetX(determinant)==0)
+            throw std::runtime_error("Singular depth projection");
+        DirectX::XMStoreFloat4x4(&matrix,inverse);
+        std::memcpy(values.data()+12,&matrix,sizeof(matrix));values[1]=1;
+    }
+    dispatch(context,{source,attributes,material},values,true,camera);
 }
 void GpuPack::color(ID3D11DeviceContext1* context,ID3D11Texture2D* source,float gain,const std::string& camera) {
     dispatch(context,{source,nullptr,nullptr},{gain,0,0,0,0,0,0,0,0,0,0,0},false,camera);
 }
 void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*,3> sources,
-                       const std::array<float,12>& values,bool depth,const std::string& camera) {
+                       const std::array<float,28>& values,bool depth,const std::string& camera) {
     Com<ID3D11Device> device;context->GetDevice(&device);
     if(device_.Get()!=device.Get()) {release_gpu();device_=device;}
     auto& work=work_[depth?0:1];
@@ -122,7 +135,7 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
     image.description={{"file",camera+(depth?"_depth_f32.bin":"_color_ldr.bin")},
         {"width",desc.Width},{"height",desc.Height},{"row_bytes",desc.Width*4},
         {"format",depth?"R32_FLOAT":"R8G8B8A8_UNORM"},
-        {"encoding",depth?"viewport_depth_nan_invalid":"srgb_reinhard"}};
+        {"encoding",depth?(values[1]!=0?"optical_depth_m_nan_invalid":"viewport_depth_nan_invalid"):"srgb_reinhard"}};
     if(!depth) image.description["linear_gain"]=values[0];
 }
 bool GpuPack::collect(ID3D11DeviceContext* context) {

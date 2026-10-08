@@ -16,7 +16,7 @@ public:
     // On failure the caller must retain this object and its module reference.
     // Code may still be returning through the hook; destruction would be unsafe.
     bool close() noexcept;
-    void sdk_frame(uint64_t frame) noexcept { sdk_frame_.store(frame, std::memory_order_relaxed); }
+    void sdk_frame(std::shared_ptr<const json> state) noexcept { sdk_frame_.store(state->at("frame_id").get<uint64_t>()); sdk_state_.store(std::move(state)); }
     json status();
     json frames(uint64_t after_id=0);
     json capture(const std::string& action,const CaptureOptions& options={});
@@ -77,6 +77,7 @@ private:
             &rig_select_hook_,&rig_begin_hook_,&rig_end_hook_,&rig_dimensions_hook_};
     }
     PassCommands pass_commands_;
+    std::atomic<std::shared_ptr<const json>> sdk_state_;
     struct PresentRecord { uint64_t id,qpc,sdk_frame;HRESULT result;DWORD thread;bool game_foreground; };
     SRWLOCK frames_lock_=SRWLOCK_INIT;
     std::array<PresentRecord,600> frames_{};

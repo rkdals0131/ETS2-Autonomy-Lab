@@ -4,8 +4,8 @@
 #include <stdexcept>
 
 namespace ot {
-Transport::Transport(std::function<json(const json&)> handler,std::function<void()> panic,int key,std::wstring pipe_name)
-    : handler_(std::move(handler)),panic_(std::move(panic)),panic_key_(key),pipe_name_(std::move(pipe_name)),
+Transport::Transport(std::function<json(const json&)> handler,std::function<void()> panic,int key,std::wstring pipe_name,std::function<void()> poll)
+    : handler_(std::move(handler)),panic_(std::move(panic)),poll_(std::move(poll)),panic_key_(key),pipe_name_(std::move(pipe_name)),
       stop_event_(CreateEventW(nullptr,TRUE,FALSE,nullptr)) {}
 Transport::~Transport() { stop(); if(ring_) UnmapViewOfFile(ring_); if(bundles_) UnmapViewOfFile(bundles_); if(security_) LocalFree(security_); }
 void Transport::start(bool shared) {
@@ -42,6 +42,7 @@ void Transport::stop() noexcept {
     if(worker_.joinable()) worker_.join();
 }
 void Transport::poll_panic() {
+    if(poll_) poll_();
     if(!panic_key_) return;
     DWORD owner=0; GetWindowThreadProcessId(GetForegroundWindow(),&owner);
     bool down=owner==GetCurrentProcessId() && (GetAsyncKeyState(panic_key_)&0x8000);

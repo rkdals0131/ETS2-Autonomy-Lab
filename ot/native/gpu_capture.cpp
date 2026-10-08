@@ -213,11 +213,12 @@ void GpuCapture::geometry_constants(ID3D11DeviceContext* context,uint64_t bindin
         if(options_.packed()) {
             if(viewport_count!=1 || !(viewports[0].Width>0 && viewports[0].Height>0 && viewports[0].MaxDepth>viewports[0].MinDepth))
                 throw std::runtime_error("RGB-D packing requires one valid geometry viewport");
-            packed_.depth(context1.Get(),depth.source.Get(),images_[0].source.Get(),images_[1].source.Get(),viewports[0],camera_);
+            packed_.depth(context1.Get(),depth.source.Get(),images_[0].source.Get(),images_[1].source.Get(),viewports[0],camera_,options_.metric()?&geometry_pass_.at("camera_at_compile").at("projection_row_major"):nullptr);
             geometry_gpu_["packed_depth_texture"]=packed_.images[0].description;
         }
     }
     if(options_.packed() && !dsv) throw std::runtime_error("RGB-D packing requires a geometry depth buffer");
+    if(options_.metric()) return; // Production metadata uses the captured CPU pass; GPU constants remain a research output.
     for(size_t stage=0;stage<geometry_constants_.size();++stage) {
         auto& sample=geometry_constants_[stage];
         Com<ID3D11Buffer> source;UINT first{},count{};

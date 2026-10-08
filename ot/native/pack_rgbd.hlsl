@@ -6,6 +6,7 @@ cbuffer Parameters : register(b0) {
     float4 controls; // x: common linear RGB gain
     float4 viewport; // x, y, width, height
     float4 depth_range; // min, max
+    row_major float4x4 inverse_projection;
 };
 #ifdef PACK_DEPTH
 RWTexture2D<float> result : register(u0);
@@ -27,7 +28,12 @@ void main(uint3 id : SV_DispatchThreadID) {
     bool valid = isfinite(z) && z != 0 && !(bits & 16) &&
         isfinite(depth) && depth >= depth_range.x && depth <= depth_range.y &&
         all(uv >= 0) && all(uv < 1);
-    // Retain the original normalized DSV value, with NaN for excluded pixels.
+    if (controls.y != 0) {
+        float z_ndc = (depth-depth_range.x)/(depth_range.y-depth_range.x);
+        float4 eye = mul(inverse_projection, float4(2*uv.x-1, 1-2*uv.y, z_ndc, 1));
+        depth = -eye.z/eye.w;
+        valid = valid && isfinite(depth) && depth > 0 && eye.w != 0;
+    }
     result[id.xy] = valid ? depth : asfloat(0x7fc00000);
 #else
     float3 rgb = source.Load(pixel).rgb;
