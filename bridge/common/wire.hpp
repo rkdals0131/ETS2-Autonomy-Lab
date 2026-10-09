@@ -134,6 +134,11 @@ inline std::vector<Topic> topics() {
     std::vector<Topic> result{
         {"/clock","rosgraph_msgs/msg/Clock",true},
         {"/ets2/vehicle/state","ets2_msgs/msg/VehicleState",true},
+        {"/ets2/imu/data_raw","sensor_msgs/msg/Imu",true},
+        {"/ets2/wheels/state","ets2_msgs/msg/WheelState",true},
+        {"/ets2/wheels/odometry","nav_msgs/msg/Odometry",true},
+        {"/ets2/gnss/fix","sensor_msgs/msg/NavSatFix",true},
+        {"/ets2/sensors/config","std_msgs/msg/String",true,true},
         {"/ets2/ground_truth/ego/pose","geometry_msgs/msg/PoseStamped",true},
         {"/diagnostics","diagnostic_msgs/msg/DiagnosticArray",true},
         {"/tf_static","tf2_msgs/msg/TFMessage",true,true},

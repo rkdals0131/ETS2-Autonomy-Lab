@@ -14,11 +14,12 @@ ETS2의 FH5에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 
 | 구성 | 구현 |
 | --- | --- |
-| 게임 | ETS2 1.61.1.1, DX11, core 0.22.0, 상주 메타로더 |
-| 카메라 | C_FN·C_FW 1280×720, C_RL·C_RR 960×544, 최대 10 Hz 묶음 |
+| 게임 | ETS2 1.61.1.1, DX11, core 0.23.0, 상주 메타로더 |
+| 카메라 | C_FN·C_FW 1280×720, C_RL·C_RR 960×544, 기본 30 Hz 요청 |
 | 배치 | FH5 4x2 / l2h1 / LHD / mirror_01 / sunshield_01, 캐빈 부착 |
 | 출력 | RGB8, 미터 광축 깊이, CameraInfo, JPEG, TF, 차량 GT |
-| 라이다 | 전방 1개·좌우 2개, GPU 깊이 샘플링, XYZ·range·결측 상태 |
+| 라이다 | 전방 1개·좌우 2개, 10 Hz GPU 깊이 샘플링, XYZ·range·결측 상태 |
+| 추가 센서 | 이상적 IMU·바퀴 측정·휠 오도메트리·가상 GNSS, ROS 실제 수신 확인 |
 | 전달 | 공유 GPU 텍스처·펜스 → Windows C++ → WSL NAT 직접 TCP 2개 → ROS DDS SHM |
 | 기록 | ROS MCAP 기록·재생, 일시정지 시계 정합 확인 |
 | 복구 | 수집 소유권·lease, F11, 기능 DLL 교체, 연결 단절 복구 |
@@ -29,7 +30,7 @@ ETS2의 FH5에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 
 같은 정차 장면에서 60초 전경 측정: 리그 끔 **77.69 FPS**, 고해상도 전체 RGB-D·라이다·GT **46.35 FPS**, 고해상도 센서의 JPEG·라이다·GT·TF 구독 **64.12 FPS**. 마지막 수치는 ROS 소비자 기준이며 Foxglove 화면 표시 부하는 별도입니다. [성능 표와 다음 진단](docs/18_performance.md).
 
-남은 작업은 라이다 색상 확인·각속도 단위 수정, IMU·휠·GNSS, 트레일러·주행 가시성, 입력 연결과 GT 기반 ACC/LCC입니다. [진행 상태](docs/13_game_operating_table.md), [센서 확장 계획](docs/17_sensor_expansion.md).
+남은 작업은 추가 센서의 주행 정합·잡음·RTK 상태, 트레일러·주행 가시성, 입력 연결과 GT 기반 ACC/LCC입니다. [진행 상태](docs/13_game_operating_table.md), [추가 센서](docs/17_sensor_expansion.md).
 
 ## 문서
 

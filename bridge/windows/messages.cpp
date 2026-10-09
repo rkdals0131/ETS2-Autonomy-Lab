@@ -60,8 +60,8 @@ static Q quaternion(M a) { // ROS x,y,z,w, matrix maps child vectors into parent
 }
 static void pose(Cdr& c,V p,Q q) {c.serialize_array(p.data(),3);c.serialize_array(q.data(),4);}
 static const M enu{1,0,0,0,0,-1,0,1,0},optical{1,0,0,0,-1,0,0,0,-1},base_to_model{0,-1,0,0,0,1,-1,0,0};
-Packet static_messages(const json& rig,const json& patterns,const std::string& session) {
-    struct Mount {std::string name;V p;Q q;};std::vector<Mount> mounts;
+Packet static_messages(const json& rig,const json& patterns,const std::string& session,const json& settings) {
+    struct Mount {std::string name;V p;Q q;std::string parent="cabin";};std::vector<Mount> mounts;
     for(const auto& view:rig.at("views")) {
         const int slot=view.at("slot");
         if(view.at("basis")!="cabin") throw std::runtime_error("ROS mounting tree requires cabin mounts");
@@ -72,9 +72,11 @@ Packet static_messages(const json& rig,const json& patterns,const std::string& s
         if(patterns.contains(source) && patterns.at(source).at("axis_camera")==source)
             mounts.push_back({patterns.at(source).at("name"),p,quaternion(mul(r,base_to_model))});
     }
+    mounts.push_back({"imu_link",settings.value("imu_mount_base_m",V{0,0,1}),{0,0,0,1},"base_link"});
+    mounts.push_back({"gnss_link",settings.value("gnss_mount_base_m",V{0,0,1}),{0,0,0,1},"base_link"});
     Packet packet{{{"session",session}}, {}};
     add_message(packet,"/tf_static",cdr(512+mounts.size()*256,[&](Cdr& c){
-        c<<uint32_t(mounts.size());for(const auto& m:mounts) {header(c,0,"cabin");c<<m.name;pose(c,m.p,m.q);}
+        c<<uint32_t(mounts.size());for(const auto& m:mounts) {header(c,0,m.parent);c<<m.name;pose(c,m.p,m.q);}
     }));return packet;
 }
 template<class F> void append_cdr(Packet& packet,const std::string& topic,size_t capacity,F write) {
@@ -137,7 +139,9 @@ Packet state_messages(const json& state,const std::string& session,const V& base
         for(const auto* key:{"render_time_us","simulation_time_us","paused_simulation_time_us"}) c<<state.at(key).get<uint64_t>();
         for(const auto* key:{"truck.speed","truck.engine.rpm","truck.input.steering","truck.input.throttle","truck.input.brake"}) c<<channel(state,key);
         for(const auto* key:{"truck.local.velocity.linear","truck.local.velocity.angular","truck.local.acceleration.linear"}) {
-            auto value=vector_channel(state,key);c.serialize_array(value.data(),3);
+            auto value=vector_channel(state,key);
+            if(std::string_view(key)=="truck.local.velocity.angular") for(auto& v:value) v*=2*std::numbers::pi;
+            c.serialize_array(value.data(),3);
         }
     }));
     if(state.contains("engine") && state["engine"].contains("vehicle") && state["engine"]["vehicle"].value("available",false)) {
@@ -149,20 +153,119 @@ Packet state_messages(const json& state,const std::string& session,const V& base
     }
     return packet;
 }
-static Bytes jpeg(std::span<const uint8_t> rgba,uint32_t width,uint32_t height,uint32_t out_width,uint32_t out_height) {
+static V scale(V a,double s) {for(auto& v:a) v*=s;return a;}
+static V cross(V a,V b) {return {a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]};}
+static bool finite(V a) {return std::all_of(a.begin(),a.end(),[](double x){return std::isfinite(x);});}
+MotionSensors::MotionSensors(const json& rig,const json& truck,const json& settings):
+    base_(rig.at("base_origin").get<V>()),
+    mount_(settings.value("imu_mount_base_m",V{0,0,1})),
+    gnss_mount_(settings.value("gnss_mount_base_m",V{0,0,1})),
+    reference_(settings.value("gnss_reference_lla",V{0,0,0})),generation_(truck.at("truck_generation")) {
+    if(!finite(mount_) || !finite(gnss_mount_) || !finite(reference_) || std::abs(reference_[0])>=90 || std::abs(reference_[1])>180)
+        throw std::runtime_error("Invalid motion sensor mounts or WGS84 reference");
+    std::map<uint32_t,V> positions;std::map<uint32_t,double> radii;
+    for(const auto& a:truck.at("attributes")) {
+        if(a.at("name")=="wheel.position") positions[a.at("index")]=a.at("value").get<V>();
+        if(a.at("name")=="wheel.radius") radii[a.at("index")]=a.at("value").get<double>();
+    }
+    for(const auto& [i,p]:positions) if(radii.contains(i) && radii[i]>0)
+        wheels_.push_back({i,mul(transpose(base_to_model),sub(p,base_)),radii[i]});
+}
+void MotionSensors::configuration(Packet& packet) const {
+    const json value={{"core_version","0.23.0"},{"model","ideal"},{"angular_velocity_unit","rad/s"},
+        {"imu_mount_base_m",mount_},{"gnss_mount_base_m",gnss_mount_},{"gnss_reference_lla",reference_},
+        {"gnss_reference","virtual ENU at first observed base_link; WGS84 ellipsoid"},
+        {"gnss_hz",10},{"motion_rate","one fresh SDK frame; no interpolation"},
+        {"wheel_odometry","rolling constraints, zero initial pose, no GT correction; slip covariance unmodelled"}};
+    add_message(packet,"/ets2/sensors/config",cdr(4096,[&](Cdr& c){c<<value.dump();}));
+}
+static V wgs84(V local,V reference) {
+    constexpr double a=6378137.,e2=6.6943799901413165e-3;
+    const auto lat=reference[0]*std::numbers::pi/180,lon=reference[1]*std::numbers::pi/180;
+    const auto s=std::sin(lat),c=std::cos(lat),sl=std::sin(lon),cl=std::cos(lon),n=a/std::sqrt(1-e2*s*s);
+    V ecef{(n+reference[2])*c*cl,(n+reference[2])*c*sl,(n*(1-e2)+reference[2])*s};
+    ecef=add(ecef,mul(M{-sl,-s*cl,c*cl,cl,-s*sl,c*sl,0,c,s},local));
+    const auto p=std::hypot(ecef[0],ecef[1]);double phi=std::atan2(ecef[2],p*(1-e2)),height=0;
+    for(int i=0;i<8;++i) {const auto sp=std::sin(phi),np=a/std::sqrt(1-e2*sp*sp);height=p/std::cos(phi)-np;phi=std::atan2(ecef[2]+e2*np*sp,p);}
+    height=p/std::cos(phi)-a/std::sqrt(1-e2*std::sin(phi)*std::sin(phi));
+    return {phi*180/std::numbers::pi,std::atan2(ecef[1],ecef[0])*180/std::numbers::pi,height};
+}
+void MotionSensors::append(Packet& packet,const json& state,const Demand& demand) {
+    if(state.at("truck_generation").get<uint64_t>()!=generation_)
+        throw std::runtime_error("Truck configuration changed; restart bridge to update sensor mounts and wheel geometry");
+    if(state.at("paused").get<bool>()) {previous_us_=0;return;}
+    const auto us=state.at("paused_simulation_time_us").get<uint64_t>();
+    if(us==previous_us_) return;
+    const auto dt=previous_us_ && us>previous_us_?(us-previous_us_)*1e-6:0;
+    const bool contiguous=dt>0; // Pause and unavailable-state paths reset the previous observation.
+    const auto& sdk=state.at("sdk");constexpr double tau=2*std::numbers::pi;
+    std::vector<uint32_t> indices;std::vector<double> angular,steering,radius;std::vector<bool> ground;
+    double aa=0,ab=0,bb=0,as=0,bs=0;
+    for(const auto& wheel:wheels_) {
+        const auto suffix="["+std::to_string(wheel.index)+"]";
+        const auto velocity="truck.wheel.angular_velocity"+suffix,angle="truck.wheel.steering"+suffix,contact="truck.wheel.on_ground"+suffix;
+        if(!sdk.contains(contact) || !sdk.at(contact).value("available",false)) continue;
+        const auto omega=channel(state,velocity.c_str())*tau,delta=channel(state,angle.c_str())*tau;
+        if(!std::isfinite(omega) || !std::isfinite(delta)) continue;
+        const bool on_ground=sdk.at(contact).at("value").get<bool>();
+        indices.push_back(wheel.index);angular.push_back(omega);steering.push_back(delta);radius.push_back(wheel.radius);ground.push_back(on_ground);
+        if(on_ground) {const auto a=std::cos(delta),b=-wheel.position[1]*a+wheel.position[0]*std::sin(delta),speed=omega*wheel.radius;
+            aa+=a*a;ab+=a*b;bb+=b*b;as+=a*speed;bs+=b*speed;}
+    }
+    if(!indices.empty() && demand.contains("/ets2/wheels/state"))
+        add_message(packet,"/ets2/wheels/state",cdr(256+indices.size()*32,[&](Cdr& c){header(c,us,"base_link");c<<indices<<angular<<steering<<radius<<ground;}));
+    const auto determinant=aa*bb-ab*ab;
+    if(determinant>1e-10) {
+        const auto speed=(as*bb-bs*ab)/determinant,rate=(bs*aa-as*ab)/determinant;
+        if(contiguous) {const auto theta=rate*dt;const auto distance=std::abs(theta)>1e-8?speed*dt*std::sin(theta*.5)/(theta*.5):speed*dt;
+            x_+=distance*std::cos(yaw_+theta*.5);y_+=distance*std::sin(yaw_+theta*.5);yaw_+=theta;}
+        if(demand.contains("/ets2/wheels/odometry")) add_message(packet,"/ets2/wheels/odometry",cdr(1024,[&](Cdr& c){
+            header(c,us,"wheel_odom");c<<std::string("base_link");pose(c,{x_,y_,0},{0,0,std::sin(yaw_/2),std::cos(yaw_/2)});
+            for(int i=0;i<36;++i) c<<double{0};const V v{speed,0,0},w{0,0,rate};c.serialize_array(v.data(),3);c.serialize_array(w.data(),3);
+            for(int i=0;i<36;++i) c<<double{0};}));
+    }
+    if(state.contains("engine") && state.at("engine").contains("vehicle") && state.at("engine").at("vehicle").value("available",false)) {
+        const auto& vehicle=state.at("engine").at("vehicle");const auto& p=vehicle.at("pose_physics");
+        const auto rotation=from_quat(p.at("quaternion_wxyz").get<Q>()),sensor_rotation=mul(rotation,base_to_model);
+        const auto velocity=mul(sensor_rotation,vector_channel(state,"truck.local.velocity.linear"));
+        const auto omega=mul(sensor_rotation,scale(vector_channel(state,"truck.local.velocity.angular"),tau));
+        if(finite(velocity) && finite(omega)) {
+            if(contiguous && demand.contains("/ets2/imu/data_raw")) {
+                const auto r=mul(rotation,sub(add(base_,mul(base_to_model,mount_)),vehicle.at("mass_center_local_m").get<V>()));
+                const auto acceleration=add(scale(sub(velocity,previous_velocity_),1/dt),add(cross(scale(sub(omega,previous_omega_),1/dt),r),cross(omega,cross(omega,r))));
+                const auto force=mul(transpose(sensor_rotation),sub(acceleration,V{0,-9.8100004196167,0}));
+                const auto gyro=mul(transpose(sensor_rotation),omega);
+                add_message(packet,"/ets2/imu/data_raw",cdr(512,[&](Cdr& c){header(c,us,"imu_link");
+                    const Q q{0,0,0,1};c.serialize_array(q.data(),4);for(int i=0;i<9;++i) c<<double(i==0?-1:0);
+                    c.serialize_array(gyro.data(),3);for(int i=0;i<9;++i) c<<double{0};
+                    c.serialize_array(force.data(),3);for(int i=0;i<9;++i) c<<double{0};}));
+            }
+            previous_velocity_=velocity;previous_omega_=omega;
+        } else {previous_us_=0;return;}
+        const auto origin=p.at("position_m").get<V>();
+        if(!anchored_) {anchor_=mul(enu,add(origin,mul(rotation,base_)));anchored_=true;}
+        if(demand.contains("/ets2/gnss/fix") && us>=next_gnss_us_) {
+            const auto antenna=mul(enu,add(origin,mul(rotation,add(base_,mul(base_to_model,gnss_mount_)))));
+            const auto lla=wgs84(sub(antenna,anchor_),reference_);
+            add_message(packet,"/ets2/gnss/fix",cdr(256,[&](Cdr& c){header(c,us,"gnss_link");c<<int8_t{0}<<uint16_t{1};
+                c.serialize_array(lla.data(),3);for(int i=0;i<9;++i) c<<double{0};c<<uint8_t{2};}));
+            next_gnss_us_=(us/100000+1)*100000;
+        }
+    } else {previous_us_=0;return;}
+    previous_us_=us;
+}
+static Bytes jpeg(IWICImagingFactory* factory,std::span<const uint8_t> rgba,uint32_t width,uint32_t height) {
     using Microsoft::WRL::ComPtr;
     auto check=[](HRESULT hr){if(FAILED(hr)) throw std::runtime_error("WIC JPEG encoding failed");};
-    ComPtr<IWICImagingFactory> factory;check(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&factory)));
     ComPtr<IWICBitmap> bitmap;check(factory->CreateBitmapFromMemory(width,height,GUID_WICPixelFormat32bppRGBA,width*4,
         static_cast<UINT>(rgba.size()),const_cast<BYTE*>(rgba.data()),&bitmap));
-    ComPtr<IWICBitmapScaler> scaled;check(factory->CreateBitmapScaler(&scaled));check(scaled->Initialize(bitmap.Get(),out_width,out_height,WICBitmapInterpolationModeFant));
     ComPtr<IWICFormatConverter> converter;check(factory->CreateFormatConverter(&converter));
-    check(converter->Initialize(scaled.Get(),GUID_WICPixelFormat24bppBGR,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom));
+    check(converter->Initialize(bitmap.Get(),GUID_WICPixelFormat24bppBGR,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom));
     ComPtr<IStream> stream;check(CreateStreamOnHGlobal(nullptr,TRUE,&stream));
     ComPtr<IWICBitmapEncoder> encoder;check(factory->CreateEncoder(GUID_ContainerFormatJpeg,nullptr,&encoder));check(encoder->Initialize(stream.Get(),WICBitmapEncoderNoCache));
     ComPtr<IWICBitmapFrameEncode> frame;ComPtr<IPropertyBag2> properties;check(encoder->CreateNewFrame(&frame,&properties));
     PROPBAG2 option{};option.pstrName=const_cast<wchar_t*>(L"ImageQuality");VARIANT quality{};quality.vt=VT_R4;quality.fltVal=.8f;check(properties->Write(1,&option,&quality));
-    check(frame->Initialize(properties.Get()));check(frame->SetSize(out_width,out_height));WICPixelFormatGUID format=GUID_WICPixelFormat24bppBGR;
+    check(frame->Initialize(properties.Get()));check(frame->SetSize(width,height));WICPixelFormatGUID format=GUID_WICPixelFormat24bppBGR;
     check(frame->SetPixelFormat(&format));check(frame->WriteSource(converter.Get(),nullptr));check(frame->Commit());check(encoder->Commit());
     STATSTG stat{};check(stream->Stat(&stat,STATFLAG_NONAME));Bytes data(static_cast<size_t>(stat.cbSize.QuadPart));
     LARGE_INTEGER zero{};check(stream->Seek(zero,STREAM_SEEK_SET,nullptr));ULONG read{};check(stream->Read(data.data(),static_cast<ULONG>(data.size()),&read));
@@ -192,7 +295,7 @@ SensorBundle decode_bundle(Bytes input) {
     }
     return {std::move(manifest),std::move(input),static_cast<size_t>(8+length)};
 }
-Packet sensor_messages(const SensorBundle& bundle,const std::string& session,const Demand& demand,uint64_t dropped,uint64_t stream_id,const json& rig) {
+Packet sensor_messages(const SensorBundle& bundle,const std::string& session,const Demand& demand,uint64_t dropped,uint64_t stream_id,const json& rig,IWICImagingFactory* imaging) {
     const auto& manifest=bundle.manifest;const auto blobs=std::span(bundle.data).subspan(bundle.blob_offset);
     if(manifest.at("stream_id")!=stream_id) return {}; // Ready slots can survive an earlier stream.
     std::map<std::string,std::span<const uint8_t>> files;
@@ -231,7 +334,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         quaternion(mul(mul(transpose(world_from_base),enu),mul(cabin_rotation,base_to_model)))});
     struct LidarSource {
         std::string camera;json description;const json* meta;std::span<const uint8_t> data;
-        uint32_t width{};M world_from_eye{};std::array<double,16> projection{};std::array<double,4> viewport{};
+        uint32_t width{};M eye_from_sensor{};std::array<double,16> projection{};std::array<double,4> viewport{};
     };
     std::map<std::string,std::vector<LidarSource>> lidars;
     for(const auto& view:manifest.at("views")) {
@@ -309,7 +412,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
                 });
             }
             if(preview && demand.contains(base+"/preview/image/compressed")) {
-                auto bytes=jpeg(data,width,height,width,height);
+                auto bytes=jpeg(imaging,data,width,height);
                 append_cdr(packet,base+"/preview/image/compressed",bytes.size()+512,[&](Cdr& c){header(c,us,frame);c<<std::string("rgb8; jpeg compressed bgr8")<<uint32_t(bytes.size());c.serialize_array(bytes.data(),bytes.size());});
                 add_message(packet,base+"/preview/camera_info",camera_info(us,frame,width,height,camera.at("projection_row_major"),vp,.5));
             }
@@ -335,7 +438,8 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         for(auto& source:sources) {
             const auto& camera=source.meta->at("geometry_pass").at("camera_at_compile");
             const auto p=camera.at("camera_world_xyz").get<V>();
-            source.width=source.description.at("source_width");source.world_from_eye=transpose(matrix(camera.at("camera_rotation_row_major")));
+            source.width=source.description.at("source_width");
+            source.eye_from_sensor=mul(matrix(camera.at("camera_rotation_row_major")),world_from_sensor);
             source.projection=camera.at("projection_row_major").get<std::array<double,16>>();
             const auto& vp=source.meta->at("geometry_gpu").at("viewports").at(0);
             source.viewport={vp.at("x"),vp.at("y"),vp.at("width"),vp.at("height")};
@@ -381,8 +485,8 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
                 if(std::isfinite(sample.depth)) {
                     const auto& p=source->projection;const auto& vp=source->viewport;
                     const double nx=2*(x+.5-vp[0])/vp[2]-1,ny=1-2*(y+.5-vp[1])/vp[3];
-                    auto actual=mul(source->world_from_eye,V{(p[2]-nx*p[14])/p[0],(p[6]-ny*p[14])/p[5],-1});
-                    const auto requested=mul(world_from_sensor,direction);const auto norm=std::hypot(actual[0],actual[1],actual[2]);
+                    const V actual{(p[2]-nx*p[14])/p[0],(p[6]-ny*p[14])/p[5],-1};
+                    const auto requested=mul(source->eye_from_sensor,direction);const auto norm=std::hypot(actual[0],actual[1],actual[2]);
                     double dot=0;for(size_t i=0;i<3;++i) dot+=actual[i]*requested[i]/norm;
                     error=static_cast<float>(std::acos(std::clamp(dot,-1.0,1.0))*180/std::numbers::pi);
                 }

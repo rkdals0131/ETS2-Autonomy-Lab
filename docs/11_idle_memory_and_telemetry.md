@@ -17,7 +17,7 @@ ETS2 1.61.1.1의 공식 SDK와 내부 물리·렌더 경로를 연결했습니�
 | speed | 차량 축 속도의 -Z, m/s |
 | truck configuration | 바퀴 위치·반지름·구동축, 캐빈·head·hook 위치 |
 
-SDK 원본은 로컬 `research/sdk`, 채널 목록은 `research/findings/sdk_1_15_channels.csv`, 현재 등록 필드는 `ot/schema`에 있습니다. ROS 각속도의 2π 변환 누락은 [다음 수정](17_sensor_expansion.md)에 포함됩니다.
+SDK 원본은 로컬 `research/sdk`, 채널 목록은 `research/findings/sdk_1_15_channels.csv`, 현재 등록 필드는 `ot/schema`에 있습니다. 0.23.0은 바퀴별 각속도·조향·접지를 등록하고 ROS 각속도에 2π 변환을 적용합니다. [추가 센서](17_sensor_expansion.md).
 
 ## 실행 중인 SDK 채널에서 실제 원본까지 연결
 

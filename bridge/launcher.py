@@ -3,6 +3,7 @@ from collections import deque
 import ctypes as C
 from ctypes import wintypes as W
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -122,7 +123,7 @@ class Controller:
         threading.Thread(target=read, daemon=True).start()
         return process
 
-    def _start(self, duration):
+    def _start(self, duration, camera_hz=None, lidar_hz=None):
         if self.desired or self.wsl or self.relay:
             return
         if self.unit:
@@ -130,11 +131,18 @@ class Controller:
         if not self.config.is_file():
             raise RuntimeError("bridge/configure.py를 먼저 실행해 로컬 설정을 만들어 주세요.")
         settings = json.loads(self.config.read_text(encoding="utf-8"))
+        changed = any(value is not None for value in (duration, camera_hz, lidar_hz))
         if duration is not None:
             duration = float(duration)
             if not 1 <= duration <= 86400:
                 raise ValueError("실행 시간은 1~86400초로 입력해 주세요.")
             settings["duration_s"] = duration
+        camera_hz = float(camera_hz if camera_hz is not None else settings.get("camera_hz", 30))
+        lidar_hz = float(lidar_hz if lidar_hz is not None else settings.get("lidar_hz", 10))
+        if not math.isfinite(camera_hz) or not 0 < lidar_hz <= camera_hz <= 60:
+            raise ValueError("주기는 0 < 라이다 ≤ 카메라 ≤ 60 Hz로 입력해 주세요.")
+        settings.update(camera_hz=camera_hz, lidar_hz=lidar_hz)
+        if changed:
             temporary = self.config.with_name(self.config.name + ".tmp")
             try:
                 temporary.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
@@ -300,9 +308,9 @@ class Controller:
                         self._stop()
                     elif action == "restart":
                         self._stop()
-                        self._start(values.get("duration"))
+                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"))
                     elif action == "start":
-                        self._start(values.get("duration"))
+                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"))
                 except queue.Empty:
                     pass
                 except Exception as error:
@@ -348,12 +356,16 @@ def show_window(controller):
     actions = ttk.Frame(frame)
     actions.pack(fill="x")
     duration = tk.StringVar(value="110")
+    camera_hz, lidar_hz = tk.StringVar(value="30"), tk.StringVar(value="10")
     try:
-        duration.set(str(json.loads(controller.config.read_text(encoding="utf-8"))["duration_s"]))
+        settings = json.loads(controller.config.read_text(encoding="utf-8"))
+        duration.set(str(settings["duration_s"]))
+        camera_hz.set(str(settings.get("camera_hz", 30)))
+        lidar_hz.set(str(settings.get("lidar_hz", 10)))
     except (OSError, ValueError, KeyError):
         pass
     def request(action):
-        controller.request(action, duration=duration.get())
+        controller.request(action, duration=duration.get(), camera_hz=camera_hz.get(), lidar_hz=lidar_hz.get())
     start = ttk.Button(actions, text="시작", command=lambda: request("start"))
     start.pack(side="left")
     stop = ttk.Button(actions, text="중지", command=lambda: request("stop"))
@@ -363,6 +375,14 @@ def show_window(controller):
     ttk.Label(actions, text="실행 시간(초)").pack(side="left", padx=(22, 5))
     duration_entry = ttk.Entry(actions, textvariable=duration, width=9)
     duration_entry.pack(side="left")
+    rates = ttk.Frame(frame)
+    rates.pack(fill="x", pady=(10, 0))
+    rate_entries = []
+    for label, variable in (("카메라 Hz", camera_hz), ("라이다 Hz", lidar_hz)):
+        ttk.Label(rates, text=label).pack(side="left", padx=(0, 5))
+        entry = ttk.Entry(rates, textvariable=variable, width=7)
+        entry.pack(side="left", padx=(0, 18))
+        rate_entries.append(entry)
     ttk.Label(frame, text="F11로 중지하면 자동으로 다시 켜지지 않습니다. 창을 닫으면 이 창에서 시작한 프로세스가 종료됩니다.",
               wraplength=750).pack(anchor="w", pady=(12, 14))
     rows = {}
@@ -404,6 +424,8 @@ def show_window(controller):
         stop.config(state="normal" if (active or state.get("unit")) and phase != "stopping" and not closing else "disabled")
         restart.config(state="normal" if phase in ("running", "connecting") and not closing else "disabled")
         duration_entry.config(state="disabled" if active else "normal")
+        for entry in rate_entries:
+            entry.config(state="disabled" if active else "normal")
         summary.config(text=state["message"])
         relay, wsl = state["relay"], state["wsl"]
         rows["게임 SDK"].config(text=state["game"])

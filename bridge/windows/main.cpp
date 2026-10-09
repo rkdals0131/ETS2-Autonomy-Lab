@@ -12,6 +12,8 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+#include <wincodec.h>
+#include <wrl/client.h>
 
 using namespace bridge;
 using namespace std::chrono_literals;
@@ -212,13 +214,17 @@ int main(int argc,char** argv) {
         const fs::path path=fs::absolute(argv[1]);std::ifstream file(path);json config;file>>config;
         const auto token=config.at("token").get<std::string>();if(token.size()<32) throw std::runtime_error("Missing pairing token");
         std::ifstream preset(path.parent_path()/config.at("rig").get<std::string>());json rig;preset>>rig;
-        rig=resolve_rig(rig,command({{"cmd","truck_config"}}),config.value("slots",json::array({0})));
+        const auto truck=command({{"cmd","truck_config"}});
+        rig=resolve_rig(rig,truck,config.value("slots",json::array({0})));
         rig["ego_full_model"]=true;
         const auto base=rig.at("base_origin").get<std::array<double,3>>();
         std::ifstream lidar_file(path.parent_path()/config.value("lidar",std::string("../../ot/presets/phase1-lidar.json")));json lidar_profile;lidar_file>>lidar_profile;
         const auto patterns=lidar_patterns(rig,lidar_profile);
         const auto duration=config.value("duration_s",60.0);
         if(!std::isfinite(duration) || duration<=0) throw std::runtime_error("duration_s must be positive");
+        const auto camera_hz=config.value("camera_hz",30.0),lidar_hz=config.value("lidar_hz",10.0);
+        if(!std::isfinite(camera_hz) || camera_hz<=0 || !std::isfinite(lidar_hz) || lidar_hz<=0 || lidar_hz>camera_hz)
+            throw std::runtime_error("Rates require 0 < lidar_hz <= camera_hz");
         const auto owner=uuid_string();
         command({{"cmd","lease"},{"action","claim"},{"owner",owner}});
         struct Lease {std::string owner;~Lease(){try{command({{"cmd","lease"},{"action","release"},{"owner",owner}});}catch(const std::exception& e){std::cerr<<"Lease cleanup: "<<e.what()<<std::endl;}}} lease{owner};
@@ -257,19 +263,24 @@ int main(int argc,char** argv) {
             const auto echo=p.meta.value("echo_us",uint64_t{0});if(echo) {latency.add(echo);last_ack=ticks();}
         }});
         workers.start([&]{Mapping mapping(false);if(!mapping.available()) throw std::runtime_error("SDK shared state unavailable");
-            auto fixed=static_messages(rig,patterns,session);send_packet(state,fixed.meta,fixed.data);
-            uint64_t diagnostic_time=0,last_stamp=0,last_frame=0;Bytes bytes;
+            MotionSensors motion(rig,truck,config);
+            auto fixed=static_messages(rig,patterns,session,config);motion.configuration(fixed);send_packet(state,fixed.meta,fixed.data);
+            uint64_t diagnostic_time=0,last_stamp=0,last_frame=0,last_send=0;Bytes bytes;
             while(workers.alive) {Packet packet{{{"session",session}}, {}};
                 if(mapping.read(bytes)) {
                     const auto sample=json::parse(bytes);const auto time=sample.at("paused_simulation_time_us").get<uint64_t>();
                     if(last_frame && (time<last_stamp || (sample.at("timer_flags").get<uint32_t>()&1)))
                         throw std::runtime_error("SDK clock restarted; restart relay for a new clock session");
-                    last_frame=sample.at("frame_id");last_stamp=time;packet=state_messages(sample,session,base);
+                    const auto frame=sample.at("frame_id").get<uint64_t>();
+                    if(frame!=last_frame) {last_frame=frame;last_stamp=time;packet=state_messages(sample,session,base);motion.append(packet,sample,*demand.load());}
                 }
                 if(ticks()-diagnostic_time>=1000) {add_diagnostics(packet,{{"stamp_us",last_stamp},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
                     {"queue_dropped",dropped.load()},{"capture_active",capture_active.load()},{"status_publish_roundtrip",latency.snapshot()},
                     {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}});diagnostic_time=ticks();}
-                packet.meta["ping_us"]=microseconds();send_packet(state,packet.meta,packet.data);std::this_thread::sleep_for(20ms);}
+                if(!packet.data.empty() || ticks()-last_send>=20) {
+                    packet.meta["ping_us"]=microseconds();send_packet(state,packet.meta,packet.data);last_send=ticks();
+                }
+                std::this_thread::sleep_for(2ms);}
         });
         workers.start([&]{std::unique_ptr<Mapping> mapping;Bytes bytes;GpuReadback gpu;while(workers.alive) {
             std::unique_lock access(capture_access);
@@ -286,7 +297,9 @@ int main(int argc,char** argv) {
         }});
         workers.start([&]{const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if(FAILED(hr)) throw std::runtime_error("COM worker initialization failed");
             struct ComEnd{~ComEnd(){CoUninitialize();}} com;
-            while(workers.alive) {SensorBundle bundle;if(read_queue.pop(bundle)) {const auto begin=microseconds();auto packet=sensor_messages(bundle,session,*demand.load(),dropped,stream_id,rig);encode_time.add(begin);read_buffers.put(std::move(bundle.data));if(!packet.data.empty() && send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
+            Microsoft::WRL::ComPtr<IWICImagingFactory> imaging;
+            if(FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging)))) throw std::runtime_error("WIC initialization failed");
+            while(workers.alive) {SensorBundle bundle;if(read_queue.pop(bundle)) {const auto begin=microseconds();auto packet=sensor_messages(bundle,session,*demand.load(),dropped,stream_id,rig,imaging.Get());encode_time.add(begin);read_buffers.put(std::move(bundle.data));if(!packet.data.empty() && send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
         });
         workers.start([&]{uint64_t heartbeat=0;while(workers.alive) {
             Packet packet;if(send_queue.pop(packet)) {if(packet.meta.at("native_stream")!=stream_id.load()) continue;const auto begin=microseconds();send_packet(bulk,packet.meta,packet.data);send_time.add(begin);++sent;bytes_sent+=packet.data.size();heartbeat=ticks();}
@@ -299,7 +312,7 @@ int main(int argc,char** argv) {
                 if(capture_wanted) {
                     owned({{"cmd","tier"},{"value",1}});
                     owned({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true},{"draw_metadata",false}});owned(rig);
-                    stream_id=owned({{"cmd","stream"},{"action","start"},{"format","ros"},{"shared_gpu",config.value("shared_gpu",true)},{"hz",10},{"duration",remaining-(ticks()-start)/1000.0},
+                    stream_id=owned({{"cmd","stream"},{"action","start"},{"format","ros"},{"shared_gpu",config.value("shared_gpu",true)},{"hz",camera_hz},{"lidar_hz",lidar_hz},{"duration",remaining-(ticks()-start)/1000.0},
                         {"auto_exposure",config.value("auto_exposure",true)},{"color_gain",config.value("color_gain",1.0)},{"outputs",json::object()},{"lidars",patterns}}).at("stream_id").get<uint64_t>();
                     previous_demand.clear();capture_active=true;
                 } else {
@@ -322,11 +335,13 @@ int main(int argc,char** argv) {
                     if(!selected.empty()) outputs[mirror]=selected;
                 }
                 owned({{"cmd","stream"},{"action","update"},{"format","ros"},{"shared_gpu",config.value("shared_gpu",true)},
+                    {"lidar_hz",lidar_hz},
                     {"auto_exposure",config.value("auto_exposure",true)},{"color_gain",config.value("color_gain",1.0)},{"outputs",outputs},{"lidars",patterns}});
                 previous_demand=*requested;
             }
             if(ticks()-report>=1000) {std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
                 {"session",session},{"wsl_ip",ip},{"capture_active",capture_active.load()},{"demand_topics",requested->size()},
+                {"camera_hz",camera_hz},{"lidar_hz",lidar_hz},
                 {"ros_received_bundles",received.load()},{"ros_ack_age_ms",last_ack.load()?json(ticks()-last_ack.load()):json(nullptr)},
                 {"queue_dropped",dropped.load()},{"status_publish_roundtrip",latency.snapshot()},
                 {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}}.dump()<<std::endl;report=ticks();}

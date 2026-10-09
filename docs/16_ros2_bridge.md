@@ -6,12 +6,12 @@ Windows C++ 릴레이가 메시지를 생성하고, WSL Jazzy의 GenericPublishe
 
 - Ubuntu eth0 NAT IPv4로 직접 연결합니다. 연결 때 주소를 다시 조회합니다.
 - 대용량 TCP: 영상·깊이·라이다·차량 GT·렌더 TF·frame_info.
-- 상태 TCP: `/clock`, SDK 상태·자차 물리 pose·진단·정적 TF. 역방향은 구독 요구·수집 제어·응답입니다.
+- 상태 TCP: `/clock`, SDK 상태·IMU·휠·GNSS·자차 물리 pose·진단·정적 TF. 역방향은 구독 요구·수집 제어·응답입니다.
 - 두 연결의 worker·큐는 분리하고 상태 TCP에 NODELAY를 적용합니다.
 - Fast-CDR는 XCDRv1·little endian·PLAIN_CDR·serialize_encapsulation을 사용합니다. 헤더는 `00 01 00 00`입니다.
 - Fast DDS SHM은 participant당 128 MiB, 최대 메시지 8 MiB입니다. 브리지·Foxglove·rosbag2에 같은 XML을 적용합니다.
 
-상태는 reliable, 센서는 best-effort, 정적 구성은 transient-local입니다. 최신 완성 묶음을 우선하고 큐 누락 수를 진단에 제공합니다.
+상태 경로는 reliable, 영상·라이다 경로는 best-effort, 정적 구성은 transient-local입니다. 최신 완성 묶음을 우선하고 큐 누락 수를 진단에 제공합니다.
 
 ## 토픽
 
@@ -29,17 +29,24 @@ Windows C++ 릴레이가 메시지를 생성하고, WSL Jazzy의 GenericPublishe
 | /ets2/ground_truth/{camera}/markers | Foxglove용 MarkerArray |
 | /ets2/ground_truth/ego/pose | SDK 시각의 물리 자세 PoseStamped |
 | /ets2/vehicle/state | SDK 시각·속도·입력·벡터 상태 VehicleState |
+| /ets2/imu/data_raw | 섀시 고정 IMU, specific force m/s²·각속도 rad/s, orientation 미제공 |
+| /ets2/wheels/state | WheelState: 바퀴 index·rad/s·실제 조향 rad·반지름 m·접지 |
+| /ets2/wheels/odometry | 바퀴 구름 제약으로 적분한 Odometry, wheel_odom 기준, TF 미발행 |
+| /ets2/gnss/fix | 가상 WGS84 기준의 이상적 NavSatFix, 10 Hz |
+| /ets2/sensors/config | 단위·센서 모델·장착점·가상 지리 기준 JSON String, transient-local |
 | /ets2/frame_info | 세션·render_frame_id·센서 대응 FrameInfo |
 | /ets2/frame_info/exposure | 같은 프레임의 gain·자동 노출 여부 FrameExposure |
 | /clock, /tf, /tf_static, /diagnostics | 시뮬레이션 시각·좌표·성능 |
 
-Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다. TF는 `world → base_link → cabin → sensors`입니다. 기본 미러 0·1·2·5와 센서 출력 3·4·6·7은 분리돼 있습니다.
+Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다. 카메라·라이다 TF는 `world → base_link → cabin → sensors`, IMU·GNSS 장착 TF는 `base_link → imu_link / gnss_link`입니다. 기본 미러 0·1·2·5와 센서 출력 3·4·6·7은 분리돼 있습니다.
 
-현재 VehicleState 각속도는 SDK 회전/초 값이 rad/s 명칭의 필드로 전달됩니다. 2π 변환과 기존 기록의 단위 구분이 [센서 확장](17_sensor_expansion.md)의 첫 수정 항목입니다.
+0.23.0부터 VehicleState 각속도는 SDK 회전/초에 2π를 곱한 rad/s입니다. 0.22.0까지 저장한 bag의 `angular_velocity_base_radps`에는 회전/초 값이 들어 있으므로 읽을 때 2π를 곱합니다. 새 bag에 이 보정을 중복 적용하지 않습니다. 센서 계산과 장착 기준은 [추가 센서](17_sensor_expansion.md)에 있습니다.
 
 ## 수집과 노출
 
 실제 구독 요구를 합쳐 color·depth·preview·metadata·lidar를 선택합니다. 변경은 묶음 경계에서 반영합니다. 처리 중인 GPU 자원은 소비 완료까지 유지합니다. preview와 perception은 같은 축소 출력을 공유합니다.
+
+기본 카메라 요청은 30 Hz, 라이다는 10 Hz입니다. 라이다가 예정되지 않은 묶음은 GPU gather·라이다 readback을 생략합니다. 라이다만 구독하면 해당 카메라 선택도 10 Hz 기회에만 발생합니다. 라이다 stamp는 같은 묶음의 카메라 stamp와 같습니다. IMU·휠은 새 SDK 표본마다 발행하고 보간하지 않습니다. GNSS는 시뮬레이션 시각의 100 ms 경계 이후 첫 새 표본을 사용합니다.
 
 게임은 공유 D3D11 텍스처와 fence를 발행하고 릴레이가 자신의 device에서 staging copy·Map을 수행합니다. 라이다 작은 버퍼와 노출 표본은 현재 DLL readback 경로를 사용합니다. 공유 텍스처 소비 완료 신호는 `released = ready + 1`입니다.
 

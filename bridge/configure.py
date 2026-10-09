@@ -11,5 +11,8 @@ path.write_text(json.dumps({
     "rig": "../../ot/presets/phase1-highway-private.json", "slots": [3, 4, 6, 7],
     "lidar": "../../ot/presets/phase1-lidar-private.json",
     "duration_s": 60, "color_gain": 1.0, "auto_exposure": True, "shared_gpu": True,
+    "camera_hz": 30, "lidar_hz": 10,
+    "imu_mount_base_m": [0, 0, 1], "gnss_mount_base_m": [0, 0, 1],
+    "gnss_reference_lla": [0, 0, 0],
 }, indent=2) + "\n", encoding="utf-8")
 print(path)
