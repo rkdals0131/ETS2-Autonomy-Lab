@@ -1,6 +1,6 @@
 # 출처와 소스 탐색 위치
 
-조사 기준일은 2026년 10월 8일입니다. 공식 문서는 기능의 공개 계약을, 소스는 해당 revision의 구현을, 모더의 글은 경험과 조사 단서를 제공합니다. 오래된 성공 사례가 현재 게임 빌드의 호환성을 보장하지는 않습니다.
+엔진 조사는 2026년 10월 8일 확보한 게임 빌드와 아래 소스 revision을 기준으로 합니다. ROS·센서 확장 자료는 10월 9일 갱신했습니다.
 
 설치 파일에 대조한 후속 결과는 [정적 분석](docs/10_installed_game_static_analysis.md)과 [도로 정차 데이터](docs/11_idle_memory_and_telemetry.md)에 있습니다. 이 조사에서는 아래 revision의 소스를 로컬에 확보했습니다.
 
@@ -20,12 +20,10 @@
 - [공식 SDK 1.15 ZIP](https://download.eurotrucksimulator2.com/scs_sdk_1_15.zip): 배포판 안의 헤더·타입·시간 계약을 직접 읽음.
 - [sk-zk Extractor](https://github.com/sk-zk/Extractor): 2026-07-29 standalone release로 설치 아카이브를 선택 추출.
 - [SDK 채널 문서에 대한 SCS 답변](https://forum.scssoft.com/viewtopic.php?t=240843): 헤더를 목록의 기준으로 안내.
-- [제한속도 특수값에 대한 SCS 답변](https://forum.scssoft.com/viewtopic.php?t=186527): 2015년 당시 설명이며 현재 버전의 완전한 상태표는 아님.
+- [제한속도 특수값에 대한 SCS 답변](https://forum.scssoft.com/viewtopic.php?t=186527): 2015년 SDK 제한속도 특수값 설명.
 - [ReadProcessMemory](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-readprocessmemory), [OpenFileMappingW](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-openfilemappingw): 외부 읽기 및 기존 shared-memory 연결 계약.
 
-ETS2LA/plugin은 MIT, SPF는 Apache-2.0 라이선스 파일을 확인했습니다. MobileCam과 PrismTextureStreamer의 확보한 루트에는 LICENSE 파일이 없었습니다. 이들은 참고 조사 자료이며 제품 코드에 편입한 것이 아닙니다.
-
-본문의 주요 주장에는 직접 링크를 붙였습니다. 아래 목록은 후속 작업에서 다시 찾아갈 위치입니다. 저장소 전체를 검증했다는 뜻은 아닙니다.
+ETS2LA/plugin은 MIT, SPF는 Apache-2.0 라이선스 파일을 확인했습니다. 참고 조사한 MobileCam과 PrismTextureStreamer의 확보한 루트에는 LICENSE 파일이 없었습니다. 제품에 포함한 의존성과 라이선스는 [THIRD_PARTY](ot/THIRD_PARTY.md)에 있습니다.
 
 ## 기존 자율주행 프로젝트
 
@@ -48,7 +46,7 @@ ETS2LA/plugin은 MIT, SPF는 Apache-2.0 라이선스 파일을 확인했습니�
 | [미러 FOV 변환 설명](https://forum.scssoft.com/viewtopic.php?t=253252) | SCS 개발자 Max의 mirror_size·FOV 설명 |
 | [추가 미러 설정 설명](https://forum.scssoft.com/viewtopic.php?p=1208872) | SCS 개발자의 cam_m_h와 대응 설정 |
 | [실내 애니메이션과 UI ID](https://modding.scssoft.com/wiki/Documentation/Engine/Truck_Interior_Animations_and_IDs) | 디지털미러 1620~1650, 주차 화면 910~913 |
-| [Coaches 차량 기능](https://blog.scssoft.com/2026/07/coaches-new-vehicle-features.html) | 개발 중 기능 소개의 후방 카메라. 출시·API 보장과 구분 |
+| [Coaches 차량 기능](https://blog.scssoft.com/2026/07/coaches-new-vehicle-features.html) | 개발 중 후방 카메라 기능 소개 |
 | [미러 갱신 문제](https://forum.scssoft.com/viewtopic.php?t=259895) | SCS 개발자 Komat의 가시성 검사 설명 |
 | [미러 렌더 품질 관련 답변](https://forum.scssoft.com/viewtopic.php?start=3600&t=330624) | VR 논의 내 r_deferred_mirrors와 r_mirror_view_distance |
 | [맵 에디터 기능](https://modding.scssoft.com/wiki/Documentation/Tools/Map_Editor/New_Editor_Features_info_-_old_%2B_1.47) | No mirror reflection 속성 |
@@ -67,9 +65,9 @@ ETS2LA/plugin은 MIT, SPF는 Apache-2.0 라이선스 파일을 확인했습니�
 | [ETS2MobileCam](https://github.com/Baldywaldy09/ETS2MobileCam) | 작성자의 카메라 구조체와 업데이트 후킹 설명 |
 | [PrismTextureStreamer](https://github.com/Baldywaldy09/PrismTextureStreamer) | 외부 앱 화면을 게임 텍스처에 공급 |
 | [텍스처 큐 구현](https://github.com/Baldywaldy09/PrismTextureStreamer/blob/main/PrismTextureStreamerFB/prism/memserver_texture_queue.cpp) | 엔진 큐의 리소스 경로 처리 |
-| [Prism3D Unit Resolver](https://github.com/Baldywaldy09/x64dbgPrism3DUnitResolver) | 추가 디버거 도구 후보. 내부 구현 미검증 |
+| [Prism3D Unit Resolver](https://github.com/Baldywaldy09/x64dbgPrism3DUnitResolver) | 후속 디버거 도구 후보 |
 | [ets2-data-capture](https://github.com/dmariaa/ets2-data-capture) | 색상·depth 추출 참고 |
-| [ETS2 1.61 DX12 조사](https://github.com/NemoByteCore/ets2-1.61-stutter-investigation) | 작성자의 렌더 경로 분석. 성능 진단 전체 미검증 |
+| [ETS2 1.61 DX12 조사](https://github.com/NemoByteCore/ets2-1.61-stutter-investigation) | 커뮤니티의 DX12 렌더 경로 분석 |
 
 ## 그래픽과 데이터 전달
 
@@ -105,8 +103,11 @@ ETS2LA/plugin은 MIT, SPF는 Apache-2.0 라이선스 파일을 확인했습니�
 | [lib_scene.lua](https://github.com/ac-custom-shaders-patch/acc-lua-sdk/blob/main/lib_scene.lua) | GeometryShot 생성·update·depth |
 | [ac_ray.lua](https://github.com/ac-custom-shaders-patch/acc-lua-sdk/blob/main/common/ac_ray.lua) | track·scene·cars·physics raycast |
 
-## 후속 조사 방식
+## ROS와 센서 규약
 
-웹 자료로 해결할 수 있는 다음 작업은 선택한 저장소의 빌드·라이선스·지원 버전과 실제 헤더를 읽는 것입니다. 게임 파일을 확보하면 카메라·재질·로케이터 정의를 실제 빌드에서 찾습니다. GPU 리소스 연결, 생성 함수와 성능은 런타임에서 해결합니다.
-
-한 주장이 공식 지원인지, 특정 버전의 소스 동작인지, 작성자의 보고인지 유지합니다. 직접 실험한 결과가 생기면 해당 문서의 미확인 항목을 구체적인 관찰로 교체합니다.
+| 출처 | 용도 |
+| --- | --- |
+| [REP 145](https://github.com/ros-infrastructure/rep/blob/master/rep-0145.rst) | IMU 축·단위·specific force |
+| [NavSatFix](https://github.com/ros2/common_interfaces/blob/jazzy/sensor_msgs/msg/NavSatFix.msg) | WGS84 위치·ENU 공분산 |
+| [NavSatStatus](https://github.com/ros2/common_interfaces/blob/jazzy/sensor_msgs/msg/NavSatStatus.msg) | GNSS 상태·서비스 비트 |
+| [Foxglove 3D](https://docs.foxglove.dev/docs/visualization/panels/3d#point-cloud) | 점군 필드·거리 색상 |
