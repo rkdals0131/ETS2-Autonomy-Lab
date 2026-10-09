@@ -2,7 +2,7 @@
 
 ## 실행
 
-게임을 Steam의 **DirectX11 (64-bit)**로 실행한 뒤 [launch.cmd](launch.cmd)를 엽니다.
+게임을 Steam의 **DirectX11 (64-bit)**로 실행한 뒤 [apps/launch.cmd](../apps/launch.cmd)를 엽니다. 기존 [launch.cmd](launch.cmd)도 같은 진입점으로 연결됩니다. Linux 관리 모드는 [apps 사용법](../apps/README.md)을 따릅니다.
 
 - **시작:** WSL Ubuntu의 ROS·Foxglove 서버를 준비하고 Windows 릴레이를 연결합니다.
 - **중지:** 릴레이의 수집 소유권을 해제하고 이번 실행의 Windows·WSL 프로세스를 종료합니다.

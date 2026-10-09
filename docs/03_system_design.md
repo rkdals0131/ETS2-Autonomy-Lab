@@ -94,7 +94,7 @@ ROS 센서 ─┬─ perception → 주변 물체·차로
 
 현재 GT 입력은 인지·위치 추정 결과와 비교할 기준 어댑터로 유지합니다. `world`(SCS X,-Z)와 세션 원점의 `wheel_odom`은 별도 좌표계이므로 위치 추정 연결 시 변환을 명시합니다. 현재 profile-relative 입력과 applied 조향 PI는 마지막 ETS2 adapter 책임이며, 물리 바퀴 각도·조향 토크 API가 아닙니다. 제어 알고리즘을 교체해도 DLL·릴레이 계약은 유지합니다.
 
-Windows 런처는 Win32 Job·게임 파이프를 관리합니다. Linux에서도 같은 ROS launch·자동주행·기록 명령을 사용할 수 있지만, Windows host까지 관리하는 대칭 Linux UI/API는 아직 구현하지 않았습니다. [앱](../apps/launcher/README.md), [ROS 빌드와 실행](../ros2/README.md).
+`apps/launch.cmd`는 Windows 전체 UI이며 `--host-only`는 기존 native 릴레이만 실행합니다. `apps/launch.sh`는 Linux의 전경 터미널에서 공통 ROS 세션·자신의 보조·기록을 관리합니다. Linux 먼저 시작하고 Windows host-only를 연결하면 동일한 paired TCP를 사용합니다. 공통 session lock이 Windows 전체 모드와 Linux 모드의 ROS 중복 시작을 막으며, 각 관리자와 입력 owner의 종료 범위는 유지합니다. 별도 Linux PC의 Windows host까지 원격 관리하는 API는 제공하지 않습니다. [두 진입점](../apps/README.md), [ROS 빌드와 실행](../ros2/README.md).
 
 ## 수명과 구성
 

@@ -90,7 +90,10 @@ int main(int argc,char** argv) {
         std::ifstream file(config_path);json config;file>>config;
         const auto token=config.at("token").get<std::string>();
         if(token.size()<32) throw std::runtime_error("Bridge requires a local pairing token");
-        const auto ip=eth0();
+        auto ip=config.value("bind_address",std::string{});
+        if(ip.empty()) ip=eth0();
+        in_addr decoded_address{};
+        if(inet_pton(AF_INET,ip.c_str(),&decoded_address)!=1) throw std::runtime_error("bind_address must be an IPv4 address");
         auto state_listener=listener(ip,config.value("state_port",17401));
         auto bulk_listener=listener(ip,config.value("bulk_port",17400));
         struct Publisher {Topic topic;rclcpp::GenericPublisher::SharedPtr publisher;};

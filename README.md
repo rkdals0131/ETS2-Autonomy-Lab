@@ -5,10 +5,12 @@ ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 ## 실행
 
 1. Steam에서 **DirectX11 (64-bit)**로 게임을 실행합니다.
-2. [bridge/launch.cmd](bridge/launch.cmd)를 열고 **시작**을 누릅니다.
+2. [apps/launch.cmd](apps/launch.cmd)를 열고 **시작**을 누릅니다.
 3. Windows Foxglove에서 런처에 표시된 WebSocket 주소로 연결합니다.
 
 런처가 Windows 릴레이와 WSL Ubuntu의 ROS·Foxglove 서버를 함께 관리합니다. 중복 실행은 기존 창으로 돌아가며, 중지·창 닫기는 해당 실행의 프로세스를 정리합니다. 실행 시간과 센서 설정은 `bridge/config/bridge.local.json`을 공유합니다. 최초 설치·빌드는 [브리지 사용법](bridge/README.md)에 있습니다.
+
+Linux에서는 `apps/launch.sh`로 ROS 실행·상태·중지·보조·기록을 관리하고 Windows의 `apps/launch.cmd --host-only`로 릴레이만 연결할 수 있습니다. [두 모드 사용법](apps/README.md).
 
 ## 현재 상태 — 2026-10-10
 

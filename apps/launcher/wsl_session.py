@@ -1,5 +1,6 @@
 """Launcher-owned ROS session. systemd owns the complete Linux process tree."""
 import json
+import fcntl
 import os
 from pathlib import Path
 import queue
@@ -18,7 +19,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from bag_recording import BagRecording
 
 
-def main():
+def run_session():
     config = Path(sys.argv[1]).resolve()
     settings = json.loads(config.read_text())
     runtime_directory = Path(os.environ["RUNTIME_DIRECTORY"])
@@ -161,13 +162,16 @@ def main():
                     mode_future = None
                     print(json.dumps({"type": "drive_error", "error": "모드 적용 응답 시간 초과"}), flush=True)
             if now - heartbeat > 8:
-                raise RuntimeError("Windows launcher heartbeat expired")
+                raise RuntimeError("Launcher heartbeat expired")
             if child.poll() is not None:
                 raise RuntimeError("ROS launch exited: " + log_path.read_text(errors="replace")[-4000:])
             if now - last_report >= 1:
-                interfaces = json.loads(subprocess.check_output(["ip", "-j", "-4", "addr", "show", "eth0"]))
-                ip = next(a["local"] for i in interfaces for a in i["addr_info"] if a["family"] == "inet")
-                print(json.dumps({"type": "wsl_status", "pid": os.getpid(), "ros_pid": child.pid,
+                ip = settings.get("bind_address")
+                if not ip:
+                    interfaces = json.loads(subprocess.check_output(["ip", "-j", "-4", "addr", "show", "eth0"]))
+                    ip = next(a["local"] for i in interfaces for a in i["addr_info"] if a["family"] == "inet")
+                status = {"type": "wsl_status", "pid": os.getpid(), "ros_pid": child.pid,
+                                  "observed_at": now,
                                   "ip": ip, "listeners_ready": ports <= listeners(), "paused": paused,
                                   "state_age_s": now - last_state if last_state else None,
                                   "diagnostics_age_s": now - last_diagnostics if last_diagnostics else None,
@@ -175,7 +179,11 @@ def main():
                                   "drive_pid": drive.pid if drive and drive.poll() is None else None,
                                   "drive_exit": drive.poll() if drive else drive_exit,
                                   "drive_state": drive_state, "drive_state_age_s": now - drive_state_time if drive_state_time else None,
-                                  "drive_log": (runtime_directory / "drive.log").read_text(errors="replace")[-1500:] if (runtime_directory / "drive.log").exists() else ""}), flush=True)
+                                  "drive_log": (runtime_directory / "drive.log").read_text(errors="replace")[-1500:] if (runtime_directory / "drive.log").exists() else ""}
+                temporary = runtime_directory / "status.json.tmp"
+                temporary.write_text(json.dumps(status), encoding="utf-8")
+                os.replace(temporary, runtime_directory / "status.json")
+                print(json.dumps(status), flush=True)
                 last_report = now
         print(json.dumps({"type": "wsl_stopping"}), flush=True)
     finally:
@@ -193,6 +201,17 @@ def main():
                     child.wait(timeout=2)
             node.destroy_node()
             rclpy.shutdown()
+
+
+def main():
+    # The same lock excludes Windows and Linux launchers before either spawns ROS.
+    runtime = Path(os.environ["XDG_RUNTIME_DIR"])
+    with (runtime / "ets2-bridge-session.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("다른 런처가 ROS 브리지를 실행 중입니다. 해당 런처에서 먼저 중지해 주세요.") from None
+        run_session()
 
 
 if __name__ == "__main__":
