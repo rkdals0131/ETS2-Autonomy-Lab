@@ -1,202 +1,106 @@
-# ETS2 → ROS 2
+# 유로파일럿 브리지와 런처
 
-The first connection publishes captured RGB8, metric optical-depth 32FC1,
-CameraInfo, JPEG previews, render-camera TF, frame correspondence, `/clock`, SDK
-state and observed ego pose. Windows uses Fast-CDR 2.2.5 with explicit XCDRv1;
-Linux uses Jazzy GenericPublisher and the XML SHM transport profile. The
-implementation connects GPU LiDAR and per-pass vehicle GT, a cabin/base TF tree,
-subscription control and reconnection. The sensor views now submit the full ego
-body. The private preset preserves native mirrors and corrects the front sunshield
-occlusion. Attached-trailer and prolonged-driving validation remain outstanding.
+## 실행
 
-## Build
+게임을 Steam의 **DirectX11 (64-bit)**로 실행한 뒤 [launch.cmd](launch.cmd)를 엽니다.
 
-Windows: build/install `ot_core` using `ot/build.cmd`, then run `bridge/build.cmd`.
-The relay has no ROS runtime dependency. Its pinned Fast-CDR source is downloaded
-by CMake; JPEG uses Windows Imaging Component. Run `python3 bridge/configure.py`
-once to create the ignored local pairing/settings file. Both sides read that file.
+- **시작:** WSL Ubuntu의 ROS·Foxglove 서버를 준비하고 Windows 릴레이를 연결합니다.
+- **중지:** 릴레이의 수집 소유권을 해제하고 이번 실행의 Windows·WSL 프로세스를 종료합니다.
+- **재시작:** 기존 실행을 정리한 뒤 설정 파일을 다시 읽습니다.
+- **창 닫기:** 이번 실행을 종료합니다.
+- **다시 열기:** 기존 런처 창을 표시합니다.
 
-Ubuntu 24.04 / WSL2: install ROS 2 Jazzy ros-base, vision-msgs, foxglove-bridge,
-rosbag2-storage-mcap, rmw-fastrtps-cpp, colcon, CMake and nlohmann-json3-dev.
-Set `REPO` to this checkout's WSL path, then:
+화면은 SDK 연결, 프로세스 PID, ROS 상태 수신, 전송·수신 묶음 수, 큐 누락, Foxglove 주소를 표시합니다. 연결 상태는 실제 ROS 응답과 SDK 상태 메시지의 최근 수신으로 판정합니다. 센서 구독이 없으면 영상 수집을 기다립니다.
+
+`실행 시간(초)`은 시작할 때 `config/bridge.local.json`의 `duration_s`에 저장됩니다. 시간이 끝나면 중지합니다. F11·게임 오류·프로세스 종료 뒤에는 사용자가 시작을 눌러 새 실행을 엽니다. 게임 실행과 운전은 사용자가 맡습니다.
+
+기존 수동 브리지가 같은 포트를 사용하면 런처가 충돌을 표시합니다. 기존 실행을 종료한 뒤 시작합니다. 다른 WSL 작업과 게임 프로세스는 유지됩니다.
+
+## 설정
+
+Windows와 WSL은 같은 `config/bridge.local.json`을 읽습니다. 현재 배포판은 Ubuntu, ROS domain은 42입니다. 연결 때 Ubuntu eth0 주소를 조회합니다.
+
+| 설정 | 용도 |
+| --- | --- |
+| rig / lidar / slots | 센서 프리셋과 슬롯. 현재 private 프리셋·[3,4,6,7] |
+| duration_s | 실행 제한 시간 |
+| token / state_port / bulk_port | 양쪽 연결 설정 |
+| auto_exposure / color_gain | 자동 노출 또는 수동 gain |
+| shared_gpu | 기본 true, 공유 GPU 텍스처 전달 |
+
+설정 변경은 중지 후 적용합니다. `configure.py`는 최초 파일을 만들고 기존 설정을 보존합니다. token은 로컬 파일에만 보관합니다.
+
+## 최초 준비
+
+Windows에서 `ot/build.cmd`, `bridge/build.cmd`를 실행합니다. 설치된 DLL 배치는 [ot 문서](../ot/README.md)를 따릅니다.
+
+```powershell
+py -3.13 bridge/configure.py
+.\bridge\build.cmd
+```
+
+WSL Ubuntu 24.04에는 ROS 2 Jazzy ros-base, vision-msgs, foxglove-bridge, rosbag2-storage-mcap, rmw-fastrtps-cpp, colcon, CMake, nlohmann-json3-dev를 설치합니다. 런처는 WSL의 systemd user manager를 사용합니다.
 
 ```bash
+REPO=/mnt/c/path/to/ETS2-Autonomy-Lab  # 실제 저장소 경로
 source /opt/ros/jazzy/setup.bash
 mkdir -p ~/ets2-ros
 cd ~/ets2-ros
 colcon build --base-paths "$REPO/bridge/ros2" --executor sequential --cmake-args -DCMAKE_BUILD_TYPE=Release
+```
+
+`bridge/ros-env.sh`는 Bash·Zsh에 맞는 ROS setup을 선택합니다. 다른 ROS 소비자도 이 환경을 불러 domain 42와 같은 DDS SHM 프로필을 사용합니다.
+
+## Foxglove
+
+Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다.
+
+- 영상: `/ets2/camera/{C_FN,C_FW,C_RL,C_RR}/preview/image/compressed`
+- 점군: `/ets2/lidar/{L_F,L_PL,L_PR}/points`
+- 박스: `/ets2/ground_truth/{camera}/markers`
+- 상태: `/ets2/vehicle/state`, `/diagnostics`, `/tf`, `/clock`
+
+라이다는 Color map → range → Turbo로 설정하고 가까운 장면은 0–30m 또는 0–50m 범위를 사용합니다. 원본 RGB·depth와 `/perception/image_raw`는 ROS 소비자가 직접 구독합니다. [토픽·시각 계약](../docs/16_ros2_bridge.md).
+
+## 기록과 재생
+
+외장 SSD가 마운트돼 있는지 확인하고 가용 공간을 확인한 뒤 `~/Storage/ROS2_Workspace_offload/ETS2-Autonomy-Lab/<run>/bags/`에 저장합니다. 예시:
+
+```bash
+source "$REPO/bridge/ros-env.sh"
+ROOT=~/Storage/ROS2_Workspace_offload
+findmnt -T "$ROOT"
+df -h "$ROOT"
+ros2 bag record -s mcap -o "$ROOT/ETS2-Autonomy-Lab/run-01/bags/front" --topics /clock /tf /tf_static /ets2/frame_info /ets2/vehicle/state /ets2/camera/C_FN/image_raw /ets2/camera/C_FN/depth/image_raw /ets2/camera/C_FN/camera_info
+```
+
+기록은 기본 수신 시각을 사용합니다. `--use-sim-time`을 넣지 않습니다. 재생 전 런처에서 중지하고 다음을 실행합니다.
+
+```bash
+ros2 bag play "$ROOT/ETS2-Autonomy-Lab/run-01/bags/front"
+```
+
+기록된 `/clock`을 사용하므로 `--clock`을 넣지 않습니다. 소비자는 `use_sim_time=true`로 설정합니다. 이전 실험 bag은 기존 `~/ets2-data/bags/`에 보존돼 있습니다.
+
+## 수동 실행
+
+런처를 중지한 상태에서 개발용으로 사용합니다.
+
+```bash
 source "$REPO/bridge/ros-env.sh"
 ros2 launch ets2_bridge bridge.launch.py config:="$REPO/bridge/config/bridge.local.json"
 ```
 
-The server binds eth0 only. Start ROS subscribers, then on Windows run:
-
 ```powershell
-bridge/dist/ets2_relay.exe bridge/config/bridge.local.json
+.\bridge\dist\ets2_relay.exe .\bridge\config\bridge.local.json
 ```
 
-The relay queries Ubuntu's current eth0 IPv4, opens separate bulk/state TCP
-connections and claims the idle game plugin. No command may reacquire the game
-after a lost lease: F11 requires an explicit relay restart. Normal exit releases
-its lease; a dead relay loses it after five seconds and the DLL returns to Tier 0.
-The local configuration bounds each run with `duration_s`. Network loss stops the
-capture and rig, closes old queues, resolves eth0 again and opens a new session.
-The same game lease must still be alive; F11 cancels it and ends the relay.
-SDK timer restart also ends the relay so queued data cannot cross clock epochs.
-For DLL replacement, stop the relay first, reload the core, then restart the relay.
-During game pause, SDK state and the frozen simulation clock continue on the
-state connection. Sensor work compiled while paused is omitted; unpaused sensor
-frames resume without restarting the relay.
+수집만 중지·재개할 때는 `/ets2/capture` SetBool 서비스를 사용합니다. 서비스 응답은 요청 접수이고 `/diagnostics.capture_active`가 적용 상태입니다. F11 이후에는 릴레이를 다시 시작합니다.
 
-`ros-env.sh` supports both Bash and Zsh, selecting the matching ROS setup scripts.
-Source it in the current shell; it does not require switching the terminal to Bash.
+## 운영 구조
 
-The launch file starts both ROS and Foxglove with the shared-memory profile. Add
-`foxglove:=false` for a receive-only run. Other ROS consumers must source
-`ros-env.sh` to join domain 42 with the same DDS profile.
+런처는 단일 Windows mutex로 중복 창을 막습니다. Windows Job Object는 릴레이와 WSL 연결 프로세스를, WSL transient systemd unit은 ROS·Foxglove·상태 구독 노드를 소유합니다. Windows heartbeat가 8초 끊기면 WSL 세션도 종료합니다. 중지는 릴레이 정상 종료 → WSL 그룹 종료 → PID·unit 상태 확인 순서입니다.
 
-Collection can be stopped and resumed without disconnecting SDK state:
+종료 확인이 실패하면 해당 WSL 실행을 화면에 남기고 새 시작을 막습니다. 중지를 다시 눌러 같은 실행의 정리를 확인합니다.
 
-```bash
-ros2 service call /ets2/capture std_srvs/srv/SetBool '{data: false}'
-ros2 service call /ets2/capture std_srvs/srv/SetBool '{data: true}'
-```
-
-The service acknowledges a request; `/diagnostics` reports applied capture state.
-It cannot clear F11. `/diagnostics` also reports queue drops, pipeline elapsed times
-and Windows-send → ROS-publish → Windows-ack round trips (not one-way latency).
-
-To run Foxglove separately instead of through the launch file:
-
-```bash
-ip=$(ip -j -4 addr show dev eth0 | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["addr_info"][0]["local"])')
-ros2 run foxglove_bridge foxglove_bridge --ros-args --params-file "$REPO/bridge/config/foxglove.yaml" -p address:="$ip"
-```
-
-Connect Foxglove to `ws://<WSL-eth0-IP>:8765`. The whitelist exposes previews,
-point clouds, GT, TF and state; full-resolution RGB/depth stays on ROS topics.
-Preview scales on the GPU. Subscriptions select full color, metric depth, preview
-and metadata readback separately; no sensor subscriptions means no new GPU captures.
-Changes apply at bundle boundaries and do not free in-flight resources.
-Use `/ets2/ground_truth/{camera}/markers` in a Foxglove 3D panel for boxes; the
-canonical objects remain `vision_msgs/Detection3DArray`. The verified 3.6 bridge
-uses the `foxglove.sdk.v1` WebSocket subprotocol. No desktop UI automation is used.
-
-The TF tree is `world → base_link → cabin → sensors`. `base_link` uses the SDK-time
-physics pose and the nominal powered-axle ground reference. `cabin` incorporates
-the rendered camera parent relative to that pose, including interpolation and
-suspension. Camera and LiDAR mounts are fixed under `cabin`; head motion is excluded.
-
-## Record and replay
-
-Use the same ROS environment for all participants. Initial bags on this machine
-go to the user-approved WSL ext4 directory `~/ets2-data/bags/`. For example:
-
-```bash
-ros2 bag record -s mcap -o ~/ets2-data/bags/run-01 --topics /clock /tf /tf_static /ets2/frame_info /ets2/vehicle/state /ets2/camera/C_FN/image_raw /ets2/camera/C_FN/depth/image_raw /ets2/camera/C_FN/camera_info
-```
-
-Do not use `--use-sim-time` for recording. Stop the live relay and bridge before
-`ros2 bag play ~/ets2-data/bags/run-01`. Do not add `--clock`; the recorded clock is
-the only clock source. Playback consumers use `use_sim_time=true`.
-
-The first live MCAP contained 249 matched image/depth/preview/info/frame/TF samples
-in 24.98 s. Actual Jazzy deserialization confirmed RGB8 1280×720, 32FC1 1280×720,
-JPEG 640×360 and matching sensor stamps. The depth's invalid samples were NaN.
-The subsequent four-camera run delivered 161 of every RGB/depth/preview/info/GT
-message and each of three PointCloud2 topics, with matching frame stamps and no
-relay queue drops. Point clouds contain XYZ, range, beam index, status (0 return,
-1 outside sources, 2 invalid depth, 3 beyond range), source camera slot/pixel and
-angular sampling error. Invalid beams have NaN range/XYZ. These are ideal samples
-of rendered depth, not ray casts; engine visibility omissions still apply.
-
-A full MCAP subsequently contained 79 aligned bundles and was played through
-Jazzy with all 79 image/depth/point/GT/frame/TF messages and all 147 original clock
-messages received. Foxglove WebSocket reception and ROS decoding of preview,
-point cloud, MarkerArray, TF and diagnostics also passed. Attached/articulated
-trailer rendering remains unverified; the current body result is for the FH5
-without a trailer.
-
-A pause-containing MCAP was also replayed at normal speed without a generated
-clock. All 7,214 recorded clocks and 2,129 previews arrived; the 13.26-second pause
-and subsequent 61 sensor frames were preserved. Sensor stamps matched frame_info,
-and the simulation-time consumer's final clock matched the recording.
-
-Core 0.20.4 fixes missing ego body panels by using the engine's full body-part list
-for this rig's views, instead of the subset prepared for the original mirror.
-Both side views show the body and its actual metric depth. This changes submission,
-not the truck model or camera memory, and does not synthesize an occlusion mask.
-Other research callers can opt in with `camera_rig.ego_full_model=true`.
-
-## Capture and relay optimizations (core 0.21.1)
-
-The relay defaults to `shared_gpu: true`. Packed images stay in shared D3D11
-textures; the game signals a fence without waiting. A relay-owned device on the
-same adapter copies them into its staging buffers and reads them on its own
-worker. The fence releases a ring slot only after those GPU copies finish. The
-game still reads the small LiDAR buffers and 16-byte exposure samples. Setting
-`shared_gpu: false` retains the CPU image transport for comparison and diagnosis.
-The relay requires D3D11 Device5/Context4 and shared-fence support; failures end
-the run instead of silently changing its transport. Stop the relay before a DLL
-reload as before. Do not attach a generic OT_Bundles reader to a shared-GPU stream;
-the relay owns its GPU acknowledgement protocol.
-
-Core 0.22.0 claims each capture request at the next camera-selection call, once.
-It captures the resulting passes and checks their actual Present IDs, rather than
-predicting a two-Present window. Four views are still published as one same-frame
-bundle. Uncaptured frames skip sensor submission and compile metadata observation.
-Non-stream rig use requests continuous rendering; private descriptors are not
-rewritten until the preceding graph has consumed them.
-
-New settings use `phase1-highway-private.json` and `phase1-lidar-private.json`,
-with slots `[3,4,6,7]`. The engine's native mirrors 0/1/2/5 keep their cameras and
-output textures. The sensor-only slots use private camera/drawable lookup arrays,
-without editing engine-owned arrays. ROS topic names remain C_FN/C_FW/C_RL/C_RR;
-`camera_id` in the preset separates those names from physical render slots.
-Existing settings are never overwritten by `configure.py`: change `rig`, `lidar`
-and `slots` together when migrating an existing local JSON file.
-
-The high-resolution preset uses 1280×720 front and 960×544 side outputs at the
-current 100% mirror scale (base sizes 1280×720 and 960×540 before engine alignment).
-The front pair is mounted 35 mm outside the actual sunshield_01 face. The previous
-windshield-header mount was behind that accessory, causing the dark near-field
-band once complete ego geometry was restored. The side pair now sits 35 mm
-rearward of the rear-facing mirror housing rim, removing the thin diagonal strip
-beside the tanks while retaining full ego rendering. Restart the Windows relay
-after updating the preset; no DLL rebuild is needed. The new preset is calibrated for
-FH5 4x2/l2h1/LHD/mirror_01/sunshield_01; other body/accessory configurations need
-their own mount fit. The original presets remain available for old experiments.
-
-`auto_exposure: true` is the default. Each camera samples log luminance on the GPU
-and adapts gain in log space (0.7 s brightening, 0.3 s darkening); its three capture
-slots share exposure history. Raw RGB and JPEG use the same gain. Set
-`auto_exposure: false` to use `color_gain` directly. The companion topic
-`/ets2/frame_info/exposure` (`ets2_msgs/FrameExposure`) carries camera names, gain
-and automatic/manual flags with the same stamp and render-frame number. Gain is
-NaN when that camera produced no color output. The original `FrameInfo` message
-is unchanged, preserving previously recorded bag schemas. Rebuild `ets2_msgs`
-and `ets2_bridge` before starting the new relay.
-
-For an unsaturated channel, first decode its stored byte from sRGB to linear
-`s` in [0,1), then use the approximate inverse `linear = s / ((1-s) * gain)`.
-Quantization and clipped/saturated channels prevent exact HDR recovery; retained
-gain is not a replacement for recording raw linear pixels when that is required.
-
-For an uncompressed smaller input, subscribe to each camera's
-`/perception/image_raw` and `/perception/camera_info`. They use half the full
-image width/height and the corresponding scaled calibration. The GPU output is
-shared with JPEG preview, and a perception-only subscriber does not request full
-RGB/depth readback. These raw topics remain outside Foxglove's whitelist.
-
-The ROS receiver reads directly into reusable SerializedMessage buffers. CPU
-RGB conversion uses SSSE3 when available (with a scalar fallback), and LiDAR beam
-directions are reused until their angular configuration changes.
-
-With core 0.22.0, 60-second foreground runs in the same garage measured **77.69
-FPS** with the rig off, **63.88 FPS** with continuous high-resolution sensor
-submission, and **46.35 FPS** with all high-resolution RGB-D/LiDAR/GT outputs.
-Keeping those sensor resolutions but requesting JPEG/LiDAR/GT/TF only measured
-**64.12 FPS** through a ROS consumer (Foxglove UI load not included). Full bridge
-frame p99 was 38.15 ms; the preview topic set was 26.08 ms. Capture failures were
-zero; full-output relay startup dropped two bundles. No game graphics settings
-were raised. See [measurements](../docs/16_ros2_bridge.md) for conditions and limits.
+[센서 프리셋](../docs/14_phase1_highway_sensors.md), [성능과 운영 구성](../docs/18_performance.md), [주요 시행착오](../docs/history/lessons.md).

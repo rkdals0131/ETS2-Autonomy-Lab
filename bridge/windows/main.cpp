@@ -202,7 +202,13 @@ int main(int argc,char** argv) {
     if(WSAStartup(MAKEWORD(2,2),&winsock)) return 1;
     struct WinsockEnd {~WinsockEnd(){WSACleanup();}} end;
     try {
-        if(argc!=2) throw std::runtime_error("Usage: ets2_relay.exe path/to/bridge.local.json");
+        if(argc!=2 && argc!=3) throw std::runtime_error("Usage: ets2_relay.exe path/to/bridge.local.json [stop-event]");
+        Handle stop_event(argc==3?OpenEventA(SYNCHRONIZE,FALSE,argv[2]):nullptr);
+        if(argc==3 && !stop_event.h) throw std::runtime_error("Launcher stop event unavailable");
+        std::jthread stop_watch([&](std::stop_token stop){while(!stop.stop_requested()) {
+            if(stop_event.h && WaitForSingleObject(stop_event.h,100)==WAIT_OBJECT_0) {stopped=true;break;}
+            if(!stop_event.h) std::this_thread::sleep_for(100ms);
+        }});
         const fs::path path=fs::absolute(argv[1]);std::ifstream file(path);json config;file>>config;
         const auto token=config.at("token").get<std::string>();if(token.size()<32) throw std::runtime_error("Missing pairing token");
         std::ifstream preset(path.parent_path()/config.at("rig").get<std::string>());json rig;preset>>rig;
@@ -239,7 +245,7 @@ int main(int argc,char** argv) {
         std::atomic<uint64_t> stream_id{0};
         std::atomic<bool> capture_wanted{welcome.meta.value("capture",true)},capture_active{false};
         std::atomic<std::shared_ptr<const Demand>> demand{std::make_shared<const Demand>()};
-        std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0};Latency latency,copy_time,encode_time,send_time;
+        std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0},received{0},last_ack{0};Latency latency,copy_time,encode_time,send_time;
         LatestQueue<SensorBundle> read_queue;LatestQueue<Packet> send_queue;ReadBuffers read_buffers;
         std::mutex capture_access;
         Workers workers(state,bulk);
@@ -247,7 +253,8 @@ int main(int argc,char** argv) {
             const auto p=receive_packet(state);if(p.meta.at("session")!=session) throw std::runtime_error("Stale control session");
             if(p.meta.contains("demand")) demand.store(std::make_shared<const Demand>(p.meta.at("demand").get<Demand>()));
             if(p.meta.contains("capture")) capture_wanted=p.meta.at("capture").get<bool>();
-            const auto echo=p.meta.value("echo_us",uint64_t{0});if(echo) latency.add(echo);
+            if(p.meta.contains("received_bundles")) received=p.meta.at("received_bundles").get<uint64_t>();
+            const auto echo=p.meta.value("echo_us",uint64_t{0});if(echo) {latency.add(echo);last_ack=ticks();}
         }});
         workers.start([&]{Mapping mapping(false);if(!mapping.available()) throw std::runtime_error("SDK shared state unavailable");
             auto fixed=static_messages(rig,patterns,session);send_packet(state,fixed.meta,fixed.data);
@@ -319,6 +326,8 @@ int main(int argc,char** argv) {
                 previous_demand=*requested;
             }
             if(ticks()-report>=1000) {std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
+                {"session",session},{"wsl_ip",ip},{"capture_active",capture_active.load()},{"demand_topics",requested->size()},
+                {"ros_received_bundles",received.load()},{"ros_ack_age_ms",last_ack.load()?json(ticks()-last_ack.load()):json(nullptr)},
                 {"queue_dropped",dropped.load()},{"status_publish_roundtrip",latency.snapshot()},
                 {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}}.dump()<<std::endl;report=ticks();}
             std::this_thread::sleep_for(20ms);

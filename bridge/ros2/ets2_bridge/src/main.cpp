@@ -132,7 +132,7 @@ int main(int argc,char** argv) {
                             std::lock_guard lock(state_tx);
                             send_packet(state,{{"session",session},{"echo_us",meta.at("ping_us")}});
                         }
-                        else if(meta.contains("messages")) ++received;
+                        else if(!is_state && meta.contains("messages")) ++received;
                     }} catch(const std::exception& e) {if(alive) std::cerr<<e.what()<<std::endl;}
                     stop();
                 };
