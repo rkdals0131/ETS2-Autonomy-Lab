@@ -290,27 +290,43 @@ The new front pair attaches to the sunshield's outer face at model/chassis
 A 35 mm standoff places its shared optical center at
 `[0.000331, 3.012423, -3.143469]`, preserving the narrow/wide camera angles.
 Actual RGB and depth show the band removed; neither front image has depth below
-0.2 m in this stationary sample. The side mounts are unchanged. Their full-size
-images show cabin and fender surfaces. The subsequently identified diagonal gray
-bands are the garage inspection pit's floor border, as confirmed below.
-Attached-trailer coverage still requires a trailer.
+0.2 m in this stationary sample. The following image predates the side mount
+correction described below. Attached-trailer coverage still requires a trailer.
 
 ![Four private sensor images after the front mount correction](images/phase1-private-0.22.0.png)
 
-### Side-view diagonal gray bands: inspection pit border
+### Side-view diagonal strips: mirror housing rim and mount correction
 
-The user identified the bands beside the truck in C_RL/C_RR more precisely.
-Depth backprojection places the band on the garage floor, approximately zero
-height in the chassis frame, rather than on a raised truck panel. The earlier
-ego-body-disabled image already shows the same band around a metal grille.
-An additional private camera, looking down from chassis `[0, 5.2, 1.5]`, reveals
-the complete rectangular inspection pit below the truck: metal grille and tread
-plate inside, gray floor border outside. Its two long sides are the diagonal
-bands in the pod views. They are environment geometry, not an antenna or a
-render artifact, so no masking or rendering change was applied. The temporary
-camera was removed and Tier 0/hooks 0 restored; saved mounts were unchanged.
+The earlier inspection-pit conclusion was incorrect: it examined neighboring
+floor geometry instead of the thin strip reported by the user. The same strip
+appears outdoors. An off/on/off comparison of full ego submission at the original
+mounts isolates it in both C_RL and C_RR. At left pixel `(225,450)`, full ego on
+gives RGB `[77,79,88]` and optical depth **0.104009 m**; with full ego off, the
+pixel shows ground at **4.138608 m**. Right pixel `(734,450)` similarly changes
+from ground at **4.136214 m** to the strip at **0.103985 m**.
 
-![The gray bands surround the garage inspection pit](images/garage-service-pit.png)
+The left ray intersects extracted `mirror_01.pim`, piece 3, material
+`mat_0003_plastic_base`, triangle 2251 at **0.103999 m**, within 0.01 mm of the
+rendered depth. Additional strip pixels match the same plastic rim. This is the
+nearby mirror housing becoming visible after full ego geometry was restored;
+the previous sensor placement put its rearward view through the housing rim.
+
+The private preset now attaches the side pods to the rear-facing rim at accessory
+coordinates `[±1.475, 0.11, 0.119435]`, with a **35 mm rearward bracket** (not an
+offset along the rounded surface normal). In neutral chassis coordinates the
+optical centers are `[±1.475, 2.635850, -2.465390]`. Relative to the old mounts,
+they move 155.8 mm rearward, 9.4 mm inward and 4.7 mm down. Their `base_link`
+positions are `[4.496982, ±1.475, 2.640018]`, with positive y for C_RL. Camera
+angles, FOV and resolution stay the same; cabin attachment still applies.
+
+Actual captures with full ego enabled show the strip removed on both sides while
+retaining the cab, tanks and fenders. Pixels with optical depth below 0.2 m fall
+from 935/937 to **0/0** in this stationary scene. No geometry or image mask was
+used. Side lidar origins follow the updated camera poses. Restart the Windows
+relay to load the new preset; no DLL rebuild is needed. The diagnostic capture
+ended at Tier 0 with zero active hooks.
+
+![C_RL and C_RR before and after moving the pods behind the mirror rim](images/side-mirror-rim-fix.png)
 
 ## Foreground comparison — 2026-10-09
 

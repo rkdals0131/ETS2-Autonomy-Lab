@@ -1,5 +1,5 @@
 {
-  "description": "Volvo FH5 4x2 sleeper: front sunshield_01 outer face and left/right mirror housing mounts with 35 mm standoffs; independent sensor outputs preserve native mirrors",
+  "description": "Volvo FH5 4x2 sleeper: front sunshield_01 outer face and rear-facing mirror housing rims; 35 mm standoffs; independent outputs preserve native mirrors",
   "views": [
     {
       "slot": 3,
@@ -57,9 +57,9 @@
       "mount": "M_PL",
       "basis": "cabin",
       "position_base_link": [
-        4.652793128701049,
-        1.4843929975627195,
-        2.6446900365893216
+        4.496982002425154,
+        1.475,
+        2.6400179123878478
       ],
       "quaternion_wxyz": [
         0.2990585016712216,
@@ -82,9 +82,9 @@
       "mount": "M_PR",
       "basis": "cabin",
       "position_base_link": [
-        4.652793128701049,
-        -1.48439299756272,
-        2.6446900365893216
+        4.496982002425154,
+        -1.475,
+        2.6400179123878478
       ],
       "quaternion_wxyz": [
         0.2990585016712216,

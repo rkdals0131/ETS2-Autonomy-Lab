@@ -160,7 +160,10 @@ The high-resolution preset uses 1280×720 front and 960×544 side outputs at the
 current 100% mirror scale (base sizes 1280×720 and 960×540 before engine alignment).
 The front pair is mounted 35 mm outside the actual sunshield_01 face. The previous
 windshield-header mount was behind that accessory, causing the dark near-field
-band once complete ego geometry was restored. The new preset is calibrated for
+band once complete ego geometry was restored. The side pair now sits 35 mm
+rearward of the rear-facing mirror housing rim, removing the thin diagonal strip
+beside the tanks while retaining full ego rendering. Restart the Windows relay
+after updating the preset; no DLL rebuild is needed. The new preset is calibrated for
 FH5 4x2/l2h1/LHD/mirror_01/sunshield_01; other body/accessory configurations need
 their own mount fit. The original presets remain available for old experiments.
 
