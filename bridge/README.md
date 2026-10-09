@@ -129,6 +129,19 @@ ros2 launch ets2_bridge bridge.launch.py config:="$REPO/bridge/config/bridge.loc
 
 `/ets2/capture` SetBool 서비스로 렌더 수집을 중지·재개합니다. 상태 센서·SDK·clock은 유지됩니다. 서비스 응답은 요청 접수이고 `/diagnostics`의 `capture_active`가 적용 상태입니다. F11 이후에는 릴레이를 다시 시작합니다.
 
+### 처리 단계별 성능 진단
+
+별도 설정 복사본의 `diagnostic_sensor_stage`로 센서 묶음을 처리할 마지막 단계를 선택합니다. 기본값은 `publish`입니다. 모든 단계에서 같은 ROS 구독을 유지하며 상태 전송·소유권·패닉 처리는 계속 동작합니다.
+
+| 값 | 마지막 처리 |
+| --- | --- |
+| gpu_copy | 센서 생성·pack 후 릴레이 GPU staging 복사와 fence 반환. 영상 Map·CPU 복사 생략 |
+| readback | 영상 Map·CPU 복사까지 하고 결과 폐기 |
+| encode | JPEG·ROS CDR 메시지까지 생성하고 결과 폐기 |
+| publish | 실제 TCP 전송·ROS 발행까지 수행하는 일반 실행 |
+
+`publish` 외에는 센서 토픽을 발행하지 않습니다. DLL의 작은 라이다·노출 버퍼 읽기는 모든 수집 단계에서 유지됩니다. 로그의 `consumed_bundles`, `encoded_bundles`, `sent_bundles`, `ros_received_bundles`로 실제 처리 진행을 확인합니다. 종료 뒤 일반 설정으로 실행합니다. [측정 결과](../docs/18_performance.md).
+
 ## 운영 구조
 
 런처는 단일 Windows mutex로 중복 창을 막습니다. Windows Job Object는 릴레이와 WSL 연결 프로세스를, WSL transient systemd unit은 ROS·Foxglove·상태 구독 노드를 소유합니다. Windows heartbeat가 8초 끊기면 WSL 세션도 종료합니다. 중지는 릴레이 정상 종료 → WSL 그룹 종료 → PID·unit 상태 확인 순서입니다.

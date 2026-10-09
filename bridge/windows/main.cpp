@@ -56,6 +56,14 @@ int main(int argc,char** argv) {
             if(!stop_event.h) std::this_thread::sleep_for(100ms);
         }});
         const fs::path path=fs::absolute(argv[1]);std::ifstream file(path);json config;file>>config;
+        const auto sensor_stage=config.value("diagnostic_sensor_stage",std::string("publish"));
+        if(sensor_stage!="gpu_copy" && sensor_stage!="readback" && sensor_stage!="encode" && sensor_stage!="publish")
+            throw std::runtime_error("diagnostic_sensor_stage must be gpu_copy, readback, encode or publish");
+        if(sensor_stage=="gpu_copy" && !config.value("shared_gpu",true))
+            throw std::runtime_error("gpu_copy profiling requires shared_gpu");
+        const bool map_images=sensor_stage!="gpu_copy";
+        const bool encode_sensors=sensor_stage=="encode" || sensor_stage=="publish";
+        const bool publish_sensors=sensor_stage=="publish";
         const auto token=config.at("token").get<std::string>();if(token.size()<32) throw std::runtime_error("Missing pairing token");
         std::ifstream preset(path.parent_path()/config.at("rig").get<std::string>());json rig;preset>>rig;
         const auto truck=command({{"cmd","truck_config"}});
@@ -99,6 +107,7 @@ int main(int argc,char** argv) {
         std::atomic<bool> capture_wanted{welcome.meta.value("capture",true)},capture_active{false};
         std::atomic<std::shared_ptr<const Demand>> demand{std::make_shared<const Demand>()};
         std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0},received{0},last_ack{0};Latency latency,copy_time,encode_time,send_time;
+        std::atomic<uint64_t> consumed{0},encoded{0},encoded_bytes{0};
         LatestQueue<SensorBundle> read_queue;LatestQueue<Packet> send_queue;ReadBuffers read_buffers;
         std::mutex capture_access;
         Workers workers(state,bulk);
@@ -136,17 +145,25 @@ int main(int argc,char** argv) {
                 if(mapping->read(bytes)) {
                     auto bundle=decode_bundle(std::move(bytes));
                     if(bundle.manifest.at("stream_id")==stream_id.load()) {
-                        gpu.read(bundle,mapping->producer());copy_time.add(begin);SensorBundle retired;
-                        if(read_queue.push(std::move(bundle),&retired)) ++dropped;read_buffers.put(std::move(retired.data));
+                        gpu.read(bundle,mapping->producer(),map_images);copy_time.add(begin);++consumed;
+                        if(encode_sensors) {
+                            SensorBundle retired;
+                            if(read_queue.push(std::move(bundle),&retired)) ++dropped;read_buffers.put(std::move(retired.data));
+                        } else read_buffers.put(std::move(bundle.data));
                     } else read_buffers.put(std::move(bundle.data));
                 }}
             access.unlock();std::this_thread::sleep_for(2ms);
         }});
-        workers.start([&]{const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if(FAILED(hr)) throw std::runtime_error("COM worker initialization failed");
+        if(encode_sensors) workers.start([&]{const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if(FAILED(hr)) throw std::runtime_error("COM worker initialization failed");
             struct ComEnd{~ComEnd(){CoUninitialize();}} com;
             Microsoft::WRL::ComPtr<IWICImagingFactory> imaging;
             if(FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging)))) throw std::runtime_error("WIC initialization failed");
-            while(workers.alive) {SensorBundle bundle;if(read_queue.pop(bundle)) {const auto begin=microseconds();auto packet=sensor_messages(bundle,session,*demand.load(),dropped,stream_id,rig,imaging.Get());encode_time.add(begin);read_buffers.put(std::move(bundle.data));if(!packet.data.empty() && send_queue.push(std::move(packet))) ++dropped;}else std::this_thread::sleep_for(2ms);}
+            while(workers.alive) {SensorBundle bundle;if(read_queue.pop(bundle)) {
+                const auto begin=microseconds();auto packet=sensor_messages(bundle,session,*demand.load(),dropped,stream_id,rig,imaging.Get());
+                encode_time.add(begin);read_buffers.put(std::move(bundle.data));
+                if(!packet.data.empty()) {++encoded;encoded_bytes+=packet.data.size();
+                    if(publish_sensors && send_queue.push(std::move(packet))) ++dropped;}
+            }else std::this_thread::sleep_for(2ms);}
         });
         workers.start([&]{uint64_t heartbeat=0;while(workers.alive) {
             Packet packet;if(send_queue.pop(packet)) {if(packet.meta.at("native_stream")!=stream_id.load()) continue;const auto begin=microseconds();send_packet(bulk,packet.meta,packet.data);send_time.add(begin);++sent;bytes_sent+=packet.data.size();heartbeat=ticks();}
@@ -164,6 +181,8 @@ int main(int argc,char** argv) {
             }
             if(ticks()-report>=1000) {std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
                 {"session",session},{"wsl_ip",ip},{"capture_active",capture_active.load()},{"demand_topics",requested->size()},
+                {"diagnostic_sensor_stage",sensor_stage},{"consumed_bundles",consumed.load()},
+                {"encoded_bundles",encoded.load()},{"encoded_bytes",encoded_bytes.load()},
                 {"camera_hz",camera_hz},{"lidar_hz",lidar_hz},
                 {"ros_received_bundles",received.load()},{"ros_ack_age_ms",last_ack.load()?json(ticks()-last_ack.load()):json(nullptr)},
                 {"queue_dropped",dropped.load()},{"status_publish_roundtrip",latency.snapshot()},

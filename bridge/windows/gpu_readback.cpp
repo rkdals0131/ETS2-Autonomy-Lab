@@ -18,7 +18,7 @@ void duplicate(HANDLE process,uint64_t original,Handle& result) {
         throw std::runtime_error("Cannot duplicate shared GPU handle");
 }
 }
-void GpuReadback::read(SensorBundle& bundle,DWORD producer_pid) {
+void GpuReadback::read(SensorBundle& bundle,DWORD producer_pid,bool map_to_cpu) {
     const uint64_t stream=bundle.manifest.at("stream_id");
     if(stream_!=stream) {slots_.clear();stream_=stream;}
     Handle process;
@@ -75,10 +75,13 @@ void GpuReadback::read(SensorBundle& bundle,DWORD producer_pid) {
                 check(device_->CreateTexture2D(&staging,nullptr,&texture.staging),"Create relay staging");id=next;
             }
             const size_t row=texture.desc.Width*size_t{4},height=texture.desc.Height,offset=bundle.data.size();
-            if(offset+row*height>64*1024*1024) throw std::runtime_error("Shared bundle exceeds relay capacity");
-            bundle.data.resize(offset+row*height);
-            bundle.manifest["files"].push_back({{"file",file},{"camera",view.at("camera")},{"offset",offset-bundle.blob_offset},{"length",row*height}});
-            context_->CopyResource(texture.staging.Get(),texture.source.Get());pending.push_back({&texture,offset,row,height});
+            context_->CopyResource(texture.staging.Get(),texture.source.Get());
+            if(map_to_cpu) {
+                if(offset+row*height>64*1024*1024) throw std::runtime_error("Shared bundle exceeds relay capacity");
+                bundle.data.resize(offset+row*height);
+                bundle.manifest["files"].push_back({{"file",file},{"camera",view.at("camera")},{"offset",offset-bundle.blob_offset},{"length",row*height}});
+                pending.push_back({&texture,offset,row,height});
+            }
         }
         // Copy commands precede release on this context. CPU mapping reads our
         // staging, so the producer can already reuse the shared output afterwards.

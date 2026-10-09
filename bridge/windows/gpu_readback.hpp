@@ -17,6 +17,8 @@ class GpuReadback {
     uint64_t stream_=0;
     LUID adapter_{};
 public:
-    void read(SensorBundle& bundle,DWORD producer_pid);
+    // GPU-only profiling still copies and returns the ownership fence, while
+    // omitting staging Map and CPU image storage.
+    void read(SensorBundle& bundle,DWORD producer_pid,bool map_to_cpu=true);
 };
 }
