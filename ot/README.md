@@ -1,6 +1,8 @@
 # ot — 게임 DLL과 개발 도구
 
-core 0.26.1은 독립 카메라·RGB-D·GPU 라이다·차량 GT, SDK 바퀴 측정·실제 적용 입력·기어를 제공합니다. 브리지는 카메라 30 Hz·라이다 10 Hz·표시용 JPEG 10 Hz를 요청합니다. 현재 FH5 프리셋은 슬롯 3·4·6·7을 사용하고 기본 미러 0·1·2·5를 유지합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
+core/loader 0.27.0은 기존 센서에 ROS 조향·가속·제동 명령 연결을 추가합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 기본 권한은 꺼져 있습니다. 현재 설치된 0.26.1 센서 경로는 유지했고 새 입력은 게임에 적용하지 않았습니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api).
+
+브리지는 카메라 30 Hz·라이다 10 Hz·표시용 JPEG 10 Hz를 요청합니다. FH5 프리셋은 슬롯 3·4·6·7을 사용하고 기본 미러 0·1·2·5를 유지합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
 
 ## 빌드와 설치
 
@@ -18,6 +20,8 @@ x64 MSVC Build Tools, CMake·Ninja, 공식 SCS SDK가 필요합니다. `build.cm
 | dist/ot_ipc.dll | Python 프로세스의 shared-memory reader |
 
 최초 설치는 게임을 종료한 상태에서 수행합니다. DX11 실행 후 SDK 알림을 확인하고 운전석으로 들어갑니다. 초기 Tier는 0입니다. 내부 접근에는 `singleplayer_research`, `allow_tier1`, 렌더에는 `allow_render_probe`, 리그에는 `allow_camera_rig` 설정이 필요합니다. 싱글플레이 연구용이며 멀티플레이에서는 플러그인을 제거합니다.
+
+0.27.0의 최초 입력 장치 등록에는 loader 교체 후 게임 재시작이 필요합니다. SDK 입력 콜백은 게임의 `scs_input_shutdown`까지 loader에 남으며 core hot reload로 다시 등록하지 않습니다. ABI 1의 기존 core/loader는 센서 기능을 유지하고 선택적 입력 확장만 건너뜁니다. 설치된 `ot_config.json`의 `allow_drive`·`singleplayer_research`와 활성 프로필의 `drive_controls_path`를 명시적으로 설정해야 arm이 가능합니다. 저장소 기본값은 `allow_drive: false`입니다.
 
 ## 상태·패닉·DLL 교체
 

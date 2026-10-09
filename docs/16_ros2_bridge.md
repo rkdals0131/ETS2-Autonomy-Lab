@@ -6,7 +6,7 @@ Windows C++ 릴레이가 메시지를 생성하고, WSL Jazzy의 GenericPublishe
 
 - Ubuntu eth0 NAT IPv4로 직접 연결합니다. 연결 때 주소를 다시 조회합니다.
 - 대용량 TCP: 영상·깊이·라이다·차량 GT·렌더 TF·frame_info.
-- 상태 TCP: `/clock`, SDK 상태·IMU·휠·GNSS·자차 물리 pose·진단·정적 TF. 역방향은 구독 요구·수집 제어·응답입니다.
+- 상태 TCP: `/clock`, SDK 상태·IMU·휠·GNSS·자차 물리 pose·운전 상태·진단·정적 TF. 역방향은 구독 요구·수집 제어·운전 명령·응답입니다.
 - 두 연결의 worker·큐는 분리하고 상태 TCP에 NODELAY를 적용합니다.
 - Fast-CDR는 XCDRv1·little endian·PLAIN_CDR·serialize_encapsulation을 사용합니다. 헤더는 `00 01 00 00`입니다.
 - Fast DDS SHM은 participant당 128 MiB, 최대 메시지 8 MiB입니다. 브리지·Foxglove·rosbag2에 같은 XML을 적용합니다.
@@ -31,6 +31,8 @@ Windows C++ 릴레이가 메시지를 생성하고, WSL Jazzy의 GenericPublishe
 | /ets2/ground_truth/ego/pose | SDK 시각의 물리 자세 PoseStamped |
 | /ets2/vehicle/state | SDK 시각·속도·입력·벡터 상태 VehicleState |
 | /ets2/vehicle/actuation | 같은 SDK 프레임의 운전자 입력·실제 적용 조향/페달·기어 ActuationState |
+| /ets2/drive/state | owner·epoch·sequence·arm·Windows 유효창·명령·물리입력·실제 적용값 DriveState |
+| /ets2/drive/command | 역방향 normalized 3축 DriveCommand, depth 1 best-effort |
 | /ets2/imu/data_raw | 섀시 고정 IMU, specific force m/s²·각속도 rad/s, orientation 미제공 |
 | /ets2/wheels/state | WheelState: 바퀴 index·rad/s·실제 조향 rad·반지름 m·접지 |
 | /ets2/wheels/odometry | 바퀴 구름 제약으로 적분한 Odometry, wheel_odom 기준, TF 미발행 |
@@ -45,6 +47,8 @@ Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다
 0.23.0부터 VehicleState 각속도는 SDK 회전/초에 2π를 곱한 rad/s입니다. 0.22.0까지 저장한 bag의 `angular_velocity_base_radps`에는 회전/초 값이 들어 있으므로 읽을 때 2π를 곱합니다. 새 bag에 이 보정을 중복 적용하지 않습니다. 센서 계산과 장착 기준은 [추가 센서](17_sensor_expansion.md)에 있습니다.
 
 0.24.0의 ActuationState는 기존 VehicleState와 별도 메시지입니다. 조향은 좌측 양수의 정규화 [-1,1], 페달은 [0,1]이며 누락 값은 NaN입니다. 기어는 양수 전진·0 중립·음수 후진이고 각 available 필드로 미수신을 구분합니다. 적용 브레이크는 페달 제동이며 리타더·엔진·주차브레이크를 포함하지 않습니다. [런처 기록·재생](../bridge/README.md#기록과-재생).
+
+`/ets2/drive/control`은 `ets2_msgs/srv/DriveControl`의 명시적 arm/disarm 서비스입니다. 기존 관측 메시지는 유지합니다. [운전 명령 계약과 사용 예](../bridge/README.md#운전-명령-api).
 
 ## 수집과 노출
 

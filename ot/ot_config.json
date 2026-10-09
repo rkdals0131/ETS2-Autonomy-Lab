@@ -2,6 +2,8 @@
   "allow_tier1": false,
   "allow_render_probe": false,
   "allow_camera_rig": false,
+  "allow_drive": false,
+  "drive_controls_path": "",
   "singleplayer_research": false,
   "initial_tier": 0,
   "panic_virtual_key": 122,

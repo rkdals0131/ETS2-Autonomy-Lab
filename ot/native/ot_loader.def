@@ -2,3 +2,5 @@ LIBRARY ot_loader
 EXPORTS
     scs_telemetry_init
     scs_telemetry_shutdown
+    scs_input_init
+    scs_input_shutdown

@@ -11,6 +11,25 @@
 #include <cmath>
 
 namespace ot {
+static const OtDriveHost* input_host{};
+static json drive_status(OtDriveStatus status) {
+    const char* reasons[]={"disabled","disarmed","armed","command","expired","manual","paused","panic","disconnected","unloaded","input_unavailable","profile_unsupported"};
+    return {{"available",bool(status.available)},{"permitted",bool(status.permitted)},{"profile_supported",bool(status.profile_supported)},
+        {"armed",bool(status.armed)},{"active",bool(status.active)},{"reason",reasons[static_cast<size_t>(status.reason)]},
+        {"owner",status.owner},{"epoch",status.epoch},{"sequence",status.sequence},{"deadline_ms",status.deadline_ms},
+        {"command_window_ms",status.command_window_ms},{"steering",status.steering},{"throttle",status.throttle},{"brake",status.brake},
+        {"manual_steering",status.manual_steering},{"manual_throttle",status.manual_throttle},{"manual_brake",status.manual_brake},{"error",status.error}};
+}
+static json current_drive() {
+    OtDriveStatus status;const OtDriveRequest request{};
+    if(input_host) input_host->request(input_host->context,&request,&status);
+    return drive_status(status);
+}
+static void configure_drive(const json& settings) {
+    if(!input_host) return;
+    const auto path=settings.value("drive_controls_path",std::string{});
+    input_host->configure(input_host->context,settings.value("allow_drive",false) && settings.value("singleplayer_research",false),path.c_str());
+}
 class Runtime;
 struct Channel {
     Runtime* owner; std::string name; scs_value_type_t type;
@@ -68,6 +87,7 @@ void Runtime::initialize() {
     const auto directory=module_path(module).parent_path();
     std::ifstream input(directory/L"ot_config.json");
     if(input) {input>>config_;if(!config_.is_object()) throw std::runtime_error("ot_config.json must be an object");}
+    configure_drive(config_);
     int initial=config_.value("initial_tier",0),key=config_.value("panic_virtual_key",VK_F11);
     if(initial<0 || initial>1 || key<1 || key>254) throw std::runtime_error("Invalid initial_tier or panic_virtual_key");
     allow_tier1_=config_.value("allow_tier1",false) && config_.value("singleplayer_research",false);
@@ -102,6 +122,7 @@ void Runtime::initialize() {
     if(api_.common.log) api_.common.log(SCS_LOG_TYPE_message,"[ot_core] SDK plugin ready; local pipe \\\\.\\pipe\\ot");
 }
 bool Runtime::shutdown() noexcept {
+    if(input_host) input_host->release(input_host->context,OtDriveReason::unloaded);
     tier_=0;
     for(auto event:events_) api_.unregister_from_event(event);
     events_.clear();
@@ -126,6 +147,7 @@ bool Runtime::shutdown() noexcept {
 void Runtime::panic() noexcept {
     try {
         std::lock_guard lock(control_);
+        if(input_host) input_host->release(input_host->context,OtDriveReason::panic);
         lease_.clear();lease_deadline_=0;
         tier_=0;
         if(render_probe_) render_probe_->disable();
@@ -208,7 +230,7 @@ void Runtime::event(scs_event_t event,const void* data) {
             {"render_frame_id",nullptr},{"render_coherent",false},{"paused",paused_},
             {"render_time_us",clock_.render_time},{"simulation_time_us",clock_.simulation_time},
             {"paused_simulation_time_us",clock_.paused_simulation_time},{"timer_flags",clock_.flags},
-            {"tier",tier_.load()},{"sdk",values_}};
+            {"tier",tier_.load()},{"sdk",values_},{"drive",current_drive()}};
         if(tier_>=1 && !paused_) state["engine"]=engine_snapshot();
         if(tier_==0) state.erase("engine");
         auto stored=std::make_shared<const json>(std::move(state));
@@ -221,6 +243,7 @@ json Runtime::reload_permissions() {
     // Only the pipe worker calls this after initialization. Engine callbacks
     // consume the atomic tier; permissions never grant a higher tier implicitly.
     panic();allow_tier1_=false;allow_render_probe_=false;allow_camera_rig_=false;
+    configure_drive(json::object());
     std::ifstream input(module_path(module).parent_path()/L"ot_config.json");
     if(!input) throw std::runtime_error("Cannot open ot_config.json; returned to Tier 0");
     json settings;input>>settings;
@@ -228,6 +251,7 @@ json Runtime::reload_permissions() {
     allow_tier1_=settings.value("allow_tier1",false) && settings.value("singleplayer_research",false);
     allow_render_probe_=settings.value("allow_render_probe",false);
     allow_camera_rig_=settings.value("allow_camera_rig",false);
+    configure_drive(settings);
     log("Permissions reloaded; tier=0, allow_tier1="+std::to_string(allow_tier1_));
     return {{"tier",0},{"internal_access_allowed",gate_ok_ && allow_tier1_},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_}};
@@ -297,12 +321,38 @@ json Runtime::command(const json& request) {
         return {{"active",action!="release"},{"expires_in_ms",5000}};
     }
     if(cmd=="ping") return {{"plugin","ot_core"},{"pid",GetCurrentProcessId()}};
+    if(cmd=="drive") {
+        const auto action=request.value("action",std::string("status"));
+        if(action=="status") return current_drive();
+        std::lock_guard lock(control_);require_owner();
+        if(lease_.empty()) throw std::runtime_error("Driving requires an active bridge lease");
+        if(!input_host) throw std::runtime_error("Restart the game with the input-capable resident loader");
+        if(action=="disconnect") {input_host->release(input_host->context,OtDriveReason::disconnected);return current_drive();}
+        const auto driver=request.at("drive_owner").get<std::string>();
+        if(driver.empty() || driver.size()>128 || driver.find('\0')!=std::string::npos) throw std::runtime_error("Invalid driving owner");
+        OtDriveRequest decoded;decoded.owner=driver.c_str();
+        if(action=="arm") decoded.action=OtDriveAction::arm;
+        else if(action=="disarm") decoded.action=OtDriveAction::disarm;
+        else if(action=="command") decoded.action=OtDriveAction::command;
+        else throw std::runtime_error("Unknown driving action");
+        if(action!="arm") decoded.epoch=request.at("epoch").get<uint64_t>();
+        if(action=="command") {
+            decoded.sequence=request.at("sequence").get<uint64_t>();decoded.deadline_ms=request.at("deadline_ms").get<uint64_t>();
+            decoded.steering=request.at("steering").get<float>();decoded.throttle=request.at("throttle").get<float>();decoded.brake=request.at("brake").get<float>();
+            if(!std::isfinite(decoded.steering)||!std::isfinite(decoded.throttle)||!std::isfinite(decoded.brake)||
+               std::abs(decoded.steering)>1 || decoded.throttle<0 || decoded.throttle>1 || decoded.brake<0 || decoded.brake>1)
+                throw std::runtime_error("Driving axes must be finite steering [-1,1], pedals [0,1]");
+        }
+        OtDriveStatus status;const bool accepted=input_host->request(input_host->context,&decoded,&status);
+        auto result=drive_status(status);result["accepted"]=accepted;return result;
+    }
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","capture_mirrors","stream","manual_dump","panic"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","capture_mirrors","stream","manual_dump","panic","drive"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
-        {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0},
+        {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false)},
+        {"drive",current_drive()},
         {"field_writes",false},{"camera_rig",render_probe_->camera_rig(json::object())},{"channels",*registered_.load()}};
     if(cmd=="schema") return schema_;
     if(cmd=="truck_config") {
@@ -466,6 +516,7 @@ SCSAPI_VOID scs_telemetry_shutdown() {
     if(!module_stop()) ot::runtime.release();
 }
 extern "C" __declspec(dllexport) const OtModuleApi* SCSAPIFUNC ot_get_module_api(uint32_t abi) {
-    static const OtModuleApi api{1,sizeof(OtModuleApi),OT_VERSION,scs_telemetry_init,module_stop};
+    static const OtModuleApi api{1,sizeof(OtModuleApi),OT_VERSION,scs_telemetry_init,module_stop,
+        [](const OtDriveHost* host){ot::input_host=host && host->abi==1 && host->size>=sizeof(OtDriveHost) && host->configure && host->request && host->release?host:nullptr;}};
     return abi==api.abi?&api:nullptr;
 }

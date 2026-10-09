@@ -1,10 +1,14 @@
 #include "wire.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <ets2_msgs/msg/drive_command.hpp>
+#include <ets2_msgs/srv/drive_control.hpp>
 #include <ifaddrs.h>
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <condition_variable>
+#include <cmath>
 #include <thread>
 #include <unordered_map>
 
@@ -44,6 +48,33 @@ int main(int argc,char** argv) {
     rclcpp::init(argc,argv);
     try {
         auto node=std::make_shared<rclcpp::Node>("ets2_bridge");
+        std::mutex drive_mutex;std::condition_variable drive_reply;
+        bool drive_connected=false;uint64_t request_id=0,pending_id=0;
+        json control_request=nullptr,command_request=nullptr,control_reply=nullptr;
+        const auto valid_owner=[](const std::string& owner) {return !owner.empty() && owner.size()<=128 && owner.find('\0')==std::string::npos;};
+        auto drive_service=node->create_service<ets2_msgs::srv::DriveControl>("/ets2/drive/control",
+            [&](const ets2_msgs::srv::DriveControl::Request::SharedPtr request,ets2_msgs::srv::DriveControl::Response::SharedPtr response) {
+                std::unique_lock lock(drive_mutex);
+                if(!valid_owner(request->owner) || !drive_connected) {response->message="Invalid owner or Windows relay disconnected";return;}
+                pending_id=++request_id;control_reply=nullptr;command_request=nullptr;
+                control_request={{"id",pending_id},{"action",request->arm?"arm":"disarm"},{"drive_owner",request->owner},{"epoch",request->epoch}};
+                drive_reply.wait_for(lock,500ms,[&]{return !control_reply.is_null() || !drive_connected;});
+                if(control_reply.is_null()) response->message="Driving request timed out or disconnected";
+                else {response->success=control_reply.value("accepted",false);
+                    response->message=control_reply.value("error",std::string{});
+                    if(control_reply.contains("state")) {const auto& state=control_reply.at("state");response->epoch=state.at("epoch").get<uint64_t>();
+                        if(response->message.empty()) response->message=state.value("error",std::string{});
+                        if(response->message.empty()) response->message=state.at("reason").get<std::string>();}}
+                pending_id=0;control_request=nullptr;
+            });
+        auto command_subscription=node->create_subscription<ets2_msgs::msg::DriveCommand>("/ets2/drive/command",rclcpp::QoS(1).best_effort(),
+            [&](const ets2_msgs::msg::DriveCommand::SharedPtr command) {
+                if(!valid_owner(command->owner) || !std::isfinite(command->steering) || !std::isfinite(command->throttle) || !std::isfinite(command->brake) ||
+                   std::abs(command->steering)>1 || command->throttle<0 || command->throttle>1 || command->brake<0 || command->brake>1) return;
+                std::lock_guard lock(drive_mutex);if(!drive_connected) return;
+                command_request={{"id",++request_id},{"action","command"},{"drive_owner",command->owner},{"epoch",command->epoch},{"sequence",command->sequence},
+                    {"deadline_ms",command->command_window_ms},{"steering",command->steering},{"throttle",command->throttle},{"brake",command->brake}};
+            });
         std::atomic<bool> capture_enabled{true};
         auto capture_service=node->create_service<std_srvs::srv::SetBool>("/ets2/capture",
             [&](const std_srvs::srv::SetBool::Request::SharedPtr request,std_srvs::srv::SetBool::Response::SharedPtr response) {
@@ -123,11 +154,15 @@ int main(int argc,char** argv) {
                     throw std::runtime_error("Bulk pairing rejected");
                 std::atomic<bool> alive{true};
                 std::atomic<uint64_t> received{0};std::mutex state_tx;
-                auto stop=[&]{alive=false;state.interrupt();bulk.interrupt();};
+                {std::lock_guard lock(drive_mutex);drive_connected=true;command_request=nullptr;control_request=nullptr;}
+                auto stop=[&]{alive=false;state.interrupt();bulk.interrupt();
+                    {std::lock_guard lock(drive_mutex);drive_connected=false;command_request=nullptr;control_request=nullptr;}drive_reply.notify_all();};
                 auto receive=[&](const Socket& socket,bool is_state) {
                     std::vector<rclcpp::SerializedMessage> storage;
                     try {while(alive && rclcpp::ok()) {
                         auto meta=receive_publish(socket,is_state,session,storage);
+                        if(is_state && meta.contains("drive_reply")) {std::lock_guard lock(drive_mutex);
+                            const auto& reply=meta.at("drive_reply");if(pending_id && reply.at("id").get<uint64_t>()==pending_id) {control_reply=reply;drive_reply.notify_all();}}
                         if(is_state && meta.contains("ping_us")) {
                             std::lock_guard lock(state_tx);
                             send_packet(state,{{"session",session},{"echo_us",meta.at("ping_us")}});
@@ -139,11 +174,19 @@ int main(int argc,char** argv) {
                 std::jthread state_rx([&]{receive(state,true);});
                 std::jthread bulk_rx([&]{receive(bulk,false);});
                 try {
+                    auto last_demand=std::chrono::steady_clock::now()-200ms;
                     while(alive && rclcpp::ok()) {
-                        json demand=json::array();
-                        for(const auto& [name,p]:pubs) if(p.publisher->get_subscription_count()>0) demand.push_back(name);
-                        {std::lock_guard lock(state_tx);send_packet(state,{{"session",session},{"demand",demand},{"capture",capture_enabled.load()},{"received_bundles",received.load()}});}
-                        std::this_thread::sleep_for(200ms);
+                        json outgoing={{"session",session}};bool send=false;
+                        if(std::chrono::steady_clock::now()-last_demand>=200ms) {
+                            json demand=json::array();for(const auto& [name,p]:pubs) if(p.publisher->get_subscription_count()>0) demand.push_back(name);
+                            outgoing["demand"]=demand;outgoing["capture"]=capture_enabled.load();outgoing["received_bundles"]=received.load();
+                            last_demand=std::chrono::steady_clock::now();send=true;
+                        }
+                        {std::lock_guard lock(drive_mutex);
+                            if(!control_request.is_null()) {outgoing["drive_request"]=std::move(control_request);control_request=nullptr;send=true;}
+                            else if(!command_request.is_null()) {outgoing["drive_request"]=std::move(command_request);command_request=nullptr;send=true;}}
+                        if(send) {std::lock_guard lock(state_tx);send_packet(state,outgoing);}
+                        std::this_thread::sleep_for(10ms);
                     }
                 } catch(const std::exception& e) {std::cerr<<e.what()<<std::endl;}
                 stop(); // Both receivers unblock before the sockets and publishers can be destroyed.

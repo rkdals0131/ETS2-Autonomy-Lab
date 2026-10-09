@@ -1,6 +1,7 @@
 #include "ot.hpp"
 #include "module_api.hpp"
 #include "build_identity.hpp"
+#include "input_device.hpp"
 #include <map>
 #include <stdexcept>
 
@@ -61,7 +62,7 @@ void Loader::start() {
             throw std::runtime_error("Loader SDK event registration failed");
         subscriptions_.emplace(id,Subscription{});
     }
-    transport_=std::make_unique<Transport>([this](const json& r){return command(r);},[]{},0,L"\\\\.\\pipe\\ot_loader");
+    transport_=std::make_unique<Transport>([this](const json& r){return command(r);},[]{input_release(OtDriveReason::panic);},VK_F11,L"\\\\.\\pipe\\ot_loader");
     transport_->start(false);
     std::lock_guard lock(mutex_);
     try {load();}
@@ -93,8 +94,8 @@ void SCSAPIFUNC Loader::event(scs_event_t id,const void* data,scs_context_t cont
     catch(...) {log("Loader SDK event failed");}
 }
 void Loader::on_event(scs_event_t id,const void* data) {
-    if(id==SCS_TELEMETRY_EVENT_started) paused_=false;
-    if(id==SCS_TELEMETRY_EVENT_paused) paused_=true;
+    if(id==SCS_TELEMETRY_EVENT_started) {paused_=false;input_pause(false);}
+    if(id==SCS_TELEMETRY_EVENT_paused) {paused_=true;input_pause(true);}
     if(id==SCS_TELEMETRY_EVENT_configuration && data) {
         const auto& source=*static_cast<const scs_telemetry_configuration_t*>(data);
         std::vector<ConfigField> fields;
@@ -140,10 +141,11 @@ void Loader::load() {
         const auto get=reinterpret_cast<OtGetModuleApi>(GetProcAddress(payload_,"ot_get_module_api"));
         if(!get) throw std::runtime_error("Module does not export ot_get_module_api");
         const auto candidate=get(1);
-        if(!candidate || candidate->abi!=1 || candidate->size<sizeof(OtModuleApi) || !candidate->initialize || !candidate->stop || !candidate->version)
+        if(!candidate || candidate->abi!=1 || candidate->size<ot_module_v1_prefix || !candidate->initialize || !candidate->stop || !candidate->version)
             throw std::runtime_error("Unsupported module ABI");
         api_=candidate;
         module_version_=api_->version;
+        if(api_->size>=sizeof(OtModuleApi) && api_->attach_drive) api_->attach_drive(drive_host());
         const auto result=api_->initialize(version_,&bridge_);
         if(result!=SCS_RESULT_ok) throw std::runtime_error("Module initialization failed: "+std::to_string(result));
         // SDK configuration is normally sent only after real plugin init. Own
@@ -182,6 +184,7 @@ void Loader::load() {
     }
 }
 void Loader::unload() {
+    input_release(OtDriveReason::unloaded);
     if(!payload_) return;
     state_="unloading";
     if(api_ && !api_->stop()) {
@@ -253,3 +256,5 @@ SCSAPI_RESULT scs_telemetry_init(scs_u32_t version,const scs_telemetry_init_para
     } catch(const std::exception& e) {ot::active_loader=nullptr;ot::log(std::string("Loader initialization failed: ")+e.what());return SCS_RESULT_generic_error;}
 }
 SCSAPI_VOID scs_telemetry_shutdown() {ot::loader.reset();ot::active_loader=nullptr;}
+SCSAPI_RESULT scs_input_init(scs_u32_t version,const scs_input_init_params_t* params) {return ot::input_initialize(version,params);}
+SCSAPI_VOID scs_input_shutdown() {ot::input_shutdown();}

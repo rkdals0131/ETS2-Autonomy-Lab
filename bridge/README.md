@@ -93,13 +93,84 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 
 인지용 영상은 카메라 주기를 따르고 JPEG 미리보기는 `preview_hz`를 따릅니다. 표시용 점군은 XYZ·range만 전달하며 전체 점군에서 선택한 빔의 값을 그대로 사용합니다. 기존 Foxglove 레이아웃의 점군 토픽을 `/preview/points`로 바꾸면 표시 비용이 줄어듭니다. 원본 점군의 필드·10 Hz 주기는 유지됩니다.
 
+## 운전 명령 API
+
+0.27.0은 공식 SCS Input SDK에 `ot_drive` 가상 3축 장치를 등록합니다. 사람의 키보드/Xbox 바인딩을 유지하면서 컴퓨터가 횡방향 조향과 종방향 가속·제동을 보냅니다. 조향은 정규화 위치 입력이며 FFB나 조향 토크 제어는 구현하지 않았습니다. 현재는 오프라인 빌드·소유권/만료/수동 해제 검사까지 확인했고 게임 적용 시험은 남아 있습니다.
+
+최초 등록은 정상 게임 종료 → 새 loader/core 설치 → 게임 재시작 순서입니다. SDK는 input init 때만 장치를 등록하므로 기존 loader의 hot reload로 추가할 수 없습니다. 설치된 `ot_runtime/ot_config.json`에서 `allow_drive: true`, `singleplayer_research: true`, 활성 `controls.sii`의 절대 경로 `drive_controls_path`를 설정합니다. 저장소 기본 권한은 꺼져 있으며 센서 설정과 사용자 controls.sii는 바꾸지 않습니다.
+
+| 창구 | 계약 |
+| --- | --- |
+| `/ets2/drive/control` | `DriveControl` 서비스: owner, arm, epoch → success, message, epoch |
+| `/ets2/drive/command` | `DriveCommand`: owner, epoch, 증가하는 sequence, command_window_ms, steering/throttle/brake |
+| `/ets2/drive/state` | `DriveState`: 활성/해제 이유, owner·epoch·마지막 승인 sequence, 유효창, 명령·물리입력·SDK 적용값 |
+
+steering은 **왼쪽 양수 [-1,1]**, throttle/brake는 **[0,1]**입니다. 현재 프로필의 steering mix가 semantical 값을 빼므로 SDK 장치에는 steering의 부호를 뒤집어 내보냅니다. 기존 `/ets2/vehicle/actuation`의 단위·부호는 유지합니다. applied 값은 게임의 effective 입력 관측이며 명령을 복사한 값이 아닙니다. 게임 입력 처리 순서에 따른 적용 지연은 게임 시험에서 확인합니다.
+
+arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기다립니다. Command의 `command_window_ms`는 **Windows monotonic clock의 절대 만료 시각(ms)**이며 duration·ROS stamp가 아닙니다. 최신 DriveState에서 받은 값을 그대로 복사합니다. DDS/TCP/pipe에서 지연된 명령에 새 수명을 붙이지 않으며, 이전 epoch·반복 sequence·만료된 명령은 거절합니다. owner는 식별자이며 기존 TCP pairing token과 로컬 pipe ACL을 대신하지 않습니다.
+
+명령 만료·물리 조작·F11·pause·SDK 입력 비활성·core unload·통신 단절은 arm을 해제합니다. resume/reconnect는 다시 arm하지 않습니다. F11은 bridge lease도 취소하므로 런처를 명시적으로 재시작합니다. SDK 한 입력 프레임의 세 축은 같은 snapshot이며 해제는 다음 입력 프레임의 세 축 0으로 반영합니다. 렌더 수집 on/off와 운전 arm은 독립입니다.
+
+수동 해제는 현재 프로필의 A/Left·D/Right·W/Up·S/Down 및 `joy.x/rt/lt`를 직접 읽습니다. controls.sii의 deadzone·축 변환을 적용하고, 반대 키나 키보드/패드가 서로 상쇄돼도 각 물리 source의 활동을 보고 해제합니다. pad 부재는 프로필의 `?0` fallback대로 중립이며 키보드 조작은 유지합니다. pad 연결 변화는 arm을 해제하고 읽기 오류·지원하지 않는 binding에서는 arm을 허용하지 않습니다. 프로필 변경은 권한 재읽기 또는 재시작으로 반영합니다. `xinput_gamepad_1`을 Windows index 0으로 대응시킨 것은 추론이며, 첫 게임 시험에서 disarmed 상태로 stick/RT/LT와 게임 입력을 deadzone 양쪽에서 대조해야 합니다.
+
+CLI `topic pub --once`는 새 노드 발견 지연으로 200 ms 창을 놓칠 수 있습니다. 이미 연결된 노드에서 상태의 창을 받아 명령을 발행합니다. 다음 예는 **3초 동안 중립값만** 전송하며 실행 전에 새 장치 설치·권한·물리입력 대조가 필요합니다. 게임에 이 예를 실행한 검증은 아직 하지 않았습니다.
+
+```python
+import time
+import rclpy
+from ets2_msgs.msg import DriveCommand, DriveState
+from ets2_msgs.srv import DriveControl
+
+rclpy.init()
+node = rclpy.create_node('drive_neutral_example')
+latest = [None]
+sub = node.create_subscription(DriveState, '/ets2/drive/state',
+                               lambda state: latest.__setitem__(0, state), 1)
+pub = node.create_publisher(DriveCommand, '/ets2/drive/command', 1)
+service = node.create_client(DriveControl, '/ets2/drive/control')
+epoch = 0
+try:
+    if not service.wait_for_service(timeout_sec=5):
+        raise RuntimeError('Driving service unavailable')
+    ready_until = time.monotonic() + 5
+    while (latest[0] is None or pub.get_subscription_count() == 0) and time.monotonic() < ready_until:
+        rclpy.spin_once(node, timeout_sec=0.05)
+    if latest[0] is None or pub.get_subscription_count() == 0:
+        raise RuntimeError('Driving state/command connection unavailable')
+    future = service.call_async(DriveControl.Request(owner='neutral_example', arm=True))
+    rclpy.spin_until_future_complete(node, future, timeout_sec=1)
+    result = future.result()
+    if result is None or not result.success:
+        raise RuntimeError(result.message if result else 'Arm timed out')
+    epoch = result.epoch
+    sequence = 0
+    end = time.monotonic() + 3
+    while time.monotonic() < end:
+        rclpy.spin_once(node, timeout_sec=0.02)
+        state = latest[0]
+        if state.epoch != epoch:
+            continue  # Wait for the first state of this explicit arm.
+        if not state.armed:
+            break
+        sequence += 1
+        pub.publish(DriveCommand(owner='neutral_example', epoch=epoch,
+                    sequence=sequence, command_window_ms=state.command_window_ms,
+                    steering=0.0, throttle=0.0, brake=0.0))
+finally:
+    if epoch:
+        future = service.call_async(DriveControl.Request(owner='neutral_example', arm=False, epoch=epoch))
+        rclpy.spin_until_future_complete(node, future, timeout_sec=1)
+    node.destroy_node()
+    rclpy.shutdown()
+```
+
 ## 기록과 재생
 
 런처에서 브리지를 **시작**하고 연결이 확인되면 기록 종류를 선택해 **기록 시작**을 누릅니다.
 
 | 기록 종류 | 내용·저장 위치 |
 | --- | --- |
-| 차량 상태 (소용량) | 조작·기어·속도·자세·IMU·휠·GNSS·시계·센서 구성·진단. 기본 bridge/recordings/<run>/bag |
+| 차량 상태 (소용량) | 운전 명령·승인/해제 상태·조작·기어·속도·자세·IMU·휠·GNSS·시계·센서 구성·진단. 기본 bridge/recordings/<run>/bag |
 | 영상·라이다 포함 | 차량 상태 + 4뷰 JPEG·보정값·3라이다·차량 GT·렌더 TF·프레임 대응. sensor_recording_root 지정 필요 |
 
 두 종류 모두 원본 RGB·depth는 구독하지 않습니다. 상태 기록만 켜면 카메라 수집을 요구하지 않습니다. 영상·점군의 실제 수신 여부는 선택한 슬롯과 센서 구성에 따릅니다.

@@ -13,7 +13,7 @@ import yaml
 
 
 STATE_TOPICS = [
-    "/clock", "/tf_static", "/ets2/vehicle/state", "/ets2/vehicle/actuation",
+    "/clock", "/tf_static", "/ets2/vehicle/state", "/ets2/vehicle/actuation", "/ets2/drive/state", "/ets2/drive/command",
     "/ets2/ground_truth/ego/pose", "/ets2/imu/data_raw", "/ets2/wheels/state",
     "/ets2/wheels/odometry", "/ets2/gnss/fix", "/ets2/sensors/config", "/diagnostics",
 ]

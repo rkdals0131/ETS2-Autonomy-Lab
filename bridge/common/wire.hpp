@@ -135,6 +135,7 @@ inline std::vector<Topic> topics() {
         {"/clock","rosgraph_msgs/msg/Clock",true},
         {"/ets2/vehicle/state","ets2_msgs/msg/VehicleState",true},
         {"/ets2/vehicle/actuation","ets2_msgs/msg/ActuationState",true},
+        {"/ets2/drive/state","ets2_msgs/msg/DriveState",true},
         {"/ets2/imu/data_raw","sensor_msgs/msg/Imu",true},
         {"/ets2/wheels/state","ets2_msgs/msg/WheelState",true},
         {"/ets2/wheels/odometry","nav_msgs/msg/Odometry",true},

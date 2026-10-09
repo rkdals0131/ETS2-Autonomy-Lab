@@ -95,6 +95,7 @@ int main(int argc,char** argv) {
         owned({{"cmd","tier"},{"value",1}});
         StateSource source(vehicle,config);
         const auto run=[&](double remaining) {
+        struct DriveEnd {std::function<json(json)> control;~DriveEnd(){try{control({{"cmd","drive"},{"action","disconnect"}});}catch(...) {}}} drive_end{owned};
         const auto session=uuid_string();
         const auto ip=wsl_address();std::cout<<"WSL direct IP "<<ip<<"; session "<<session<<std::endl;
         auto state=connect_to(ip,config.value("state_port",17401),true),bulk=connect_to(ip,config.value("bulk_port",17400),false);
@@ -114,16 +115,24 @@ int main(int argc,char** argv) {
         std::atomic<uint64_t> consumed{0},encoded{0},encoded_bytes{0};
         LatestQueue<SensorBundle> read_queue;LatestQueue<Packet> send_queue;ReadBuffers read_buffers;
         std::mutex capture_access;
+        std::mutex state_tx;
+        const auto state_send=[&](const json& meta,std::span<const uint8_t> bytes=std::span<const uint8_t>{}) {std::lock_guard lock(state_tx);send_packet(state,meta,bytes);};
         Workers workers(state,bulk);
         workers.start([&]{while(workers.alive) {
             const auto p=receive_packet(state);if(p.meta.at("session")!=session) throw std::runtime_error("Stale control session");
             if(p.meta.contains("demand")) demand.store(std::make_shared<const Demand>(p.meta.at("demand").get<Demand>()));
             if(p.meta.contains("capture")) capture_wanted=p.meta.at("capture").get<bool>();
+            if(p.meta.contains("drive_request")) {
+                const auto& incoming=p.meta.at("drive_request");json reply={{"id",incoming.at("id")},{"accepted",false}};
+                try {auto request=incoming;request.erase("id");request["cmd"]="drive";reply["state"]=owned(std::move(request));reply["accepted"]=reply["state"].value("accepted",false);}
+                catch(const std::exception& e) {reply["error"]=e.what();}
+                state_send({{"session",session},{"drive_reply",reply}});
+            }
             if(p.meta.contains("received_bundles")) received=p.meta.at("received_bundles").get<uint64_t>();
             const auto echo=p.meta.value("echo_us",uint64_t{0});if(echo) {latency.add(echo);last_ack=ticks();}
         }});
         workers.start([&]{
-            auto fixed=static_messages(rig,patterns,session,config);add_sensor_configuration(fixed,source.configuration());send_packet(state,fixed.meta,fixed.data);
+            auto fixed=static_messages(rig,patterns,session,config);add_sensor_configuration(fixed,source.configuration());state_send(fixed.meta,fixed.data);
             uint64_t diagnostic_time=0,last_stamp=0,last_frame=0,last_send=0,last_gnss_us=0;
             while(workers.alive) {Packet packet{{{"session",session}}, {}};
                 if(const auto sample=source.latest()) {
@@ -138,7 +147,7 @@ int main(int argc,char** argv) {
                     {"queue_dropped",dropped.load()},{"capture_active",capture_active.load()},{"status_publish_roundtrip",latency.snapshot()},
                     {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}});diagnostic_time=ticks();}
                 if(!packet.data.empty() || ticks()-last_send>=20) {
-                    packet.meta["ping_us"]=microseconds();send_packet(state,packet.meta,packet.data);last_send=ticks();
+                    packet.meta["ping_us"]=microseconds();state_send(packet.meta,packet.data);last_send=ticks();
                 }
                 std::this_thread::sleep_for(2ms);}
         });

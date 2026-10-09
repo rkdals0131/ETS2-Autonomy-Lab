@@ -10,7 +10,7 @@ Windows C++ 릴레이
   ├─ StateSource → MotionSensors → 상태 CDR
   ├─ RenderCapture → GPU readback → 영상·라이다 CDR·JPEG
   ├─ 대용량 TCP: 영상·라이다·GT·렌더 TF·frame_info
-  └─ 상태 TCP: SDK·IMU·휠·GNSS·clock·진단 / 역방향 구독·수집 제어
+  └─ 상태 TCP: SDK·IMU·휠·GNSS·clock·진단 / 역방향 구독·수집·운전 제어
                          ↓ Ubuntu eth0 NAT 직접 주소
 WSL ROS 2 Jazzy
   GenericPublisher → Fast DDS SHM → 소비자·rosbag2
@@ -25,6 +25,8 @@ Windows 런처 → WSL ROS/Foxglove 소유 그룹 + Windows 릴레이
 - 메타로더가 SDK 플러그인으로 상주하고 기능 DLL을 교체합니다.
 - DLL의 lease는 한 클라이언트가 내부 읽기·리그·수집을 소유하게 합니다. 소유자가 사라지면 5초 뒤 Tier 0으로 복귀합니다.
 - F11은 lease를 취소합니다. 재시작은 사용자 조작으로 수행합니다.
+- 운전은 별도 단일 owner/arm epoch를 사용합니다. ROS → 기존 상태 TCP → core의 bridge lease → loader의 공식 SDK 가상 3축으로 전달합니다. owner 이름은 인증 토큰이 아니며 기존 TCP pairing과 로컬 pipe ACL을 유지합니다. 입력 콜백·상태는 상주 loader가 소유하고 core unload 시 해제합니다.
+- 운전 명령은 Windows monotonic clock의 200 ms 유효창을 그대로 전달합니다. pause·수동 입력·F11·연결 단절은 arm을 해제하며 resume/reconnect가 다시 arm하지 않습니다. 세 축은 SDK 한 프레임의 snapshot으로 내보내고, 해제는 다음 입력 프레임의 세 축 0으로 반영합니다.
 - 런처는 Windows Job Object와 WSL systemd unit으로 자신의 프로세스를 관리합니다. 창 종료·오류·실행 시간 만료 시 해당 그룹을 정리합니다.
 - 설정은 로컬 JSON 한 곳에서 읽고 센서 프리셋을 상대 경로로 참조합니다. 프로세스·응답·수신 시각이 화면 상태의 기준입니다.
 

@@ -81,6 +81,18 @@ Packet state_messages(const json& state,const std::string& session,const V& base
             c<<available<<(available?sdk.at(key).at("value").get<int32_t>():int32_t{0});
         }
     }));
+    if(state.contains("drive")) {
+        const auto& drive=state.at("drive");packet.meta["drive_state"]=drive;
+        add_message(packet,"/ets2/drive/state",cdr(2048,[&](Cdr& c){
+            header(c,us,"base_link");c<<state.at("frame_id").get<uint64_t>();
+            for(const auto* key:{"available","permitted","profile_supported","armed","active"}) c<<drive.at(key).get<bool>();
+            c<<drive.at("reason").get<std::string>()<<drive.at("owner").get<std::string>();
+            for(const auto* key:{"epoch","sequence","deadline_ms","command_window_ms"}) c<<drive.at(key).get<uint64_t>();
+            for(const auto* key:{"steering","throttle","brake","manual_steering","manual_throttle","manual_brake"}) c<<drive.at(key).get<float>();
+            for(const auto* key:{"truck.effective.steering","truck.effective.throttle","truck.effective.brake"}) c<<channel(state,key);
+            c<<drive.at("error").get<std::string>();
+        }));
+    }
     if(state.contains("engine") && state["engine"].contains("vehicle") && state["engine"]["vehicle"].value("available",false)) {
         const auto& p=state["engine"]["vehicle"]["pose_physics"];
         const M rotation=from_quat(p.at("quaternion_wxyz").get<Q>());
