@@ -53,3 +53,9 @@ pause 중 센서 준비와 시계 처리를 섞으면 상태 전송이나 재개
 RenderDoc으로 시작한 첫 게임이 Steam에서 새 프로세스로 재실행돼 캡처 연결이 빠졌습니다. 조사 실행에 임시 App ID 설정을 사용했고 캡처 뒤 제거했습니다. RenderDoc Python 스크립트는 내장 환경에서 실행해야 renderdoc 모듈을 사용할 수 있습니다.
 
 Zsh에서 Bash용 ROS setup을 source하면 setup 경로가 잘못 계산됐습니다. `ros-env.sh`가 셸에 맞는 setup을 선택합니다. 런처는 Bash 환경을 직접 준비합니다.
+
+## 외부 플러그인의 문서와 소비 코드
+
+조사한 ETS2LA/plugin `3b01d90b5be24`의 입력 README는 18바이트·float timestamp, 실제 InputMemData는 26바이트·double timestamp 두 개였습니다. 입력 만료도 예제의 1초와 구현의 0.2초가 달랐습니다. M8은 선택 revision의 구조체·생산자·소비자와 시계 기준을 함께 맞춰야 합니다.
+
+같은 revision의 경로 생산자는 점 개수로만 변경을 판단해 같은 길이의 경로 갱신을 놓칠 수 있고 고정 용량 복사도 확인이 필요했습니다. 경로 연결은 실제 좌표·경로 식별자·길이를 계약으로 사용합니다. 단순 shared-memory memcpy의 동시 읽기 문제는 현재 프로젝트의 원자적 슬롯 소유권으로 처리합니다.

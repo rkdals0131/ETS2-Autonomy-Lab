@@ -1,6 +1,6 @@
 # 출처와 소스 탐색 위치
 
-엔진 조사는 2026년 10월 8일 확보한 게임 빌드와 아래 소스 revision을 기준으로 합니다. ROS·센서 확장 자료는 10월 9일 갱신했습니다.
+엔진 조사는 2026년 10월 8일 확보한 게임 빌드와 아래 소스 revision을 기준으로 합니다. 현재 제품의 SDK·렌더·ROS 계약과 중요한 조사 출처를 함께 보관합니다.
 
 설치 파일에 대조한 후속 결과는 [정적 분석](docs/10_installed_game_static_analysis.md)과 [도로 정차 데이터](docs/11_idle_memory_and_telemetry.md)에 있습니다. 이 조사에서는 아래 revision의 소스를 로컬에 확보했습니다.
 
@@ -19,22 +19,9 @@
 
 - [공식 SDK 1.15 ZIP](https://download.eurotrucksimulator2.com/scs_sdk_1_15.zip): 배포판 안의 헤더·타입·시간 계약을 직접 읽음.
 - [sk-zk Extractor](https://github.com/sk-zk/Extractor): 2026-07-29 standalone release로 설치 아카이브를 선택 추출.
-- [SDK 채널 문서에 대한 SCS 답변](https://forum.scssoft.com/viewtopic.php?t=240843): 헤더를 목록의 기준으로 안내.
-- [제한속도 특수값에 대한 SCS 답변](https://forum.scssoft.com/viewtopic.php?t=186527): 2015년 SDK 제한속도 특수값 설명.
 - [ReadProcessMemory](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-readprocessmemory), [OpenFileMappingW](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-openfilemappingw): 외부 읽기 및 기존 shared-memory 연결 계약.
 
 ETS2LA/plugin은 MIT, SPF는 Apache-2.0 라이선스 파일을 확인했습니다. 참고 조사한 MobileCam과 PrismTextureStreamer의 확보한 루트에는 LICENSE 파일이 없었습니다. 제품에 포함한 의존성과 라이선스는 [THIRD_PARTY](ot/THIRD_PARTY.md)에 있습니다.
-
-## 기존 자율주행 프로젝트
-
-| 출처 | 읽을 위치와 용도 |
-| --- | --- |
-| [marsauto Europilot](https://github.com/marsauto/europilot) | README의 Linux 화면 캡처·입력과 커스텀 카메라 로드맵 |
-| [ETS2LA 현재 저장소](https://github.com/ETS2LA/ETS2LA) | README, C# 프로젝트 구성, TruckLib 관계 |
-| [ETS2LA 개발 문서](https://docs.ets2la.com/) | 현재 플러그인 개발 안내의 시작점 |
-| [ETS2LA 게임 플러그인](https://github.com/ETS2LA/plugin) | 공유 메모리 채널의 개요. README 예제는 실제 ABI와 대조 |
-| [core.cpp](https://github.com/ETS2LA/plugin/blob/main/src/core.cpp) | 카메라·보간 자세·입력·패턴 탐색·버전 검사 |
-| [core.hpp](https://github.com/ETS2LA/plugin/blob/main/src/core.hpp) | 실제 packed 구조체와 크기. InputMemData 차이 확인 |
 
 ## SCS 공식 자료
 
@@ -46,28 +33,20 @@ ETS2LA/plugin은 MIT, SPF는 Apache-2.0 라이선스 파일을 확인했습니�
 | [미러 FOV 변환 설명](https://forum.scssoft.com/viewtopic.php?t=253252) | SCS 개발자 Max의 mirror_size·FOV 설명 |
 | [추가 미러 설정 설명](https://forum.scssoft.com/viewtopic.php?p=1208872) | SCS 개발자의 cam_m_h와 대응 설정 |
 | [실내 애니메이션과 UI ID](https://modding.scssoft.com/wiki/Documentation/Engine/Truck_Interior_Animations_and_IDs) | 디지털미러 1620~1650, 주차 화면 910~913 |
-| [Coaches 차량 기능](https://blog.scssoft.com/2026/07/coaches-new-vehicle-features.html) | 개발 중 후방 카메라 기능 소개 |
 | [미러 갱신 문제](https://forum.scssoft.com/viewtopic.php?t=259895) | SCS 개발자 Komat의 가시성 검사 설명 |
 | [미러 렌더 품질 관련 답변](https://forum.scssoft.com/viewtopic.php?start=3600&t=330624) | VR 논의 내 r_deferred_mirrors와 r_mirror_view_distance |
 | [맵 에디터 기능](https://modding.scssoft.com/wiki/Documentation/Tools/Map_Editor/New_Editor_Features_info_-_old_%2B_1.47) | No mirror reflection 속성 |
-| [multimon](https://eurotrucksimulator2.com/multimon_config.php) | 디스플레이 뷰 설정과 주 카메라 관련 조정 |
 
 ## 모더의 경험과 카메라 코드
 
 | 출처 | 읽을 위치와 용도 |
 | --- | --- |
 | [Sanax 추가 카메라 사례](https://forum.scssoft.com/viewtopic.php?t=323580) | 조수석 코너 카메라와 데이터 덮어쓰기 충돌 보고 |
-| [후방 로케이터 문제 질문](https://forum.scssoft.com/viewtopic.php?p=2149374) | 해결 미확인의 조사 단서 |
 | [ets2_nav_mod](https://github.com/thePromisedKing/ets2_nav_mod) | 미러 영상을 대시보드에 표시하는 모드 |
 | [대시보드 SII](https://github.com/thePromisedKing/ets2_nav_mod/blob/main/src/ui/dashboard/volvo_fh_2024_gps.sii) | far_mirror_camera와 far_s_mirror_camera 실제 참조 |
 | [SPF Camera API](https://github.com/TrackAndTruckDevs/SPF-Framework/blob/main/docs/api/SPF_Camera_API.md) | 기존 카메라 제어 API |
 | [SPF Camera Manager](https://github.com/TrackAndTruckDevs/SPF-Framework/blob/main/src/GameCamera/GameCameraManager.cpp) | 객체 조회·초기화 호출 구현 |
-| [ETS2MobileCam](https://github.com/Baldywaldy09/ETS2MobileCam) | 작성자의 카메라 구조체와 업데이트 후킹 설명 |
-| [PrismTextureStreamer](https://github.com/Baldywaldy09/PrismTextureStreamer) | 외부 앱 화면을 게임 텍스처에 공급 |
 | [텍스처 큐 구현](https://github.com/Baldywaldy09/PrismTextureStreamer/blob/main/PrismTextureStreamerFB/prism/memserver_texture_queue.cpp) | 엔진 큐의 리소스 경로 처리 |
-| [Prism3D Unit Resolver](https://github.com/Baldywaldy09/x64dbgPrism3DUnitResolver) | 후속 디버거 도구 후보 |
-| [ets2-data-capture](https://github.com/dmariaa/ets2-data-capture) | 색상·depth 추출 참고 |
-| [ETS2 1.61 DX12 조사](https://github.com/NemoByteCore/ets2-1.61-stutter-investigation) | 커뮤니티의 DX12 렌더 경로 분석 |
 
 ## 그래픽과 데이터 전달
 
@@ -77,31 +56,8 @@ ETS2LA/plugin은 MIT, SPF는 Apache-2.0 라이선스 파일을 확인했습니�
 | [RenderDoc texture viewer](https://github.com/baldurk/renderdoc/blob/v1.x/docs/window/texture_viewer.rst) | 텍스처와 사용 이력 조사 |
 | [D3D11 공유 리소스](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_resource_misc_flag) | 공유 생성 플래그와 지원 조건 |
 | [D3D11 스레드 사용](https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-render-multi-thread-intro) | device와 context의 차이 |
-| [CUDA D3D11 interop](https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__D3D11.html) | 등록·포맷·수명·매핑 조건 |
 | [Foxglove Windows 다운로드](https://foxglove.dev/download) | Windows 앱 배포 |
-| [Foxglove SDK](https://docs.foxglove.dev/docs/sdk) | 실시간 시각화와 MCAP 기록 |
 | [MCAP 시작 안내](https://mcap.dev/guides/getting-started) | 메시지·스키마·로컬 파일 재생 |
-
-## Windows 도구
-
-| 출처 | 용도 |
-| --- | --- |
-| [Visual Studio와 Build Tools](https://visualstudio.microsoft.com/downloads/) | C++ x64 빌드 |
-| [Git for Windows](https://git-scm.com/downloads/win) | 버전 관리 도구 |
-| [CMake](https://cmake.org/download/) | 저장소가 요구하는 빌드 버전 선택 |
-| [Python Windows 배포](https://www.python.org/downloads/windows/) | 사용할 ML 스택에 맞는 Python |
-| [PyTorch 설치 선택기](https://pytorch.org/get-started/locally/) | Windows·CUDA·Python 조합 |
-| [x64dbg](https://x64dbg.com/) | Windows 디버거 |
-| [Ghidra](https://github.com/NationalSecurityAgency/ghidra) | 역공학 도구와 설치 요구사항 |
-| [RenderDoc 소스와 배포 안내](https://github.com/baldurk/renderdoc) | GPU 프레임 캡처 도구 |
-
-## AC 후속 자료
-
-| 출처 | 읽을 위치 |
-| --- | --- |
-| [CSP Lua SDK](https://github.com/ac-custom-shaders-patch/acc-lua-sdk) | 스크립트 종류와 API |
-| [lib_scene.lua](https://github.com/ac-custom-shaders-patch/acc-lua-sdk/blob/main/lib_scene.lua) | GeometryShot 생성·update·depth |
-| [ac_ray.lua](https://github.com/ac-custom-shaders-patch/acc-lua-sdk/blob/main/common/ac_ray.lua) | track·scene·cars·physics raycast |
 
 ## ROS와 센서 규약
 

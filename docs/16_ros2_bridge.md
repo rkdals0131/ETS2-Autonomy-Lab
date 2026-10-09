@@ -38,7 +38,7 @@ Windows C++ 릴레이가 메시지를 생성하고, WSL Jazzy의 GenericPublishe
 | /ets2/frame_info/exposure | 같은 프레임의 gain·자동 노출 여부 FrameExposure |
 | /clock, /tf, /tf_static, /diagnostics | 시뮬레이션 시각·좌표·성능 |
 
-Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다. 카메라·라이다 TF는 `world → base_link → cabin → sensors`, IMU·GNSS 장착 TF는 `base_link → imu_link / gnss_link`입니다. 기본 미러 0·1·2·5와 센서 출력 3·4·6·7은 분리돼 있습니다.
+Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다. 현재 발행 목록은 고정돼 있어 미선택 카메라의 토픽도 보입니다. 카메라·라이다 TF는 `world → base_link → cabin → sensors`, IMU·GNSS 장착 TF는 `base_link → imu_link / gnss_link`입니다. 기본 미러 0·1·2·5와 센서 출력 3·4·6·7은 분리돼 있습니다.
 
 0.23.0부터 VehicleState 각속도는 SDK 회전/초에 2π를 곱한 rad/s입니다. 0.22.0까지 저장한 bag의 `angular_velocity_base_radps`에는 회전/초 값이 들어 있으므로 읽을 때 2π를 곱합니다. 새 bag에 이 보정을 중복 적용하지 않습니다. 센서 계산과 장착 기준은 [추가 센서](17_sensor_expansion.md)에 있습니다.
 
@@ -46,7 +46,7 @@ Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다
 
 실제 구독 요구를 합쳐 color·depth·preview·metadata·lidar를 선택합니다. 변경은 묶음 경계에서 반영합니다. 처리 중인 GPU 자원은 소비 완료까지 유지합니다. preview와 perception은 같은 축소 출력을 공유합니다.
 
-기본 카메라 요청은 30 Hz, 라이다는 10 Hz입니다. 라이다가 예정되지 않은 묶음은 GPU gather·라이다 readback을 생략합니다. 라이다만 구독하면 해당 카메라 선택도 10 Hz 기회에만 발생합니다. 라이다 stamp는 같은 묶음의 카메라 stamp와 같습니다. IMU·휠은 새 SDK 표본마다 발행하고 보간하지 않습니다. GNSS는 시뮬레이션 시각의 100 ms 경계 이후 첫 새 표본을 사용합니다.
+기본 카메라 요청은 30 Hz, 라이다는 10 Hz입니다. 라이다가 예정되지 않은 묶음은 GPU gather·라이다 readback을 생략합니다. 라이다 단독 구독의 카메라 선택도 10 Hz 기회에 맞추도록 구현돼 있습니다. 현재 실측은 JPEG·라이다 동시 구독이며 다른 소비자가 없는 단독 구독 주기 확인이 남아 있습니다. 라이다 stamp는 같은 묶음의 카메라 stamp와 같습니다. IMU·휠은 새 SDK 표본마다 발행하고 보간하지 않습니다. GNSS는 시뮬레이션 시각의 100 ms 경계 이후 첫 새 표본을 사용합니다.
 
 게임은 공유 D3D11 텍스처와 fence를 발행하고 릴레이가 자신의 device에서 staging copy·Map을 수행합니다. 라이다 작은 버퍼와 노출 표본은 현재 DLL readback 경로를 사용합니다. 공유 텍스처 소비 완료 신호는 `released = ready + 1`입니다.
 
@@ -57,6 +57,8 @@ Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다
 SDK와 센서 stamp의 출처는 [시각 계약](04_sensors_and_data.md)에 따릅니다. 게임 pause 동안 `/clock`은 정지하고 상태 전송은 유지됩니다. pause 중 준비된 센서 묶음은 폐기합니다.
 
 lease가 만료되면 Tier 0으로 복귀합니다. F11은 lease를 취소하고 사용자 시작을 기다립니다. 네트워크 단절은 캡처를 해제하고 eth0를 다시 조회합니다. DLL 교체는 릴레이 중지 후 메타로더에서 수행합니다.
+
+현재 `/ets2/capture=false`도 Tier 0으로 내려가 IMU·GNSS 발행과 휠 오도메트리 적분을 중단합니다. 네트워크 재연결은 새 세션을 만들고 `wheel_odom` 원점·가상 GNSS 기준점을 초기화합니다. 이 수명주기는 [분리 예정](03_system_design.md#코드-경계와-다음-정리)입니다.
 
 ## 확인 결과
 

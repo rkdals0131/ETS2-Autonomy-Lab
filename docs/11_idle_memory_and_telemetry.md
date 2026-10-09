@@ -1,6 +1,6 @@
 # SDK와 물리 상태
 
-ETS2 1.61.1.1의 공식 SDK와 내부 물리·렌더 경로를 연결했습니다. 현재 core는 SDK 9채널과 차량 구성, 내부 자차 물리 자세, pass 시점 모델 정보를 제공합니다.
+ETS2 1.61.1.1의 공식 SDK와 내부 물리·렌더 경로를 연결했습니다. 현재 core는 SDK 기본 9채널과 바퀴별 각속도·조향·접지, 차량 구성, 내부 자차 물리 자세, pass 시점 모델 정보를 제공합니다.
 
 ## 채널과 단위
 
@@ -57,4 +57,4 @@ f_sensor = R_world_sensor^T * (a_sensor_world - g_world)
 
 외부 읽기로 주변 AI·주차 차량·신호등·차단기·미러 카메라·텍스처 descriptor를 연결했습니다. AI body와 trailer는 부모·연결 모델 경로가 다릅니다. 현재 ROS 차량 GT는 해당 pass의 준비 모델을 사용합니다. 객체의 미러 제외·LOD·도로 visibility는 [렌더 구조](12_dx11_mirror_render_path.md)에 있습니다.
 
-외부 메모리 관측 도구는 `research/live/ets2_readonly_probe.py`이며 짧은 읽기 실험에 사용합니다. 라이브 센서 전달은 게임 DLL과 공유 메모리를 사용합니다.
+외부 메모리 관측 도구는 `research/read_live_memory.py`이며 짧은 읽기 실험에 사용합니다. 라이브 센서 전달은 게임 DLL과 공유 메모리를 사용합니다.

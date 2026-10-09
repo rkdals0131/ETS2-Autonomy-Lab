@@ -34,7 +34,7 @@
 
 3D 패널의 각 `/ets2/lidar/*/points`에서 `Color mode=Color map`, `Color field=range`, `Color map=Turbo`를 선택합니다. 근처 형태는 min/max 0/30 또는 0/50m로 확인합니다. `<distance>`와 같은 범위로 비교하면 XYZ 기반 거리와 range 필드 색상을 대조할 수 있습니다. [Foxglove 설정](https://docs.foxglove.dev/docs/visualization/panels/3d#point-cloud).
 
-현재 보고된 단색 현상은 실제 수신 메시지의 분포·표시 범위를 확인할 작업으로 남아 있습니다. 기존 저장 표본에서 측면 range는 약 1.5–150m로 변화합니다.
+0.23.0의 실제 ROS 수신 range는 전방 5.08–120.99m, 좌측 0.93–149.95m, 우측 0.94–144.69m였습니다. 거리 값은 변화합니다. 화면이 단색이면 해당 토픽의 색상 필드와 min/max를 확인합니다.
 
 ## 정합과 오프라인 도구
 

@@ -35,4 +35,4 @@
 
 SDK·추출 게임 자산·대용량 관측 원본은 Git에서 제외합니다. 공급 도구와 라이선스는 [research](../research/README.md), 제품 의존성은 [THIRD_PARTY](../ot/THIRD_PARTY.md)에 있습니다.
 
-[SDK·물리 참조](11_idle_memory_and_telemetry.md), [렌더 참조](12_dx11_mirror_render_path.md), [업데이트 작업 순서](06_first_run_and_reverse_engineering.md).
+[SDK·물리 참조](11_idle_memory_and_telemetry.md), [렌더 참조](12_dx11_mirror_render_path.md), [게임 업데이트](../ot/README.md#게임-업데이트).

@@ -70,4 +70,19 @@ Python 미리보기는 배치 실험용입니다. ROS 실시간 표시는 런처
 
 SDK frame_end는 물리 결과 이후이며 렌더 보간·장면 준비가 뒤따릅니다. 센서 묶음은 실제 pass Present ID를 기준으로 맞춥니다. [좌표·시각](../docs/04_sensors_and_data.md), [렌더 구조](../docs/12_dx11_mirror_render_path.md).
 
+## 게임 업데이트
+
+새 게임 빌드에서는 실행 파일·SDK와 `schema`의 주소·필드를 대조하고, 정차 상태에서 SDK·물리 자세 → 한 센서의 RGB·DSV·투영 → 전체 리그 순으로 확인합니다. 기본 미러·자차 가림·같은 프레임 정합과 메타로더 해제·패닉 복구를 확인한 뒤 사용자에게 알리고 전경 성능을 측정합니다.
+
+| 증상 | 확인할 경로 |
+| --- | --- |
+| 영상 이름과 픽셀 혼합 | pass 명령 구간·pool 리소스 재사용 |
+| HUD 미러 더미 그림 | 출력 namespace·alias·같은 index의 camera/drawable |
+| 차체 일부 누락 / 가까운 검은 띠 | geometry subset / 픽셀 depth와 외판 메시 교차 |
+| 먼 차량 누락 | LOD·도로 visibility·cut plane·pass 제출 목록 |
+| 깊이·박스 불일치 | DSV·실제 projection·pass 시각의 렌더 모델 자세 |
+| 프레임 저하 | 전경 PresentMon·hook 비용·readback·ROS 부하 |
+
+RenderDoc 캡처는 일반 hook 실행과 분리합니다. Steam이 새 프로세스를 만들면 RenderDoc 로딩 여부를 확인하고 스크립트는 RenderDoc의 Python 환경에서 실행합니다.
+
 [현재 진행](../docs/13_game_operating_table.md), [성능](../docs/18_performance.md), [중요한 시행착오](../docs/history/lessons.md).

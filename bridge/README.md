@@ -46,6 +46,7 @@ WSL Ubuntu 24.04에는 ROS 2 Jazzy ros-base, vision-msgs, foxglove-bridge, rosba
 
 ```bash
 REPO=/mnt/c/path/to/ETS2-Autonomy-Lab  # 실제 저장소 경로
+# Bash에서 실행. Zsh에서는 setup.zsh를 사용합니다.
 source /opt/ros/jazzy/setup.bash
 mkdir -p ~/ets2-ros
 cd ~/ets2-ros
@@ -113,7 +114,7 @@ ros2 launch ets2_bridge bridge.launch.py config:="$REPO/bridge/config/bridge.loc
 .\bridge\dist\ets2_relay.exe .\bridge\config\bridge.local.json
 ```
 
-수집만 중지·재개할 때는 `/ets2/capture` SetBool 서비스를 사용합니다. 서비스 응답은 요청 접수이고 `/diagnostics.capture_active`가 적용 상태입니다. F11 이후에는 릴레이를 다시 시작합니다.
+`/ets2/capture` SetBool 서비스로 수집을 중지·재개합니다. 현재 중지는 내부 물리 읽기도 내려 IMU·GNSS와 휠 오도메트리 적분에 영향을 줍니다. SDK 상태·clock은 유지됩니다. 서비스 응답은 요청 접수이고 `/diagnostics.capture_active`가 적용 상태입니다. F11 이후에는 릴레이를 다시 시작합니다.
 
 ## 운영 구조
 
