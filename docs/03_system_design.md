@@ -57,6 +57,7 @@ Foxglove는 JPEG·라이다·GT·TF·상태를 구독합니다. 원본 RGB·dept
 | bridge/windows/main.cpp / relay_workers.hpp | 프로세스 소유권, 두 TCP 연결, worker·큐와 재연결 |
 | bridge/common/wire.hpp / bridge/ros2 | 토픽·전송 계약, GenericPublisher·구독 요구 전달 |
 | bridge/launcher.py / wsl_session.py | Windows·WSL 실행 관리와 실제 연결 상태 표시 |
+| bridge/bag_recording.py | WSL 세션이 소유한 rosbag2 기록기 하나, 토픽 선택·저장 위치·종료와 결과 표시 |
 
 센서 계산은 ROS 직렬화·구독 수·소켓 상태를 참조하지 않습니다. `MotionSample`을 만든 뒤 전송 쪽이 구독된 측정만 직렬화합니다. 센서 잡음은 측정 계산 단계에 추가하고, ROS 메시지 형식과 전송 코드는 유지할 수 있습니다.
 

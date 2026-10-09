@@ -29,6 +29,7 @@ Windows C++ 릴레이가 메시지를 생성하고, WSL Jazzy의 GenericPublishe
 | /ets2/ground_truth/{camera}/markers | Foxglove용 MarkerArray |
 | /ets2/ground_truth/ego/pose | SDK 시각의 물리 자세 PoseStamped |
 | /ets2/vehicle/state | SDK 시각·속도·입력·벡터 상태 VehicleState |
+| /ets2/vehicle/actuation | 같은 SDK 프레임의 운전자 입력·실제 적용 조향/페달·기어 ActuationState |
 | /ets2/imu/data_raw | 섀시 고정 IMU, specific force m/s²·각속도 rad/s, orientation 미제공 |
 | /ets2/wheels/state | WheelState: 바퀴 index·rad/s·실제 조향 rad·반지름 m·접지 |
 | /ets2/wheels/odometry | 바퀴 구름 제약으로 적분한 Odometry, wheel_odom 기준, TF 미발행 |
@@ -41,6 +42,8 @@ Windows C++ 릴레이가 메시지를 생성하고, WSL Jazzy의 GenericPublishe
 Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다. 현재 발행 목록은 고정돼 있어 미선택 카메라의 토픽도 보입니다. 카메라·라이다 TF는 `world → base_link → cabin → sensors`, IMU·GNSS 장착 TF는 `base_link → imu_link / gnss_link`입니다. 기본 미러 0·1·2·5와 센서 출력 3·4·6·7은 분리돼 있습니다.
 
 0.23.0부터 VehicleState 각속도는 SDK 회전/초에 2π를 곱한 rad/s입니다. 0.22.0까지 저장한 bag의 `angular_velocity_base_radps`에는 회전/초 값이 들어 있으므로 읽을 때 2π를 곱합니다. 새 bag에 이 보정을 중복 적용하지 않습니다. 센서 계산과 장착 기준은 [추가 센서](17_sensor_expansion.md)에 있습니다.
+
+0.24.0의 ActuationState는 기존 VehicleState와 별도 메시지입니다. 조향은 좌측 양수의 정규화 [-1,1], 페달은 [0,1]이며 누락 값은 NaN입니다. 기어는 양수 전진·0 중립·음수 후진이고 각 available 필드로 미수신을 구분합니다. 적용 브레이크는 페달 제동이며 리타더·엔진·주차브레이크를 포함하지 않습니다. [런처 기록·재생](../bridge/README.md#기록과-재생).
 
 ## 수집과 노출
 
@@ -71,6 +74,7 @@ lease가 만료되면 Tier 0으로 복귀합니다. F11은 lease를 취소하고
 - 원본·라이다·깊이 구독 전환과 구독 해제, relay 종료 후 lease 복구를 확인했습니다.
 - Foxglove WebSocket에서 미리보기·점군·MarkerArray·TF·진단을 수신했습니다.
 - MCAP의 79묶음 전체를 재생했습니다. pause 포함 기록은 clock 7,214개·preview 2,129개와 13.26초 pause를 보존했습니다.
+- 런처의 중복 기록 시작·정상 종료·기록 중 창 종료를 확인했습니다. 정차 MCAP 2개의 4,775개 메시지를 ROS에서 역직렬화했고, ActuationState 670개는 VehicleState와 SDK 프레임·시각·운전자 입력이 일치했습니다. 첫 bag의 ActuationState 435개를 ROS로 재생했습니다.
 - 수명 분리 후 실제 ROS에서 영상 중지 5초 동안 IMU 310·휠 오도메트리 311·GNSS 52개와 영상·라이다 0개를 수신했습니다. TCP 단절·재연결에도 동일 sensor_session과 연속 오도메트리 좌표를 확인했습니다.
 - 빈 슬롯 구성의 상태 센서 수신, 원본 RGB·depth 1280×720 각각 180장 수신, 패닉 후 Tier 0·자동 재시작 중단을 확인했습니다. 정차 기능 확인이며 주행 정확도·FPS는 별도 측정합니다.
 - 실제 WSL 주소 변경, 트레일러 연결·굴절, 장시간 주행은 [남은 작업](08_open_questions.md)입니다.

@@ -27,6 +27,8 @@ Windows와 WSL은 같은 `config/bridge.local.json`을 읽습니다. 현재 배�
 | camera_hz / lidar_hz | 기본 30 / 10. 라이다는 필요한 카메라 프레임에서만 gather·readback |
 | imu_mount_base_m / gnss_mount_base_m | 섀시 고정 장착점, base_link 기준 m. 기본 [0,0,1] |
 | gnss_reference_lla | 시작 위치의 가상 기준 위도·경도(deg)·타원체 고도(m), 기본 [0,0,0] |
+| recording_root | 차량 상태 기록 폴더. 생략하면 bridge/recordings |
+| sensor_recording_root | 영상·라이다 기록 폴더. 사용할 때 명시적으로 지정 |
 | token / state_port / bulk_port | 양쪽 연결 설정 |
 | auto_exposure / color_gain | 자동 노출 또는 수동 gain |
 | shared_gpu | 기본 true, 공유 GPU 텍스처 전달 |
@@ -79,6 +81,7 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 - 점군: `/ets2/lidar/{L_F,L_PL,L_PR}/points`
 - 박스: `/ets2/ground_truth/{camera}/markers`
 - 상태: `/ets2/vehicle/state`, `/diagnostics`, `/tf`, `/clock`
+- 조작과 기어: `/ets2/vehicle/actuation`의 운전자 입력·실제 적용 입력·기어
 - 추가 센서: `/ets2/imu/data_raw`, `/ets2/wheels/state`, `/ets2/wheels/odometry`, `/ets2/gnss/fix`
 
 라이다는 Color map → range → Turbo로 설정하고 가까운 장면은 0–30m 또는 0–50m 범위를 사용합니다. 원본 RGB·depth와 `/perception/image_raw`는 ROS 소비자가 직접 구독합니다. [토픽·시각 계약](../docs/16_ros2_bridge.md).
@@ -87,23 +90,29 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 
 ## 기록과 재생
 
-외장 SSD가 마운트돼 있는지 확인하고 가용 공간을 확인한 뒤 `~/Storage/ROS2_Workspace_offload/ETS2-Autonomy-Lab/<run>/bags/`에 저장합니다. 예시:
+런처에서 브리지를 **시작**하고 연결이 확인되면 기록 종류를 선택해 **기록 시작**을 누릅니다.
 
-```bash
-source "$REPO/bridge/ros-env.sh"
-ROOT=~/Storage/ROS2_Workspace_offload
-findmnt -T "$ROOT"
-df -h "$ROOT"
-ros2 bag record -s mcap -o "$ROOT/ETS2-Autonomy-Lab/run-01/bags/front" --topics /clock /tf /tf_static /ets2/frame_info /ets2/vehicle/state /ets2/camera/C_FN/image_raw /ets2/camera/C_FN/depth/image_raw /ets2/camera/C_FN/camera_info
-```
+| 기록 종류 | 내용·저장 위치 |
+| --- | --- |
+| 차량 상태 (소용량) | 조작·기어·속도·자세·IMU·휠·GNSS·시계·센서 구성·진단. 기본 bridge/recordings/<run>/bag |
+| 영상·라이다 포함 | 차량 상태 + 4뷰 JPEG·보정값·3라이다·차량 GT·렌더 TF·프레임 대응. sensor_recording_root 지정 필요 |
+
+두 종류 모두 원본 RGB·depth는 구독하지 않습니다. 상태 기록만 켜면 카메라 수집을 요구하지 않습니다. 영상·점군의 실제 수신 여부는 선택한 슬롯과 센서 구성에 따릅니다.
+
+**기록 종료**는 파일을 마무리하고 브리지를 유지합니다. 브리지 중지·창 닫기·실행 시간 만료도 기록기를 종료합니다. 중복 시작은 기존 기록을 유지합니다. 화면에는 실행 상태·파일 크기·경로, 종료 후 실제 저장 메시지 수를 표시합니다. 저장 폴더 오류와 기록기 종료는 화면에 나타나며 자동으로 새 기록을 시작하지 않습니다.
+
+저장 경로 설정은 WSL 절대 경로 또는 Windows 드라이브 경로를 받습니다. 지정한 폴더가 존재하고 여유 공간이 있어야 시작하며, 남은 공간이 1 GiB 아래로 내려가면 기록을 마무리합니다. 기본 차량 상태 기록은 Git에서 제외됩니다. 영상·점군용 폴더는 해당 PC의 저장 장치와 용량을 확인해 선택합니다.
 
 기록은 기본 수신 시각을 사용합니다. `--use-sim-time`을 넣지 않습니다. 재생 전 런처에서 중지하고 다음을 실행합니다.
 
 ```bash
-ros2 bag play "$ROOT/ETS2-Autonomy-Lab/run-01/bags/front"
+ros2 bag info '<런처에서 복사한 bag 경로>'
+ros2 bag play '<런처에서 복사한 bag 경로>'
 ```
 
 기록된 `/clock`을 사용하므로 `--clock`을 넣지 않습니다. 소비자는 `use_sim_time=true`로 설정합니다. 이전 실험 bag은 기존 `~/ets2-data/bags/`에 보존돼 있습니다.
+
+첫 수동 주행은 차량 상태 기록으로 정차·직진·일정 속도·완만한 가속·타력 주행·제동·좌우 선회를 담습니다. 이 기록으로 센서 정합과 차량 반응을 대조합니다. 영상 가림·거리 측정 누락 확인에는 영상·라이다 기록을 별도로 사용합니다. 컴퓨터가 보내는 운전 명령의 적용·해제는 M8에서 시험합니다.
 
 ## 수동 실행
 

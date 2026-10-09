@@ -29,6 +29,7 @@ venv/
 /ot/backup/
 /bridge/build/
 /bridge/dist/
+/bridge/recordings/
 *.dll
 *.exe
 *.pdb

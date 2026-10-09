@@ -1,6 +1,6 @@
 # SDK와 물리 상태
 
-ETS2 1.61.1.1의 공식 SDK와 내부 물리·렌더 경로를 연결했습니다. 현재 core는 SDK 기본 9채널과 바퀴별 각속도·조향·접지, 차량 구성, 내부 자차 물리 자세, pass 시점 모델 정보를 제공합니다.
+ETS2 1.61.1.1의 공식 SDK와 내부 물리·렌더 경로를 연결했습니다. 현재 core는 SDK 기본 14채널과 바퀴별 각속도·조향·접지, 차량 구성, 내부 자차 물리 자세, pass 시점 모델 정보를 제공합니다.
 
 ## 채널과 단위
 
@@ -14,17 +14,21 @@ ETS2 1.61.1.1의 공식 SDK와 내부 물리·렌더 경로를 연결했습니�
 | wheel angular velocity | 바퀴 회전/초, 전진 양수 |
 | wheel steering | 회전 단위, 좌측 +0.25가 90° |
 | input steering | 정규화 운전자 입력 [-1,1] |
+| effective steering / throttle / brake | 물리에 적용된 조향 [-1,1]·페달 [0,1] |
+| engine / displayed gear | 부호 있는 정수, 전진 양수·중립 0·후진 음수 |
 | speed | 차량 축 속도의 -Z, m/s |
 | truck configuration | 바퀴 위치·반지름·구동축, 캐빈·head·hook 위치 |
 
 SDK 원본은 로컬 `research/sdk`, 채널 목록은 `research/findings/sdk_1_15_channels.csv`, 현재 등록 필드는 `ot/schema`에 있습니다. 0.23.0은 바퀴별 각속도·조향·접지를 등록하고 ROS 각속도에 2π 변환을 적용합니다. [추가 센서](17_sensor_expansion.md).
+
+core 0.24.0은 적용 조향·페달과 실제/표시 기어를 `/ets2/vehicle/actuation`으로 전달합니다. 입력과 적용값은 같은 SDK 프레임·stamp를 사용합니다. 적용 스로틀에는 크루즈 제어가 반영되며, 적용 브레이크에는 리타더·주차·엔진브레이크가 포함되지 않습니다.
 
 ## 바퀴 조향과 스티어링휠
 
 | 값 | 현재 경로 |
 | --- | --- |
 | 운전자 조향 입력 | `truck.input.steering`, [-1,1], VehicleState에 연결 |
-| 물리에 적용된 유효 조향 입력 | SDK `truck.effective.steering`, [-1,1], 현재 core 등록 전 |
+| 물리에 적용된 유효 조향 입력 | SDK `truck.effective.steering`, [-1,1], ActuationState에 연결 |
 | 각 바퀴의 실제 조향각 | SDK `truck.wheel.steering[index]` → WheelState.steering rad, 좌측 양수 |
 | 바퀴 위치·반지름·조향/구동 여부 | SDK 구성 → `/ets2/sensors/config`의 vehicle.wheels |
 | 운전석 스티어링휠 현재 타각 | SDK 1.15 직접 채널 없음. 애니메이션 상태·bone transform 경로 조사 필요 |

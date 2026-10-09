@@ -13,6 +13,7 @@ import rclpy
 from diagnostic_msgs.msg import DiagnosticArray
 from ets2_msgs.msg import VehicleState
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from bag_recording import BagRecording
 
 
 def main():
@@ -61,6 +62,7 @@ def main():
     node.create_subscription(VehicleState, "/ets2/vehicle/state", state, qos)
     node.create_subscription(DiagnosticArray, "/diagnostics", diagnostics, qos)
     child = None
+    recording = BagRecording(config)
     try:
         # systemd removes this run's log even when the supervisor is killed.
         log_path = runtime_directory / "ros.log"
@@ -73,11 +75,19 @@ def main():
             rclpy.spin_once(node, timeout_sec=0.1)
             now = time.monotonic()
             while not commands.empty():
-                action = commands.get()["action"]
+                request = commands.get()
+                action = request["action"]
                 if action == "heartbeat":
                     heartbeat = now
                 elif action == "stop":
                     running = False
+                elif action == "record_start":
+                    try:
+                        recording.start(request.get("profile", "state"))
+                    except (OSError, ValueError, subprocess.SubprocessError) as error:
+                        print(json.dumps({"type": "recording_error", "error": str(error)}), flush=True)
+                elif action == "record_stop":
+                    recording.stop()
             if now - heartbeat > 8:
                 raise RuntimeError("Windows launcher heartbeat expired")
             if child.poll() is not None:
@@ -88,19 +98,24 @@ def main():
                 print(json.dumps({"type": "wsl_status", "pid": os.getpid(), "ros_pid": child.pid,
                                   "ip": ip, "listeners_ready": ports <= listeners(), "paused": paused,
                                   "state_age_s": now - last_state if last_state else None,
-                                  "diagnostics_age_s": now - last_diagnostics if last_diagnostics else None}), flush=True)
+                                  "diagnostics_age_s": now - last_diagnostics if last_diagnostics else None,
+                                  "recording": recording.poll()}), flush=True)
                 last_report = now
         print(json.dumps({"type": "wsl_stopping"}), flush=True)
     finally:
-        if child and child.poll() is None:
-            os.killpg(child.pid, signal.SIGINT)
-            try:
-                child.wait(timeout=4)
-            except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait(timeout=2)
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            recording.close()
+            print(json.dumps({"type": "recording_status", "recording": recording.poll()}), flush=True)
+        finally:
+            if child and child.poll() is None:
+                os.killpg(child.pid, signal.SIGINT)
+                try:
+                    child.wait(timeout=4)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait(timeout=2)
+            node.destroy_node()
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

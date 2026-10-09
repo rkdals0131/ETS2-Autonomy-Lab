@@ -16,7 +16,7 @@ Phase 1은 운전자 감독 아래 고속도로 ACC·차로 유지·사각지대
 | 후속 범위 | 시내·주차, BEV/E2E, ATS 이식 |
 | 실행 관리 | Windows 런처 한 곳에서 실제 상태 확인·시작·중지 |
 | 설정 | bridge/config/bridge.local.json과 연결된 센서 프리셋 |
-| 저장 | 외장 SSD의 ~/Storage/ROS2_Workspace_offload/ETS2-Autonomy-Lab/ |
+| 저장 | 차량 상태는 기본 bridge/recordings, 영상·라이다는 해당 PC에서 지정한 저장 폴더. 기록은 Git 제외 |
 
 게임 감속과 프레임별 카메라 순차 회전은 사용하지 않습니다. 카메라·라이다는 캐빈, 현재 IMU·GNSS는 섀시에 부착하며 운전자 고개 움직임과 독립적으로 유지합니다. 입력 API는 단일 소유권과 명령 만료·수동 개입·패닉 해제를 갖추도록 구현합니다.
 

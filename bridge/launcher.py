@@ -80,7 +80,8 @@ class Controller:
         self.lock = threading.Lock()
         self.logs = deque(maxlen=80)
         self.state = {"phase": "stopped", "message": "시작을 누르면 WSL과 Windows 브리지를 연결합니다.",
-                      "game": "확인 중", "config": str(self.config), "wsl": {}, "relay": {}}
+                      "game": "확인 중", "config": str(self.config), "wsl": {}, "relay": {},
+                      "recording": {"phase": "idle"}, "recording_error": ""}
         self.relay = self.wsl = self.job = self.stop_event = None
         self.unit = None
         self.desired = False
@@ -170,14 +171,21 @@ class Controller:
                               "systemd-run", "--user", "--quiet", "--pipe", "--wait", "--collect",
                               "--unit=" + self.unit, "--property=KillMode=control-group",
                               "--property=RuntimeDirectory=" + self.unit,
-                              "--property=TimeoutStopSec=6", "--", "/bin/bash", "-c", shell], "wsl")
+                              "--property=TimeoutStopSec=15", "--", "/bin/bash", "-c", shell], "wsl")
         self.started = time.monotonic()
         self.update(wsl_pid=self.wsl.pid, unit=self.unit)
 
-    def _signal_wsl(self, action):
+    def _signal_wsl(self, action, **values):
         if self.wsl and self.wsl.poll() is None:
-            self.wsl.stdin.write(json.dumps({"action": action}) + "\n")
+            self.wsl.stdin.write(json.dumps({"action": action, **values}) + "\n")
             self.wsl.stdin.flush()
+
+    def _record(self, action, profile="state"):
+        if action == "record_start" and self.snapshot()["phase"] != "running":
+            self.update(recording_error="브리지 연결 후 기록을 시작해 주세요.")
+            return
+        self.update(recording_error="")
+        self._signal_wsl(action, profile=profile)
 
     def _start_relay(self):
         name = "Local\\ETS2AutonomyLab.Stop." + uuid.uuid4().hex
@@ -209,7 +217,7 @@ class Controller:
                 pass
             if self.wsl:
                 try:
-                    self.wsl.wait(timeout=7)
+                    self.wsl.wait(timeout=15)
                 except subprocess.TimeoutExpired:
                     pass
             if self.unit:
@@ -225,6 +233,16 @@ class Controller:
                     errors.append("WSL 종료 확인 실패: " + self.unit)
                 else:
                     self.unit = None
+            # Preserve the recorder's final counts/path before releasing the WSL process.
+            while not self.lines.empty():
+                source, pid, line = self.lines.get()
+                if source == "wsl" and self.wsl and pid == self.wsl.pid:
+                    try:
+                        value = json.loads(line)
+                        if value.get("type") == "recording_status":
+                            self.update(recording=value["recording"])
+                    except ValueError:
+                        pass
         except Exception as error:
             errors.append(str(error))
         finally:
@@ -257,9 +275,13 @@ class Controller:
                 continue
             if source == "wsl" and data.get("type") == "wsl_error":
                 raise RuntimeError(data["error"])
+            if source == "wsl" and data.get("type") == "recording_error":
+                self.update(recording_error=data["error"])
+            if source == "wsl" and data.get("type") == "recording_status":
+                self.update(recording=data["recording"])
             if source == "wsl" and data.get("type") == "wsl_status":
                 self.last_wsl = now
-                self.update(wsl=data)
+                self.update(wsl=data, recording=data.get("recording", {"phase": "idle"}))
                 if self.relay and not data["listeners_ready"]:
                     raise RuntimeError("ROS 또는 Foxglove 서버 연결이 내려갔습니다.")
                 if data["listeners_ready"] and not self.relay:
@@ -311,6 +333,8 @@ class Controller:
                         self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"))
                     elif action == "start":
                         self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"))
+                    elif action in ("record_start", "record_stop"):
+                        self._record(action, values.get("profile", "state"))
                 except queue.Empty:
                     pass
                 except Exception as error:
@@ -344,8 +368,8 @@ def show_window(controller):
     from tkinter import ttk
     window = tk.Tk()
     window.title("유로파일럿 · 센서 브리지")
-    window.geometry("820x610")
-    window.minsize(720, 550)
+    window.geometry("820x740")
+    window.minsize(720, 680)
     style = ttk.Style(window)
     style.configure("Title.TLabel", font=("Malgun Gothic", 18, "bold"))
     frame = ttk.Frame(window, padding=22)
@@ -383,6 +407,27 @@ def show_window(controller):
         entry = ttk.Entry(rates, textvariable=variable, width=7)
         entry.pack(side="left", padx=(0, 18))
         rate_entries.append(entry)
+    recording_box = ttk.LabelFrame(frame, text="주행 기록", padding=8)
+    recording_box.pack(fill="x", pady=(12, 0))
+    recording_actions = ttk.Frame(recording_box)
+    recording_actions.pack(fill="x")
+    profiles = {"차량 상태 (소용량)": "state", "영상·라이다 포함": "sensors"}
+    record_profile = tk.StringVar(value="차량 상태 (소용량)")
+    profile_entry = ttk.Combobox(recording_actions, textvariable=record_profile, values=list(profiles),
+                                 state="readonly", width=23)
+    profile_entry.pack(side="left", padx=(0, 8))
+    record_start = ttk.Button(recording_actions, text="기록 시작",
+        command=lambda: controller.request("record_start", profile=profiles[record_profile.get()]))
+    record_start.pack(side="left")
+    record_stop = ttk.Button(recording_actions, text="기록 종료", command=lambda: controller.request("record_stop"))
+    record_stop.pack(side="left", padx=6)
+    recording_text = ttk.Label(recording_box, text="기록 안 함", wraplength=730)
+    recording_text.pack(anchor="w", pady=(6, 0))
+    recording_path = ""
+    def copy_recording_path():
+        window.clipboard_clear()
+        window.clipboard_append(recording_path)
+    ttk.Button(recording_actions, text="경로 복사", command=copy_recording_path).pack(side="left")
     ttk.Label(frame, text="F11로 중지하면 자동으로 다시 켜지지 않습니다. 창을 닫으면 이 창에서 시작한 프로세스가 종료됩니다.",
               wraplength=750).pack(anchor="w", pady=(12, 14))
     rows = {}
@@ -409,7 +454,7 @@ def show_window(controller):
         controller.request("close")
     window.protocol("WM_DELETE_WINDOW", close)
     def refresh():
-        nonlocal endpoint, last_logs
+        nonlocal endpoint, last_logs, recording_path
         if controller.closed.is_set():
             window.destroy()
             return
@@ -428,6 +473,25 @@ def show_window(controller):
             entry.config(state="disabled" if active else "normal")
         summary.config(text=state["message"])
         relay, wsl = state["relay"], state["wsl"]
+        recording = state["recording"]
+        record_phase = recording.get("phase", "idle")
+        writing = record_phase in ("starting", "recording", "stopping")
+        record_start.config(state="normal" if phase == "running" and not writing and not closing else "disabled")
+        record_stop.config(state="normal" if writing and record_phase != "stopping" and not closing else "disabled")
+        profile_entry.config(state="disabled" if writing else "readonly")
+        labels = {"idle": "기록 안 함", "starting": "기록 준비", "recording": "기록 중", "stopping": "파일 마무리 중",
+                  "saved": "저장 완료", "error": "기록 오류"}
+        recording_path = recording.get("path", "")
+        record_label = labels.get(record_phase, record_phase)
+        if recording_path:
+            record_label += f" · {recording.get('bytes', 0) / 1024**2:.1f} MiB"
+            if record_phase in ("saved", "error"):
+                record_label += f" · {recording.get('message_count', 0):,}개 메시지"
+            record_label += "\n" + recording_path
+        error = state.get("recording_error") or recording.get("error")
+        if error:
+            record_label += "\n" + error
+        recording_text.config(text=record_label)
         rows["게임 SDK"].config(text=state["game"])
         rows["Windows 릴레이"].config(text=f"PID {state['relay_pid']}" if state.get("relay_pid") else "중지됨")
         rows["WSL ROS / Foxglove"].config(text=f"Ubuntu · ROS PID {wsl.get('ros_pid', '—')}" if state.get("wsl_pid") else "중지됨")

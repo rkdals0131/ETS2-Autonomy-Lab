@@ -14,21 +14,22 @@ ETS2의 FH5에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 
 | 구성 | 구현 |
 | --- | --- |
-| 게임 | ETS2 1.61.1.1, DX11, core 0.23.0, 상주 메타로더 |
+| 게임 | ETS2 1.61.1.1, DX11, core 0.24.0, 상주 메타로더 |
 | 카메라 | C_FN·C_FW 1280×720, C_RL·C_RR 960×544, 기본 30 Hz 요청 |
 | 배치 | FH5 4x2 / l2h1 / LHD / mirror_01 / sunshield_01, 캐빈 부착 |
 | 출력 | RGB8, 미터 광축 깊이, CameraInfo, JPEG, TF, 차량 GT |
 | 라이다 | 전방 1개·좌우 2개, 10 Hz GPU 깊이 샘플링, XYZ·range·결측 상태 |
 | 추가 센서 | 이상적 IMU·바퀴 측정·휠 오도메트리·가상 GNSS, ROS 실제 수신 확인 |
 | 전달 | 공유 GPU 텍스처·펜스 → Windows C++ → WSL NAT 직접 TCP 2개 → ROS DDS SHM |
-| 기록 | ROS MCAP 기록·재생, 일시정지 시계 정합 확인 |
+| 조작 관측 | 운전자 입력·게임에 적용된 조향/페달·실제/표시 기어를 같은 SDK 프레임으로 발행 |
+| 기록 | 런처에서 차량 상태 / 영상·라이다 기록 시작·종료, MCAP 재생·일시정지 시계 정합 확인 |
 | 복구 | 수집 소유권·lease, F11, 기능 DLL 교체, 연결 단절 복구 |
 
 센서는 슬롯 3·4·6·7의 전용 camera/drawable과 출력을 사용합니다. 현재 FH5의 기본 미러 0·1·2·5는 유지됩니다. 전방 선바이저와 측면 미러 테두리 가림은 실제 모델에 맞춰 장착점을 옮겨 해결했습니다.
 
 ![측면 센서 장착 수정 전후](docs/images/side-mirror-rim-fix.png)
 
-0.22.0·센서 10 Hz의 같은 정차 장면에서 60초 전경 측정: 리그 끔 **77.69 FPS**, 고해상도 전체 RGB-D·라이다·GT **46.35 FPS**, JPEG·라이다·GT·TF 구독 **64.12 FPS**. 현재 0.23.0은 카메라 29.69 Hz·라이다 10.02 Hz 수신을 확인했고, 30 Hz 구성의 게임 FPS는 아직 측정하지 않았습니다. [성능과 운용 구성](docs/18_performance.md).
+0.22.0·센서 10 Hz의 같은 정차 장면에서 60초 전경 측정: 리그 끔 **77.69 FPS**, 고해상도 전체 RGB-D·라이다·GT **46.35 FPS**, JPEG·라이다·GT·TF 구독 **64.12 FPS**. 0.23.0에서 카메라 29.69 Hz·라이다 10.02 Hz 수신을 확인했고, 30 Hz 구성의 게임 FPS는 아직 측정하지 않았습니다. [성능과 운용 구성](docs/18_performance.md).
 
 평상시에는 인지용 축소 RGB·JPEG·라이다를 구독합니다. 원본 RGB·depth는 데이터셋 기록과 비교 검증에 필요할 때 구독하며, 구독이 없으면 해당 pack·readback·전송을 생략합니다. 라이다용 깊이는 GPU에서 계속 사용합니다.
 
@@ -46,4 +47,4 @@ ETS2의 FH5에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 | 엔진 참조 | [설치 분석](docs/10_installed_game_static_analysis.md), [SDK·물리 상태](docs/11_idle_memory_and_telemetry.md), [DX11·가시성](docs/12_dx11_mirror_render_path.md) |
 | 시행착오 | [해결 과정과 재발 조건](docs/history/lessons.md) |
 
-게임 파일·SDK 원본·추출 자산·대용량 캡처·로컬 설정은 Git에서 제외합니다. 의존 코드와 라이선스는 [THIRD_PARTY](ot/THIRD_PARTY.md), 연구 도구는 [research](research/README.md)에 있습니다. 신규 ROS 대용량 결과는 마운트된 외장 SSD의 `~/Storage/ROS2_Workspace_offload/ETS2-Autonomy-Lab/`에 저장합니다.
+게임 파일·SDK 원본·추출 자산·기록·로컬 설정은 Git에서 제외합니다. 의존 코드와 라이선스는 [THIRD_PARTY](ot/THIRD_PARTY.md), 연구 도구는 [research](research/README.md)에 있습니다. 소용량 차량 상태 기록은 기본 `bridge/recordings/`, 영상·라이다 기록은 저장 공간을 확인해 지정한 폴더를 사용합니다.

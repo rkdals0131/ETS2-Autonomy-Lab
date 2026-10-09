@@ -33,4 +33,4 @@ GT 차량 박스는 해당 pass 준비 시점의 렌더 모델 자세를 사용�
 
 ROS bag은 수신 시각으로 기록하고 `/clock`·TF·센서·frame_info를 함께 보존합니다. 기록에 `--use-sim-time`, 재생에 `--clock`을 넣지 않습니다. 재생 소비자는 `use_sim_time=true`로 설정하고 실시간 브리지는 중지합니다.
 
-신규 대용량 결과는 마운트·가용 공간을 확인한 외장 SSD의 `~/Storage/ROS2_Workspace_offload/ETS2-Autonomy-Lab/<run>/bags/` 등에 저장합니다. `/tmp`는 일회성 staging에 사용합니다. 기존 로컬 연구 표본은 `research/live`에 남아 있습니다.
+런처의 차량 상태 기록은 기본 `bridge/recordings/<run>/bag`에 저장합니다. 영상·라이다 기록은 가용 공간을 확인한 `sensor_recording_root`에 저장합니다. 경로는 현재 PC의 저장 장치에 맞춰 지정하며 기록은 Git에서 제외합니다. `/tmp`는 일회성 staging에 사용합니다. 기존 로컬 연구 표본은 `research/live`에 남아 있습니다.

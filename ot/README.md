@@ -1,6 +1,6 @@
 # ot — 게임 DLL과 개발 도구
 
-core 0.23.0은 독립 카메라·RGB-D·GPU 라이다·차량 GT와 SDK 바퀴 측정을 제공합니다. 브리지는 카메라 30 Hz·라이다 10 Hz를 요청합니다. 현재 FH5 프리셋은 슬롯 3·4·6·7을 사용하고 기본 미러 0·1·2·5를 유지합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
+core 0.24.0은 독립 카메라·RGB-D·GPU 라이다·차량 GT, SDK 바퀴 측정·실제 적용 입력·기어를 제공합니다. 브리지는 카메라 30 Hz·라이다 10 Hz를 요청합니다. 현재 FH5 프리셋은 슬롯 3·4·6·7을 사용하고 기본 미러 0·1·2·5를 유지합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
 
 ## 빌드와 설치
 
@@ -58,7 +58,7 @@ Python 미리보기는 배치 실험용입니다. ROS 실시간 표시는 런처
 .\ot\ot.cmd lidar '<frame.tar.zst>' --config .\ot\presets\phase1-lidar-private.json --output lidar.npz
 ```
 
-디렉터리·ZIP·TAR.ZST 묶음은 `otpy.bundles`에서 읽습니다. Zstandard 의존성은 `requirements-recording.txt`에 있습니다. 장시간 ROS 기록은 외장 SSD의 `~/Storage/ROS2_Workspace_offload/ETS2-Autonomy-Lab/`를 사용합니다.
+디렉터리·ZIP·TAR.ZST 묶음은 `otpy.bundles`에서 읽습니다. Zstandard 의존성은 `requirements-recording.txt`에 있습니다. ROS 기록은 [런처](../bridge/README.md#기록과-재생)에서 관리하며, 차량 상태는 기본 `bridge/recordings`, 영상·라이다는 지정한 저장 폴더에 남깁니다.
 
 ### 오프라인 객체 박스 투영과 가림 판정
 
