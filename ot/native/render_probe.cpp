@@ -362,9 +362,10 @@ void RenderProbe::rig_select_callback(safetyhook::Context& context) noexcept {
     ++callbacks;
     if(auto* self=observer.load();self && self->accepting_.load()) {
         auto stream=self->stream_.load();
-        // Keep private descriptors immutable until their queued graphs finish.
-        // Do not consume a capture request when the previous selection owns them.
-        self->rig_.select(context,self->rig_.can_select()?
+        // Finish an initial scene preparation for a new rig before capturing;
+        // its first render can still lack trees and poles. Also keep private
+        // descriptors immutable until the previous queued graphs finish.
+        self->rig_.select(context,self->rig_.can_capture()?
             (stream && stream->running()?stream->select_pending():UINT32_MAX):0);
     }
     --callbacks;

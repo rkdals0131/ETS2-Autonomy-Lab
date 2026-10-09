@@ -118,15 +118,18 @@ void CameraRig::select(safetyhook::Context& context,uint32_t capture_mask) noexc
         // This hook runs after native camera updates. Register-only array
         // redirection leaves the engine's owning arrays and HUD aliases intact.
         if(config->private_outputs) {
-            if(!(config->mask&capture_mask)) {context.r12&=~uint64_t(config->mask);return;}
+            if(in_flight()) {context.r12&=~uint64_t(config->mask);return;}
             if(!prepare_private(context.r14,*config)) {++unavailable_;return;}
+            prepared_configuration_.store(config);
             context.r14=reinterpret_cast<uintptr_t>(&camera_array_);
-            selection_mask=config->mask&capture_mask;
+            // Skipping engine sensor renders makes trees and poles disappear on
+            // subsequent captures. Keep each configured view rendering; the
+            // stream still selects readback at its requested sensor rates.
+            capture_mask=config->mask;
+            selection_mask=config->mask;
             if(selection_mask) {selection_owner=this;selection_config=config;++selections_;}
         }
-        // A relocated slot is owned by the sensor while the stream is active.
-        // Clear its native-mirror selection as well as the forced selection on
-        // unused frames; all unowned mirrors retain the engine's choice.
+        // Unowned mirrors retain the engine's choice.
         context.r12=(context.r12&~uint64_t(config->mask))|(config->mask&capture_mask);
     }
 }

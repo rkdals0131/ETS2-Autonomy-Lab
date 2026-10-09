@@ -1,6 +1,6 @@
 # ot — 게임 DLL과 개발 도구
 
-core 0.24.0은 독립 카메라·RGB-D·GPU 라이다·차량 GT, SDK 바퀴 측정·실제 적용 입력·기어를 제공합니다. 브리지는 카메라 30 Hz·라이다 10 Hz를 요청합니다. 현재 FH5 프리셋은 슬롯 3·4·6·7을 사용하고 기본 미러 0·1·2·5를 유지합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
+core 0.24.1은 독립 카메라·RGB-D·GPU 라이다·차량 GT, SDK 바퀴 측정·실제 적용 입력·기어를 제공합니다. 브리지는 카메라 30 Hz·라이다 10 Hz를 요청합니다. 현재 FH5 프리셋은 슬롯 3·4·6·7을 사용하고 기본 미러 0·1·2·5를 유지합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
 
 ## 빌드와 설치
 
@@ -40,6 +40,8 @@ x64 MSVC Build Tools, CMake·Ninja, 공식 SCS SDK가 필요합니다. `build.cm
 [phase1-highway-private.json](presets/phase1-highway-private.json)과 [phase1-lidar-private.json](presets/phase1-lidar-private.json)을 함께 사용합니다. 장착 좌표와 해상도는 [FH5 리그](../docs/14_phase1_highway_sensors.md)에 있습니다.
 
 전방은 선바이저 바깥에, 측면은 미러 하우징 뒤쪽에 부착했습니다. 네 카메라는 캐빈 서스펜션을 따릅니다. 자차 body는 엔진의 full-list 제출 경로를 사용합니다.
+
+활성 리그는 매 프레임 렌더합니다. 렌더를 건너뛰면 나무·가로등이 사라지는 문제가 있어, 수집·GPU readback에만 센서 주기와 구독 조건을 적용합니다. 새 리그의 첫 장면 준비가 끝난 뒤 stream 수집을 시작합니다.
 
 ## 실시간 미리보기
 

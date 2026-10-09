@@ -22,7 +22,10 @@ public:
     void graph_cameras(safetyhook::Context& context) noexcept;
     void graph_end() noexcept;
     uint32_t in_flight() const noexcept { return in_flight_.load()+selections_.load()+graphs_.load(); }
-    bool can_select() const noexcept { auto c=configuration_.load();return !c || !c->private_outputs || !in_flight(); }
+    bool can_capture() const noexcept {
+        auto c=configuration_.load();
+        return !c || !c->private_outputs || (!in_flight() && prepared_configuration_.load()==c);
+    }
     uint32_t mask() const noexcept { auto c=configuration_.load();return c?c->mask:0; }
 private:
     enum class Basis { world,chassis,cabin };
@@ -52,6 +55,7 @@ private:
     std::unordered_set<uintptr_t> requests_;
     std::atomic<uint32_t> selections_{0},graphs_{0};
     std::atomic<std::shared_ptr<const Configuration>> configuration_;
+    std::atomic<std::shared_ptr<const Configuration>> prepared_configuration_;
     std::atomic<uint32_t> in_flight_{0};
     std::array<std::atomic<uint64_t>,9> applied_{};
     std::atomic<uint64_t> unavailable_{0};

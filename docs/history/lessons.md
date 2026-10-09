@@ -22,7 +22,23 @@
 
 ## 캡처 프레임 예측
 
-Present 번호를 +1/+2로 예측하던 방식은 캡처 한 번에 센서를 두 번 렌더했습니다. 다음 select 호출이 대기 묶음 하나를 가져가고 pass의 실제 Present ID를 따르게 변경했습니다. 266묶음에 각 센서 제출도 266회였습니다.
+Present 번호를 +1/+2로 예측하던 방식은 캡처 한 번에 센서를 두 번 렌더했습니다. 현재는 다음 select 호출이 대기 묶음 하나를 가져가고 pass의 실제 Present ID를 따릅니다.
+
+## 센서 렌더 생략과 정적 물체 깜빡임
+
+비수집 프레임의 센서 렌더를 생략하자 정차 상태에서도 나무·가로등이 영상과 라이다에서 반복해서 사라졌습니다. ROS·GPU pack을 뺀 30 Hz 엔진 원본 수집에서도 재현됐고, 연속 렌더에서는 유지됐습니다. 가시성 제출만 계속하고 graph의 drawable을 NULL로 건너뛰는 실험도 실패했습니다. 엔진 내부에서 이력을 잃는 정확한 지점은 남은 조사 대상입니다.
+
+0.24.1은 활성 리그를 매 프레임 렌더하고, pack·readback만 요청 주기에 맞춥니다. 새 리그의 첫 장면 준비가 끝날 때까지 stream 선택을 늦춰 시작 첫 영상의 누락도 제거했습니다. private 배열은 이전 queued graph가 끝난 뒤 갱신합니다.
+
+같은 정차 장면에서 네 카메라·GT 각 973회, 라이다 각 354회를 ROS로 받았습니다. 저장한 C_RR 650장 모두 문제 나무를 유지했고, L_PR 250회의 해당 영역 중앙 거리는 42.57089–42.57121m였습니다. 네 카메라·GT의 stamp가 모두 같고 라이다 stamp도 카메라 표본에 포함됐습니다. 수신 주기는 시뮬레이션 stamp 기준 카메라 27.42 Hz·라이다 9.96 Hz였습니다. 전경 FPS 비교는 후속 측정입니다.
+
+![렌더 생략 전후의 나무와 가로등](../images/visibility-gating-fix.png)
+
+원본 표본: 로컬 `research/live/2026-10-09-visibility/`의 `raw-stream`, `raw-stream-fixed`(graph만 생략한 실패 실험), `raw-stream-continuous`, `bridge-final`.
+
+## 조사 중 캡처 종료 충돌
+
+2026-10-09에 rgbd8 이후 raw 캡처를 시도했을 때 OT_Bundles 용량 부족 오류가 났고, 이어진 패닉 정리 중 게임이 한 번 종료됐습니다. fault는 엔진 렌더 명령 컴파일의 RVA `0x2B1C2C`였습니다. 크래시와 DLL 로그는 로컬 `research/live/2026-10-09-visibility/manual-capture-crash.txt`, `manual-capture-core.log`에 보존했습니다. 형식 전환·hook 해제 중 어느 단계가 원인인지는 미해결입니다. 이후 비교는 형식별로 core를 재초기화하고 진행했습니다.
 
 ## 재질 Z와 geometry 깊이
 
