@@ -22,7 +22,7 @@ Windows와 WSL은 같은 `config/bridge.local.json`을 읽습니다. 현재 배�
 
 | 설정 | 용도 |
 | --- | --- |
-| rig / lidar / slots | 센서 프리셋과 슬롯. 현재 private 프리셋·[3,4,6,7]. []는 상태 센서만 실행 |
+| rig / lidar / slots | 센서 프리셋과 슬롯. 현재 private 프리셋·[3,4,6,7]. []는 SDK 바퀴 기준의 상태·입력만 실행하며 카메라 장착 보정을 사용하지 않음 |
 | duration_s | 실행 제한 시간 |
 | camera_hz / lidar_hz | 기본 30 / 10. 라이다는 필요한 카메라 프레임에서만 gather·readback |
 | preview_hz / lidar_preview_stride | 표시용 JPEG 기본 10 Hz. 표시용 점군은 수평 빔 4개마다 1개, 모든 수직 링 유지 |
@@ -95,7 +95,7 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 
 ## 운전 명령 API
 
-0.27.0은 공식 SCS Input SDK에 `ot_drive` 가상 3축 장치를 등록합니다. 사람의 키보드/Xbox 바인딩을 유지하면서 컴퓨터가 횡방향 조향과 종방향 가속·제동을 보냅니다. 조향은 정규화 위치 입력이며 FFB나 조향 토크 제어는 구현하지 않았습니다. 현재는 오프라인 빌드·소유권/만료/수동 해제 검사까지 확인했고 게임 적용 시험은 남아 있습니다.
+0.27.0은 공식 SCS Input SDK에 `ot_drive` 가상 3축 장치를 등록합니다. 사람의 키보드/Xbox 바인딩을 유지하면서 컴퓨터가 횡방향 조향과 종방향 가속·제동을 보냅니다. 조향은 정규화 위치 입력이며 FFB나 조향 토크 제어는 구현하지 않았습니다. 설치와 장치 등록, disarmed Xbox 좌우·RT/LT 대조, 실제 ROS arm/disarm을 확인했습니다. 자동 명령 적용·만료의 게임 시험은 진행 중입니다.
 
 최초 등록은 정상 게임 종료 → 새 loader/core 설치 → 게임 재시작 순서입니다. SDK는 input init 때만 장치를 등록하므로 기존 loader의 hot reload로 추가할 수 없습니다. 설치된 `ot_runtime/ot_config.json`에서 `allow_drive: true`, `singleplayer_research: true`, 활성 `controls.sii`의 절대 경로 `drive_controls_path`를 설정합니다. 저장소 기본 권한은 꺼져 있으며 센서 설정과 사용자 controls.sii는 바꾸지 않습니다.
 
@@ -111,7 +111,29 @@ arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기
 
 명령 만료·물리 조작·F11·pause·SDK 입력 비활성·core unload·통신 단절은 arm을 해제합니다. resume/reconnect는 다시 arm하지 않습니다. F11은 bridge lease도 취소하므로 런처를 명시적으로 재시작합니다. SDK 한 입력 프레임의 세 축은 같은 snapshot이며 해제는 다음 입력 프레임의 세 축 0으로 반영합니다. 렌더 수집 on/off와 운전 arm은 독립입니다.
 
-수동 해제는 현재 프로필의 A/Left·D/Right·W/Up·S/Down 및 `joy.x/rt/lt`를 직접 읽습니다. controls.sii의 deadzone·축 변환을 적용하고, 반대 키나 키보드/패드가 서로 상쇄돼도 각 물리 source의 활동을 보고 해제합니다. pad 부재는 프로필의 `?0` fallback대로 중립이며 키보드 조작은 유지합니다. pad 연결 변화는 arm을 해제하고 읽기 오류·지원하지 않는 binding에서는 arm을 허용하지 않습니다. 프로필 변경은 권한 재읽기 또는 재시작으로 반영합니다. `xinput_gamepad_1`을 Windows index 0으로 대응시킨 것은 추론이며, 첫 게임 시험에서 disarmed 상태로 stick/RT/LT와 게임 입력을 deadzone 양쪽에서 대조해야 합니다.
+수동 해제는 현재 프로필의 A/Left·D/Right·W/Up·S/Down 및 `joy.x/rt/lt`를 직접 읽습니다. controls.sii의 deadzone·축 변환을 적용하고, 반대 키나 키보드/패드가 서로 상쇄돼도 각 물리 source의 활동을 보고 해제합니다. pad 부재는 프로필의 `?0` fallback대로 중립이며 키보드 조작은 유지합니다. pad 연결 변화는 arm을 해제하고 읽기 오류·지원하지 않는 binding에서는 arm을 허용하지 않습니다. 프로필 변경은 권한 재읽기 또는 재시작으로 반영합니다. 현재 프로필의 `xinput_gamepad_1`과 Windows index 0은 disarmed 좌우 stick·RT/LT 대조에서 대응했습니다. deadzone 경계의 세밀한 대조와 armed 상태의 수동 해제·F11 시험은 남아 있습니다.
+
+2026-10-10 입력 시험 차량은 FH4였고 기존 카메라 보정은 FH5입니다. `slots: []`에서는 현재 SDK 바퀴로 base_link를 계산해 상태·입력을 연결합니다. 센서 슬롯을 선택하면 기존 차량·장착 검사로 잘못된 보정을 거절합니다. FH5 보정 파일은 변경하지 않았으며 이 시험은 IMU/GNSS 보정 검증이 아닙니다. 자동 시동 옵션이 켜져 있어 수동 RT 조작 때 엔진이 시작됐으므로, 현재 정차 자동 입력 시험의 throttle은 항상 0입니다.
+
+### 속도 목표와 직접 조향
+
+`drive_speed`는 GT 속도와 목표 속도의 차이로 throttle/brake를 계산하고, `steering`을 그대로 보냅니다. 첫 동작용 P 제어이며 ACC·차로 유지 제어기는 아닙니다. 실행 중 ROS parameter로 목표를 바꿀 수 있습니다. 속도 단위는 m/s, 조향은 양수 왼쪽 `[-1,1]`입니다. 엔진·D 기어·주차브레이크는 게임에서 설정합니다.
+
+ROS 브리지가 실행 중인 WSL에서 같은 domain을 사용합니다:
+
+```bash
+source /path/to/ETS2-Autonomy-Lab/bridge/ros-env.sh
+ros2 run ets2_bridge drive_speed --ros-args -p arm:=true -p target_speed_mps:=2.0 -p steering:=0.0
+```
+
+다른 터미널에서 목표를 바꿉니다:
+
+```bash
+ros2 param set /ets2_drive_speed target_speed_mps 3.0
+ros2 param set /ets2_drive_speed steering 0.1
+```
+
+`arm` 기본값은 false이고, `arm:=true`를 명시한 실행만 시작합니다. Ctrl+C는 자신의 epoch를 해제합니다. 수동 조작·F11·만료·통신 단절 뒤 노드는 종료하며 자동으로 재arm하지 않습니다. `throttle_gain`·`brake_gain` 기본값 0.2는 속도 오차 1 m/s당 정규화 페달 0.2를 의미합니다. 두 페달은 동시에 적용하지 않으며 출력은 `[0,1]`입니다. gain은 차량 반응에 맞춰 조정할 수 있습니다.
 
 CLI `topic pub --once`는 새 노드 발견 지연으로 200 ms 창을 놓칠 수 있습니다. 이미 연결된 노드에서 상태의 창을 받아 명령을 발행합니다. 다음 예는 **3초 동안 중립값만** 전송하며 실행 전에 새 장치 설치·권한·물리입력 대조가 필요합니다. 게임에 이 예를 실행한 검증은 아직 하지 않았습니다.
 

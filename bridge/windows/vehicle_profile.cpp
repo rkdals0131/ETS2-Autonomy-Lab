@@ -6,8 +6,9 @@ namespace bridge {
 VehicleProfile resolve_vehicle(json rig,const json& truck,const json& selected) {
     std::map<std::pair<std::string,int>,json> attributes;
     for(const auto& a:truck.at("attributes")) attributes[{a.at("name"),a.at("index").is_null()?-1:a.at("index").get<int>()}]=a.at("value");
-    if(attributes.at({"id",-1})!=rig.at("truck_id")) throw std::runtime_error("Truck differs from calibrated sensor mount");
-    auto wheels=rig.value("base_link_wheels",std::vector<int>{});
+    const bool mounted_sensors=!selected.empty();
+    if(mounted_sensors && attributes.at({"id",-1})!=rig.at("truck_id")) throw std::runtime_error("Truck differs from calibrated sensor mount");
+    auto wheels=mounted_sensors?rig.value("base_link_wheels",std::vector<int>{}):std::vector<int>{};
     if(wheels.empty()) for(const auto& [key,value]:attributes)
         if(key.first=="wheel.powered" && value.get<bool>() &&
            (!attributes.contains({"wheel.simulated",key.second}) || attributes.at({"wheel.simulated",key.second}).get<bool>())) wheels.push_back(key.second);
@@ -29,7 +30,7 @@ VehicleProfile resolve_vehicle(json rig,const json& truck,const json& selected) 
     }
     rig["views"]=views;rig["base_origin"]=origin;rig["enabled"]=!views.empty();rig["cmd"]="camera_rig";
     VehicleProfile result{rig,{{"truck_id",attributes.at({"id",-1})},{"base_origin_model_m",origin},
-        {"base_link_wheels",wheels},{"mount_profile",rig.value("vehicle_configuration",json(nullptr))},
+        {"base_link_wheels",wheels},{"mount_profile",mounted_sensors?rig.value("vehicle_configuration",json(nullptr)):json(nullptr)},
         {"wheels",json::array()}},origin,{},truck.at("truck_generation").get<uint64_t>()};
     for(const auto& [key,value]:attributes) if(key.first=="wheel.position") {
         const auto index=key.second;
