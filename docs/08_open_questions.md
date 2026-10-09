@@ -13,5 +13,6 @@
 | 입력·플랜트 | 입력 API·제어용 응답 모델 미구현 | M8 소유권·해제·실제 적용값 → 응답 식별 → GT ACC/LCC |
 | 조향 기하 | 바퀴별 실제 각도·위치·조향 축 확보 | 좌우 선회에서 Ackermann·속도별 응답 대조, 운전석 휠 타각 원본 확인 |
 | 원본 고해상도 비용 | 이전 10 Hz 전체 브리지 46.35 FPS | 30 Hz 원본 부하와 [A–G 측정](18_performance.md) |
+| 미리보기 브리지 CPU 비용 | 같은 장면에서 리그만 62.13 FPS, 0.24.2 전체 39.24 FPS | 남은 compile 관측·GPU 복사 제출·프로세스 경합 분리 |
 
 [구조 정리](03_system_design.md), [차량 보정](14_phase1_highway_sensors.md), [측정 모델](17_sensor_expansion.md), [플랜트·제어](07_learning_and_control.md), [성능](18_performance.md).

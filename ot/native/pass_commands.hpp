@@ -8,7 +8,7 @@ namespace ot {
 class PassCommands {
 public:
     void draw_batch(uintptr_t input,uintptr_t items,uintptr_t bindings,uint32_t count) noexcept;
-    void begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,bool vehicles=false,std::shared_ptr<const json> sdk={}) noexcept;
+    void begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,bool vehicles=false,std::shared_ptr<const json> sdk={},uint32_t camera_mask=UINT32_MAX) noexcept;
     void end(uintptr_t frame) noexcept;
     std::shared_ptr<const json> lookup(uint16_t id,uintptr_t token) noexcept;
     void clear();
@@ -23,7 +23,7 @@ private:
         std::shared_ptr<const json> pass;
     };
     static std::vector<Block> blocks(uintptr_t output);
-    std::shared_ptr<const json> describe(uintptr_t input,bool vehicles,const std::shared_ptr<const json>& sdk);
+    std::shared_ptr<const json> describe(uintptr_t input,bool vehicles,const std::shared_ptr<const json>& sdk,uint32_t camera_mask);
     struct Draw {
         uintptr_t geometry{},buffer{};
         uint32_t first{},count{};

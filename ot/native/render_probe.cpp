@@ -339,12 +339,15 @@ void RenderProbe::present_callback(safetyhook::Context& context) noexcept {
 }
 void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept {
     callbacks.fetch_add(1);
-    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load() && self->compile_frame()) {
+    if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load()) {
+        const auto stream=self->stream_.load();
+        const auto mask=stream && stream->running()?stream->compiling_mask():UINT32_MAX;
+        if(!mask) {callbacks.fetch_sub(1);return;}
         const auto start=qpc_now();
         uintptr_t input{},output{};uint16_t id{};
         if(read_memory(context.r10,input) && read_memory(context.rsp+0x58,output) &&
            read_memory(context.rbp+0x240,id))
-            self->pass_commands_.begin(context.rbp,input,output,id,self->vehicle_metadata_.load(),self->sdk_state_.load());
+            self->pass_commands_.begin(context.rbp,input,output,id,self->vehicle_metadata_.load(),self->sdk_state_.load(),mask);
         self->compile_begin_timing_.add(qpc_now()-start);
     }
     callbacks.fetch_sub(1);

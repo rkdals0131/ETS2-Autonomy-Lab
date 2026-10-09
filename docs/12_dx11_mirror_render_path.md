@@ -6,6 +6,8 @@
 
 그래프 이미지 이름 → pool image ID → DX11 texture/view를 연결합니다. 미러 0·2처럼 같은 리소스를 재사용하는 pass는 컴파일된 명령 구간의 namespace로 식별합니다. composition 타깃을 떠날 때 실제 OM 타깃을 확인하고 해당 pass 데이터를 복사합니다.
 
+stream의 관측은 현재 수집 중인 카메라로 제한합니다. 카메라·차량 자세는 attributes_0을 출력하는 형상 pass에서 읽습니다. 다른 pass의 명령 구간은 이름 없이 기록해 pool 재사용 시 이전 이름을 지웁니다.
+
 센서 RGB는 composition에서, 깊이는 geometry DSV에서 옵니다. 현재 private 출력은 `ot/sensorN` 이름과 alias 0xffff를 사용합니다. 사용자가 보는 HUD·물리 미러 텍스처와 분리돼 있습니다.
 
 ## 미러 자세와 운전석 시점 의존성

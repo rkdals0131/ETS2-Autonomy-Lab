@@ -1,6 +1,6 @@
 # 추가 센서와 확장 계획
 
-core 0.24.1과 Windows 릴레이는 독립 카메라 4뷰·깊이 라이다 3개, 이상적 IMU·바퀴 측정·휠 오도메트리·가상 GNSS를 제공합니다. `MotionSensors`가 상태 측정을 계산하고 `state_messages.cpp`가 ROS CDR로 변환합니다. 잡음·바이어스·RTK 상태는 후속 작업입니다.
+core 0.24.2과 Windows 릴레이는 독립 카메라 4뷰·깊이 라이다 3개, 이상적 IMU·바퀴 측정·휠 오도메트리·가상 GNSS를 제공합니다. `MotionSensors`가 상태 측정을 계산하고 `state_messages.cpp`가 ROS CDR로 변환합니다. 잡음·바이어스·RTK 상태는 후속 작업입니다.
 
 ## 단위와 현재 확인값
 

@@ -26,10 +26,15 @@ void CaptureStream::stop() noexcept {
     if(worker_.joinable()) worker_.join();
 }
 bool CaptureStream::compiling() const noexcept {
+    return compiling_mask()!=0;
+}
+uint32_t CaptureStream::compiling_mask() const noexcept {
+    uint32_t mask=0;
     for(const auto& slot:slots_) if(slot.active.load() && slot.selected.load())
         for(size_t i=0;i<slot.cameras.size();++i)
-            if((slot.mask.load()&(1u<<camera_indices_[i])) && slot.cameras[i]->phase()==GpuCapture::Phase::armed) return true;
-    return false;
+            if((slot.mask.load()&(1u<<camera_indices_[i])) && slot.cameras[i]->phase()==GpuCapture::Phase::armed)
+                mask|=1u<<camera_indices_[i];
+    return mask;
 }
 uint32_t CaptureStream::select_pending() noexcept {
     if(selecting_.test_and_set()) return 0;

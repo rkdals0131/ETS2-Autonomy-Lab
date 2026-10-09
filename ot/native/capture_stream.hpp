@@ -14,6 +14,7 @@ public:
     void update(const CaptureOptions& options) {pending_options_.store(std::make_shared<const CaptureOptions>(options));}
     bool running() const noexcept {return running_.load();}
     uint32_t select_pending() noexcept;
+    uint32_t compiling_mask() const noexcept;
     bool compiling() const noexcept;
     bool pending() const noexcept;
     json status();

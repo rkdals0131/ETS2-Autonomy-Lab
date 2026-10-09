@@ -247,7 +247,7 @@ std::vector<PassCommands::Block> PassCommands::blocks(uintptr_t output) {
             throw std::runtime_error("Compiled command block changed or is invalid");
     return result;
 }
-std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles,const std::shared_ptr<const json>& sdk) {
+std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles,const std::shared_ptr<const json>& sdk,uint32_t camera_mask) {
     DrawBatch draw_batch;
     {
         std::lock_guard lock(draws_mutex_);
@@ -274,13 +274,15 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
                 const auto id=read<uint32_t>(outputs.data+j*8);
                 if(id>=images.size) continue;
                 const auto label=read<uintptr_t>(images.data+id*0x7F0+0xA8);
-                std::array<char,6> prefix{};
+                std::array<char,8> prefix{};
                 if(label && copy_memory(label,prefix.data(),prefix.size()) &&
-                   std::memcmp(prefix.data(),"mirror",prefix.size())==0) {mirror_output=true;break;}
+                   std::memcmp(prefix.data(),"mirror",6)==0 && prefix[6]>='0' && prefix[6]<='8' &&
+                   prefix[7]=='\0' && (camera_mask&(1u<<(prefix[6]-'0')))) {mirror_output=true;break;}
             }
             // pass+0xC0 names the implementation (e.g. deferred or quad_drawer),
             // not the camera. Filter on output image namespaces before building
-            // strings/JSON; begin/end still retain unnamed command intervals.
+            // strings/JSON. Only requested cameras need metadata; begin/end
+            // still retain unnamed intervals for all other command ranges.
             if(!mirror_output) return {};
             json result={{"pass_address",pass},{"command_buffer",input},{"graph_buffer",b},
                 {"pass_name",string_at(read<uintptr_t>(pass+0x20))},
@@ -299,7 +301,7 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
                 }
             }
             const bool mirror_surface=std::any_of(links.begin(),links.end(),[](const json& image) {
-                return image.at("name")=="attributes_0" &&
+                return image.at("reference_array_offset")==0x658 && image.at("name")=="attributes_0" &&
                     image.at("namespace").get_ref<const std::string&>().starts_with("mirror");
             });
             if(mirror_surface) {
@@ -339,11 +341,11 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
     }
     return {};
 }
-void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,bool vehicles,std::shared_ptr<const json> sdk) noexcept {
+void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,bool vehicles,std::shared_ptr<const json> sdk,uint32_t camera_mask) noexcept {
     try {
         auto before=blocks(output);
         const bool empty=std::all_of(before.begin(),before.end(),[](const Block& b){return b.size==0;});
-        auto pass=describe(input,vehicles,sdk);
+        auto pass=describe(input,vehicles,sdk,camera_mask);
         std::lock_guard lock(mutex_);
         ++inputs_;if(pass) ++named_;
         // The engine resets an allocated compiled buffer before filling it.
