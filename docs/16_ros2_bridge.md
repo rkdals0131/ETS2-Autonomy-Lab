@@ -291,11 +291,26 @@ A 35 mm standoff places its shared optical center at
 `[0.000331, 3.012423, -3.143469]`, preserving the narrow/wide camera angles.
 Actual RGB and depth show the band removed; neither front image has depth below
 0.2 m in this stationary sample. The side mounts are unchanged. Their full-size
-images show cabin and fender surfaces; the small seam reported in the user's
-side screenshot has not been separately demonstrated and closed as a distinct bug.
+images show cabin and fender surfaces. The subsequently identified diagonal gray
+bands are the garage inspection pit's floor border, as confirmed below.
 Attached-trailer coverage still requires a trailer.
 
 ![Four private sensor images after the front mount correction](images/phase1-private-0.22.0.png)
+
+### Side-view diagonal gray bands: inspection pit border
+
+The user identified the bands beside the truck in C_RL/C_RR more precisely.
+Depth backprojection places the band on the garage floor, approximately zero
+height in the chassis frame, rather than on a raised truck panel. The earlier
+ego-body-disabled image already shows the same band around a metal grille.
+An additional private camera, looking down from chassis `[0, 5.2, 1.5]`, reveals
+the complete rectangular inspection pit below the truck: metal grille and tread
+plate inside, gray floor border outside. Its two long sides are the diagonal
+bands in the pod views. They are environment geometry, not an antenna or a
+render artifact, so no masking or rendering change was applied. The temporary
+camera was removed and Tier 0/hooks 0 restored; saved mounts were unchanged.
+
+![The gray bands surround the garage inspection pit](images/garage-service-pit.png)
 
 ## Foreground comparison — 2026-10-09
 
