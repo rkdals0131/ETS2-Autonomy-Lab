@@ -33,6 +33,7 @@ ETS2LA/plugin은 MIT, SPF는 Apache-2.0 라이선스 파일을 확인했습니�
 | [미러 FOV 변환 설명](https://forum.scssoft.com/viewtopic.php?t=253252) | SCS 개발자 Max의 mirror_size·FOV 설명 |
 | [추가 미러 설정 설명](https://forum.scssoft.com/viewtopic.php?p=1208872) | SCS 개발자의 cam_m_h와 대응 설정 |
 | [실내 애니메이션과 UI ID](https://modding.scssoft.com/wiki/Documentation/Engine/Truck_Interior_Animations_and_IDs) | 디지털미러 1620~1650, 주차 화면 910~913 |
+| [섀시 정의](https://modding.scssoft.com/wiki/Documentation/Engine/Units/accessory_chassis_data) | steerable_axle, 최대 조향각, 조향 피벗 오프셋; 설치 FH5 정의·SDK 기하와 대조 |
 | [미러 갱신 문제](https://forum.scssoft.com/viewtopic.php?t=259895) | SCS 개발자 Komat의 가시성 검사 설명 |
 | [미러 렌더 품질 관련 답변](https://forum.scssoft.com/viewtopic.php?start=3600&t=330624) | VR 논의 내 r_deferred_mirrors와 r_mirror_view_distance |
 | [맵 에디터 기능](https://modding.scssoft.com/wiki/Documentation/Tools/Map_Editor/New_Editor_Features_info_-_old_%2B_1.47) | No mirror reflection 속성 |

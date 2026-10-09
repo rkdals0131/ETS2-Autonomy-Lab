@@ -33,7 +33,7 @@ Windows C++ 릴레이가 메시지를 생성하고, WSL Jazzy의 GenericPublishe
 | /ets2/wheels/state | WheelState: 바퀴 index·rad/s·실제 조향 rad·반지름 m·접지 |
 | /ets2/wheels/odometry | 바퀴 구름 제약으로 적분한 Odometry, wheel_odom 기준, TF 미발행 |
 | /ets2/gnss/fix | 가상 WGS84 기준의 이상적 NavSatFix, 10 Hz |
-| /ets2/sensors/config | 단위·센서 모델·장착점·가상 지리 기준 JSON String, transient-local |
+| /ets2/sensors/config | 센서 실행 ID·단위·모델·장착점·차량 기하·가상 지리 기준 JSON String, transient-local |
 | /ets2/frame_info | 세션·render_frame_id·센서 대응 FrameInfo |
 | /ets2/frame_info/exposure | 같은 프레임의 gain·자동 노출 여부 FrameExposure |
 | /clock, /tf, /tf_static, /diagnostics | 시뮬레이션 시각·좌표·성능 |
@@ -45,6 +45,8 @@ Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다
 ## 수집과 노출
 
 실제 구독 요구를 합쳐 color·depth·preview·metadata·lidar를 선택합니다. 변경은 묶음 경계에서 반영합니다. 처리 중인 GPU 자원은 소비 완료까지 유지합니다. preview와 perception은 같은 축소 출력을 공유합니다.
+
+평상시에는 perception·JPEG·라이다를 사용합니다. 원본 RGB·depth는 구독할 때만 pack·readback·전송합니다. 라이다 구독은 GPU 깊이를 사용하고 전체 depth 영상 readback을 요구하지 않습니다. 렌더 출력 요구가 모두 사라지면 hook·stream을 해제합니다. 상태 토픽만의 구독 변경은 GPU stream을 재설정하지 않습니다.
 
 기본 카메라 요청은 30 Hz, 라이다는 10 Hz입니다. 라이다가 예정되지 않은 묶음은 GPU gather·라이다 readback을 생략합니다. 라이다 단독 구독의 카메라 선택도 10 Hz 기회에 맞추도록 구현돼 있습니다. 현재 실측은 JPEG·라이다 동시 구독이며 다른 소비자가 없는 단독 구독 주기 확인이 남아 있습니다. 라이다 stamp는 같은 묶음의 카메라 stamp와 같습니다. IMU·휠은 새 SDK 표본마다 발행하고 보간하지 않습니다. GNSS는 시뮬레이션 시각의 100 ms 경계 이후 첫 새 표본을 사용합니다.
 
@@ -58,7 +60,9 @@ SDK와 센서 stamp의 출처는 [시각 계약](04_sensors_and_data.md)에 따�
 
 lease가 만료되면 Tier 0으로 복귀합니다. F11은 lease를 취소하고 사용자 시작을 기다립니다. 네트워크 단절은 캡처를 해제하고 eth0를 다시 조회합니다. DLL 교체는 릴레이 중지 후 메타로더에서 수행합니다.
 
-현재 `/ets2/capture=false`도 Tier 0으로 내려가 IMU·GNSS 발행과 휠 오도메트리 적분을 중단합니다. 네트워크 재연결은 새 세션을 만들고 `wheel_odom` 원점·가상 GNSS 기준점을 초기화합니다. 이 수명주기는 [분리 예정](03_system_design.md#코드-경계와-다음-정리)입니다.
+`/ets2/capture=false`는 렌더 hook·stream을 해제하고 Tier 1 물리 읽기를 유지합니다. IMU·휠 오도메트리·GNSS는 구독과 통신에 독립적으로 계산됩니다. TCP 재연결 때 전송 세션은 바뀌고 `wheel_odom` 원점·가상 GNSS 기준점·`sensor_session`은 유지됩니다. 연결이 없던 구간의 토픽은 재전송하지 않고 최신 측정부터 발행합니다.
+
+릴레이 중지·재시작은 새 센서 실행을 만듭니다. 게임 시각 초기화·차량 구성 변경은 릴레이를 종료하며 명시적 재시작을 요구합니다. `/ets2/sensors/config`의 `sensor_session`과 FrameInfo의 전송 세션 ID를 각각 사용합니다. ROS 메시지 스키마는 유지됩니다.
 
 ## 확인 결과
 
@@ -67,4 +71,6 @@ lease가 만료되면 Tier 0으로 복귀합니다. F11은 lease를 취소하고
 - 원본·라이다·깊이 구독 전환과 구독 해제, relay 종료 후 lease 복구를 확인했습니다.
 - Foxglove WebSocket에서 미리보기·점군·MarkerArray·TF·진단을 수신했습니다.
 - MCAP의 79묶음 전체를 재생했습니다. pause 포함 기록은 clock 7,214개·preview 2,129개와 13.26초 pause를 보존했습니다.
+- 수명 분리 후 실제 ROS에서 영상 중지 5초 동안 IMU 310·휠 오도메트리 311·GNSS 52개와 영상·라이다 0개를 수신했습니다. TCP 단절·재연결에도 동일 sensor_session과 연속 오도메트리 좌표를 확인했습니다.
+- 빈 슬롯 구성의 상태 센서 수신, 원본 RGB·depth 1280×720 각각 180장 수신, 패닉 후 Tier 0·자동 재시작 중단을 확인했습니다. 정차 기능 확인이며 주행 정확도·FPS는 별도 측정합니다.
 - 실제 WSL 주소 변경, 트레일러 연결·굴절, 장시간 주행은 [남은 작업](08_open_questions.md)입니다.

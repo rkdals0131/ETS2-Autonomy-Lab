@@ -22,7 +22,7 @@ Windows와 WSL은 같은 `config/bridge.local.json`을 읽습니다. 현재 배�
 
 | 설정 | 용도 |
 | --- | --- |
-| rig / lidar / slots | 센서 프리셋과 슬롯. 현재 private 프리셋·[3,4,6,7] |
+| rig / lidar / slots | 센서 프리셋과 슬롯. 현재 private 프리셋·[3,4,6,7]. []는 상태 센서만 실행 |
 | duration_s | 실행 제한 시간 |
 | camera_hz / lidar_hz | 기본 30 / 10. 라이다는 필요한 카메라 프레임에서만 gather·readback |
 | imu_mount_base_m / gnss_mount_base_m | 섀시 고정 장착점, base_link 기준 m. 기본 [0,0,1] |
@@ -32,6 +32,10 @@ Windows와 WSL은 같은 `config/bridge.local.json`을 읽습니다. 현재 배�
 | shared_gpu | 기본 true, 공유 GPU 텍스처 전달 |
 
 설정 변경은 중지 후 적용합니다. `configure.py`는 최초 파일을 만들고 기존 설정을 보존합니다. token은 로컬 파일에만 보관합니다.
+
+원본 RGB·depth는 기본 화면에서 구독하지 않습니다. `/perception/image_raw`는 인지용 축소 RGB, `/preview/image/compressed`는 표시용 JPEG입니다. 원본 `/image_raw`와 `/depth/image_raw`를 구독할 때만 고해상도 pack·readback·전송을 수행합니다. 라이다만 필요하면 GPU 깊이에서 빔을 샘플링하고 전체 깊이 영상은 내려받지 않습니다. `ros2 bag record -a`는 원본 토픽도 구독하므로, 평상시 기록은 필요한 토픽을 지정합니다.
+
+`/ets2/capture` 서비스로 렌더 수집을 중지해도 IMU·휠·GNSS 계산은 계속됩니다. TCP 재연결에도 적분과 지리 기준점을 유지합니다. 런처의 중지·재시작은 센서 실행 전체를 끝내며 다음 시작에서 새 기준점을 만듭니다. `/ets2/sensors/config`의 `sensor_session`으로 이 수명을 구분합니다.
 
 ## 최초 준비
 
@@ -114,7 +118,7 @@ ros2 launch ets2_bridge bridge.launch.py config:="$REPO/bridge/config/bridge.loc
 .\bridge\dist\ets2_relay.exe .\bridge\config\bridge.local.json
 ```
 
-`/ets2/capture` SetBool 서비스로 수집을 중지·재개합니다. 현재 중지는 내부 물리 읽기도 내려 IMU·GNSS와 휠 오도메트리 적분에 영향을 줍니다. SDK 상태·clock은 유지됩니다. 서비스 응답은 요청 접수이고 `/diagnostics.capture_active`가 적용 상태입니다. F11 이후에는 릴레이를 다시 시작합니다.
+`/ets2/capture` SetBool 서비스로 렌더 수집을 중지·재개합니다. 상태 센서·SDK·clock은 유지됩니다. 서비스 응답은 요청 접수이고 `/diagnostics`의 `capture_active`가 적용 상태입니다. F11 이후에는 릴레이를 다시 시작합니다.
 
 ## 운영 구조
 

@@ -7,7 +7,8 @@ ETS2 / Windows
   └─ 독립 센서 pass → GPU pack → 공유 텍스처·fence + OT_Bundles
                          ↓
 Windows C++ 릴레이
-  ├─ GPU readback·센서 측정 계산·CDR·JPEG
+  ├─ StateSource → MotionSensors → 상태 CDR
+  ├─ RenderCapture → GPU readback → 영상·라이다 CDR·JPEG
   ├─ 대용량 TCP: 영상·라이다·GT·렌더 TF·frame_info
   └─ 상태 TCP: SDK·IMU·휠·GNSS·clock·진단 / 역방향 구독·수집 제어
                          ↓ Ubuntu eth0 NAT 직접 주소
@@ -41,23 +42,32 @@ Windows가 XCDRv1 메시지를 만들고 WSL은 GenericPublisher로 발행합니
 
 Foxglove는 JPEG·라이다·GT·TF·상태를 구독합니다. 원본 RGB·depth와 축소 perception 영상은 ROS 소비자가 선택합니다. 실제 구독이 GPU pack·readback 요구로 연결됩니다.
 
-## 코드 경계와 다음 정리
+## 코드 경계
 
-| 위치 | 현재 책임 | 필요한 정리 |
-| --- | --- | --- |
-| ot/native | 로더·SDK·물리 읽기·리그·pass·GPU pack·capture stream을 분리 | 상태 센서의 내부 읽기와 영상 수집 활성 상태 분리 |
-| bridge/windows/main.cpp | 설정·리그 좌표 계산·소유권·구독·큐·TCP worker | 차량 프로필·캘리브레이션을 세션 관리에서 분리 |
-| bridge/windows/messages.cpp | 좌표 수학·IMU·오도메트리·GNSS·점군·JPEG·CDR | 센서 측정 생성과 ROS 직렬화 분리 |
-| bridge/common/wire.hpp | 고정 토픽 목록과 전송 계약 | 센서 구성 목록에서 토픽·TF·의존성 생성 |
-| bridge/ros2 | CDR 발행·ROS 구독 수 전달·메시지 정의 | Windows가 보낸 센서 구성과 발행 목록 연결 |
-| bridge/launcher.py, wsl_session.py | 실제 상태를 확인하는 Windows·WSL 실행 관리 | 설정 적용 후 센서별 수신 상태 표시 |
+| 위치 | 책임 |
+| --- | --- |
+| ot/native | SDK·물리 읽기, 리그·pass 관측, GPU pack·공유 자원 |
+| bridge/windows/vehicle_profile.* | SDK 바퀴 기하·기준 축·수동 장착 프리셋 해석, 라이다 소스 연결 |
+| bridge/windows/state_source.* | SDK 최신 표본 읽기, 센서 계산 스레드와 실행 수명 |
+| bridge/windows/motion_sensors.* | IMU·휠 오도메트리·가상 GNSS 측정과 적분 이력 |
+| bridge/windows/render_capture.* | 구독 → GPU 출력 요구, 렌더 hook·stream 시작·중지 |
+| bridge/windows/gpu_readback.* | 공유 D3D11 텍스처·fence 소비 |
+| bridge/windows/state_messages.cpp / image_messages.cpp | 상태·영상 측정의 ROS CDR·JPEG 변환 |
+| bridge/windows/game_ipc.* | 게임 명령 pipe와 공유 메모리 소유 슬롯 |
+| bridge/windows/main.cpp / relay_workers.hpp | 프로세스 소유권, 두 TCP 연결, worker·큐와 재연결 |
+| bridge/common/wire.hpp / bridge/ros2 | 토픽·전송 계약, GenericPublisher·구독 요구 전달 |
+| bridge/launcher.py / wsl_session.py | Windows·WSL 실행 관리와 실제 연결 상태 표시 |
 
-현재 영상 수집을 끄면 Tier 0으로 내려가 IMU·GNSS가 중단되고 휠 오도메트리의 적분도 진행되지 않습니다. 리그 설정은 카메라를 하나 이상 요구합니다. 상태 센서만 켜는 운용을 먼저 지원해야 합니다.
+센서 계산은 ROS 직렬화·구독 수·소켓 상태를 참조하지 않습니다. `MotionSample`을 만든 뒤 전송 쪽이 구독된 측정만 직렬화합니다. 센서 잡음은 측정 계산 단계에 추가하고, ROS 메시지 형식과 전송 코드는 유지할 수 있습니다.
 
-카메라는 C_FN·C_FW·C_RL·C_RR, 라이다는 L_F·L_PL·L_PR로 고정돼 있습니다. 기존 뷰 선택과 구독 해제는 가능하지만 새 이름·개수에는 코드 변경이 필요합니다. 센서 목록 하나가 장착점·주기·출력 토픽·소스 의존성을 결정하도록 바꿉니다. 첫 적용 방식은 중지 → 설정 변경 → 재시작입니다. 라이다만 켜도 깊이 소스인 렌더 뷰는 유지합니다.
+## 수명과 구성
 
-차량 기하 계산은 Python `otpy/rig_layout.py`와 C++ `resolve_rig()`에 중복돼 있으며 바퀴 선택 조건도 다릅니다. SDK 구성에서 차량 좌표와 장착점을 해석하는 경로를 통일합니다. 상세 차량 변경 절차는 [FH5 리그와 캘리브레이션](14_phase1_highway_sensors.md)에 있습니다.
+릴레이 프로세스가 lease·Tier 1 물리 읽기·StateSource를 소유합니다. RenderCapture는 렌더 hook과 GPU stream만 소유하며, 수집 중지·구독 해제·네트워크 단절 때 해제합니다. 영상 수집을 꺼도 상태 계산과 적분은 계속됩니다. 소켓 재연결은 새 전송 세션을 만들고 기존 StateSource를 사용합니다.
 
-TCP 재연결은 새 MotionSensors를 만들어 휠 오도메트리와 가상 GNSS 기준점을 초기화합니다. 위치 추정을 붙이기 전에 통신 재연결과 물리 센서 초기화를 분리하고 좌표 초기화 시점을 명시해야 합니다.
+`/ets2/sensors/config`의 `sensor_session`은 릴레이 실행 동안 유지됩니다. 중지·재시작은 새 오도메트리 원점·가상 GNSS 기준점을 만듭니다. 게임 시각 초기화·차량 구성 변경·F11은 명시적 재시작을 요구합니다. 센서 기준점을 바꾸는 동작과 네트워크 복구를 이 경계로 구분합니다.
+
+`slots: []`는 카메라·라이다 없이 상태 센서만 실행합니다. 기존 뷰는 slots로 선택하고 출력은 ROS 구독으로 활성화합니다. 원본 RGB·depth 구독이 없으면 고해상도 readback·전송을 생략합니다. 라이다 소스인 깊이 렌더는 해당 라이다 요구에 따라 유지합니다.
+
+현재 카메라 ID C_FN·C_FW·C_RL·C_RR과 라이다 ID L_F·L_PL·L_PR은 고정입니다. 새 이름·개수에는 토픽 계약과 출력 요구 매핑을 함께 확장합니다. 장착·기준 축은 차량 프리셋으로 바꾸며, FH5와 선호 차종의 수동 보정을 지원합니다. Python 연구 도구와 C++ 릴레이는 같은 프리셋과 기준 축 선택 규칙을 사용합니다. [차량 보정 절차](14_phase1_highway_sensors.md).
 
 GPU 생성·readback은 DX11 API를 직접 사용합니다. DX12 이식 시 교체할 범위는 게임 렌더 후킹·GPU 자원 경로이며 센서 측정·ROS 메시지·전송 계약은 유지하도록 분리합니다. [개발 순서](13_game_operating_table.md), [ROS 계약](16_ros2_bridge.md).

@@ -19,6 +19,30 @@ ETS2 1.61.1.1의 공식 SDK와 내부 물리·렌더 경로를 연결했습니�
 
 SDK 원본은 로컬 `research/sdk`, 채널 목록은 `research/findings/sdk_1_15_channels.csv`, 현재 등록 필드는 `ot/schema`에 있습니다. 0.23.0은 바퀴별 각속도·조향·접지를 등록하고 ROS 각속도에 2π 변환을 적용합니다. [추가 센서](17_sensor_expansion.md).
 
+## 바퀴 조향과 스티어링휠
+
+| 값 | 현재 경로 |
+| --- | --- |
+| 운전자 조향 입력 | `truck.input.steering`, [-1,1], VehicleState에 연결 |
+| 물리에 적용된 유효 조향 입력 | SDK `truck.effective.steering`, [-1,1], 현재 core 등록 전 |
+| 각 바퀴의 실제 조향각 | SDK `truck.wheel.steering[index]` → WheelState.steering rad, 좌측 양수 |
+| 바퀴 위치·반지름·조향/구동 여부 | SDK 구성 → `/ets2/sensors/config`의 vehicle.wheels |
+| 운전석 스티어링휠 현재 타각 | SDK 1.15 직접 채널 없음. 애니메이션 상태·bone transform 경로 조사 필요 |
+
+현재 FH5 4x2의 바퀴 0·1은 조향, 2·3은 구동입니다. SDK 기하에서 축간거리 3.82406m, 앞 트레드 2.08000m, 바퀴 반지름 0.50600m를 얻었습니다. 조향 채널은 모든 바퀴 index에 등록하므로 앞축 두 개나 후륜 조향 차량도 바퀴별 값을 읽는 경로를 사용할 수 있습니다.
+
+설치 DLC의 `def/vehicle/truck/volvo.fh_2021/chassis/`에서 확인한 조향 축은 다음과 같습니다. 배열은 앞에서 뒤 순서입니다.
+
+| 섀시 파일 | steerable_axle |
+| --- | --- |
+| 8x4.sii | true, true, false, false |
+| 6x2_4_midlift.sii | true, true, false |
+| 6x2_taglift_steer.sii | true, false, true |
+
+[SCS 섀시 규약](https://modding.scssoft.com/wiki/Documentation/Engine/Units/accessory_chassis_data)은 조향 축·최대 조향각·조향 피벗 오프셋을 정의합니다. 실행 차량의 실제 반응은 바퀴별 SDK 각도로 확인합니다. 앞축 조향·무슬립 기하에서는 각도 절댓값으로 `cot(delta_outer) - cot(delta_inner) = track / wheelbase`를 대조할 수 있습니다. 현재 빌드의 좌우 선회 각도 표본은 아직 수집하지 않았습니다. 다축 조향은 각 바퀴 위치·각도에서 공통 선회 중심을 맞추는 방식으로 확인합니다.
+
+현재 사용자 프로필의 `g_steer_anim_range`는 900입니다. 게임 바이너리에는 `steering_wheel`·`steering_wheel_animation` 식별자가 있습니다. 이 설정과 정규화 입력만으로 현재 휠 타각을 실측값으로 발행하지 않습니다. 현행 애니메이션 변환과 부호·비선형 응답을 대조해야 합니다. [SCS 실내 애니메이션 문서](https://modding.scssoft.com/wiki/Documentation/Engine/Truck_Interior_Animations_and_IDs)의 구형 `wheel_anim` 경로는 1.42부터 폐기됐습니다.
+
 ## 실행 중인 SDK 채널에서 실제 원본까지 연결
 
 `truck.world.placement`는 physics vehicle slot `+0xF8 → 0x866C10`, 렌더 parent는 `+0xE8 → 0x866B10`에서 읽습니다. 약 16.666ms simulation step의 흐름은 AI 사전 갱신 → 물리 world·PhysX 결과 대기 → 사후 갱신 → SDK frame 이벤트 → 자세 이력·보간 → 렌더 준비입니다.
