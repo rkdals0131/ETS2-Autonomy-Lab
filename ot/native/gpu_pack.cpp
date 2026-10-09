@@ -117,7 +117,7 @@ std::shared_ptr<const LidarPattern> make_lidar_pattern(const json& config) {
     return result;
 }
 void GpuPack::gather(ID3D11DeviceContext1* context,const std::shared_ptr<const LidarPattern>& pattern,
-                     const json& projection,const D3D11_VIEWPORT& vp,const std::string& camera) {
+                     const std::array<float,16>& projection,const D3D11_VIEWPORT& vp,const std::string& camera) {
     auto& work=lidar_;const auto count=static_cast<UINT>(pattern->directions.size());
     if(!work.pattern || work.pattern->description!=pattern->description) {
         work=LidarWork{};work.pattern=pattern;
@@ -140,7 +140,7 @@ void GpuPack::gather(ID3D11DeviceContext1* context,const std::shared_ptr<const L
         work.depth_source=work_[0].output.Get();
     }
     struct Parameters {std::array<float,16> projection;std::array<float,4> viewport;std::array<UINT,4> dimensions;std::array<float,4> sampling;};
-    Parameters values{projection.get<std::array<float,16>>(),{vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height},
+    Parameters values{projection,{vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height},
         {work_[0].output_desc.Width,work_[0].output_desc.Height,count,pattern->interpolate?1u:0u},
         {pattern->depth_edge_ratio,0,0,0}};
     static_assert(sizeof(values)==112);
@@ -160,12 +160,12 @@ void GpuPack::gather(ID3D11DeviceContext1* context,const std::shared_ptr<const L
 }
 void GpuPack::depth(ID3D11DeviceContext1* context,ID3D11Texture2D* source,
                     ID3D11Texture2D* attributes,ID3D11Texture2D* material,
-                    const D3D11_VIEWPORT& vp,const std::string& camera,const json* projection,bool readback,std::shared_ptr<const LidarPattern> lidar) {
+                    const D3D11_VIEWPORT& vp,const std::string& camera,const std::array<float,16>* projection,bool readback,std::shared_ptr<const LidarPattern> lidar) {
     // Conversion and gather share one save/restore of the game's compute state.
     ComputeState restore(context);
     std::array<float,28> values{0,0,0,0,vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height,vp.MinDepth,vp.MaxDepth};
     if(projection) {
-        const auto p=projection->get<std::array<float,16>>();
+        const auto& p=*projection;
         DirectX::XMFLOAT4X4 matrix;std::memcpy(&matrix,p.data(),sizeof(matrix));
         auto m=DirectX::XMLoadFloat4x4(&matrix);
         const auto correction=DirectX::XMMatrixSet(1,0,0,0,0,1,0,0,0,0,-.5f,.5f,0,0,0,1);

@@ -11,14 +11,6 @@ uint64_t qpc_frequency() noexcept {
 }
 namespace {
 using Microsoft::WRL::ComPtr;
-std::string target_name(const json* pass,unsigned index) {
-    if(!pass) return {};
-    for(const auto& image:pass->at("linked_images")) {
-        if(image.at("reference_array_offset")!=0x658) continue;
-        if(index--==0) return image.at("namespace").get<std::string>()+"/"+image.at("name").get<std::string>();
-    }
-    return {};
-}
 ComPtr<ID3D11Texture2D> texture(uintptr_t view) {
     ComPtr<ID3D11Texture2D> result;
     if(view) {
@@ -70,7 +62,14 @@ void GpuCapture::cancel() noexcept {
         if(phase_==Phase::armed || phase_==Phase::waiting_gpu) phase_=Phase::idle;
     } catch(...) {}
 }
-json GpuCapture::status(bool metadata) const {
+void GpuCapture::describe_metadata() {
+    if(phase_!=Phase::ready || metadata_.contains("geometry_pass")) return;
+    const bool diagnostic=options_.format!="ros";
+    metadata_["geometry_pass"]=geometry_pass_?geometry_pass_->describe(diagnostic):json(nullptr);
+    if(diagnostic) metadata_["color_pass"]=color_pass_?color_pass_->describe():json(nullptr);
+}
+json GpuCapture::status(bool metadata) {
+    if(metadata) describe_metadata();
     const char* phase=phase_==Phase::idle?"idle":phase_==Phase::armed?"armed":
         phase_==Phase::waiting_gpu?"waiting_gpu":phase_==Phase::ready?"ready":"error";
     json result={{"phase",phase},{"capture_sequence",sequence_},{"bindings_seen",bindings_seen_},
@@ -94,7 +93,7 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool
         clear_vehicle_constants();
         metadata_=json::object();error_.clear();last_label_.clear();saved_.clear();
         geometry_binding_=geometry_sdk_=gpu_polls_=bindings_seen_=polled_frame_=0;
-        geometry_pass_=color_pass_=geometry_gpu_=nullptr;requested_frame_=requested_frame;
+        geometry_pass_.reset();color_pass_.reset();geometry_gpu_=nullptr;requested_frame_=requested_frame;
         request_started_=GetTickCount64();phase_=Phase::armed;
     } else if(action=="cancel") {
         release_gpu();if(phase_!=Phase::ready) phase_=Phase::idle;
@@ -112,7 +111,7 @@ json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool
 }
 void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
                          uint64_t binding_sequence,uint64_t sdk_frame,uint64_t render_frame,
-                         uint64_t observation_session,const json* pass) noexcept {
+                         uint64_t observation_session,const RenderPassPtr& pass) noexcept {
     const auto phase=phase_.load(std::memory_order_relaxed);
     if(phase!=Phase::armed && phase!=Phase::waiting_gpu) return;
     // A status query must not make us skip the binding that ends a camera
@@ -164,11 +163,13 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
             }
             release_sources();
         }
-        const auto label=target_name(pass,0);
-        if(!label.empty()) last_label_=label;
+        const bool own_pass=pass && pass->camera_slot==camera_slot_;
+        const auto target=own_pass?pass->targets[0]:RenderTarget::other;
+        if(target==RenderTarget::attributes0) last_label_=camera_+"/attributes_0";
+        else if(target==RenderTarget::color) last_label_=camera_+"/composition_raw";
         if(count==4) {
             release_sources();
-            if(label!=camera_+"/attributes_0" || target_name(pass,3)!=camera_+"/attributes_3") return;
+            if(target!=RenderTarget::attributes0 || pass->targets[3]!=RenderTarget::attributes3) return;
             if(context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE)
                 throw std::runtime_error("Camera readback requires the observed immediate context");
             next_texture();
@@ -179,12 +180,12 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
             images_[0].source=std::move(next);images_[1].source=std::move(flags);
             geometry_view_=reinterpret_cast<ID3D11RenderTargetView*>(targets[0]);
             context_=context;geometry_binding_=binding_sequence;geometry_sdk_=sdk_frame;geometry_frame_=render_frame;
-            geometry_pass_=*pass;geometry_gpu_=nullptr;geometry_depth_.pixels.clear();
+            geometry_pass_=pass;geometry_gpu_=nullptr;geometry_depth_.pixels.clear();
             for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
             clear_vehicle_constants();
-        } else if(count==1 && images_[0].source && context==context_.Get() && label==camera_+"/composition_raw") {
+        } else if(count==1 && images_[0].source && context==context_.Get() && target==RenderTarget::color) {
             next_texture();color_view_=reinterpret_cast<ID3D11RenderTargetView*>(targets[0]);
-            images_[2].source=std::move(next);color_pass_=*pass;
+            images_[2].source=std::move(next);color_pass_=pass;
         }
     } catch(const std::exception& e) {error_=e.what();release_gpu();phase_=Phase::error;}
     catch(...) {error_="Camera readback failed";release_gpu();phase_=Phase::error;}
@@ -240,7 +241,9 @@ void GpuCapture::geometry_constants(ID3D11DeviceContext* context,uint64_t bindin
         if(options_.packed() && (options_.depth() || options_.lidar())) {
             if(viewport_count!=1 || !(viewports[0].Width>0 && viewports[0].Height>0 && viewports[0].MaxDepth>viewports[0].MinDepth))
                 throw std::runtime_error("RGB-D packing requires one valid geometry viewport");
-            packed_.depth(context1.Get(),depth.source.Get(),images_[0].source.Get(),images_[1].source.Get(),viewports[0],camera_,options_.metric()?&geometry_pass_.at("camera_at_compile").at("projection_row_major"):nullptr,options_.depth(),options_.lidar_pattern);
+            if(options_.metric() && !geometry_pass_->camera.available)
+                throw std::runtime_error(geometry_pass_->camera.error);
+            packed_.depth(context1.Get(),depth.source.Get(),images_[0].source.Get(),images_[1].source.Get(),viewports[0],camera_,options_.metric()?&geometry_pass_->camera.projection:nullptr,options_.depth(),options_.lidar_pattern);
             geometry_gpu_["packed_depth_texture"]=packed_.images[0].description;
         }
     }
@@ -278,32 +281,31 @@ void GpuCapture::clear_vehicle_constants() {
     for(auto& sample:vehicle_constants_) {sample.bytes.clear();sample.description=nullptr;}
 }
 void GpuCapture::vehicle_constants(ID3D11DeviceContext* context,ID3D11Device* device) {
-    if(!geometry_pass_.contains("vehicles_at_compile")) return;
+    if(!geometry_pass_ || !geometry_pass_->vehicles) return;
     geometry_gpu_["vehicle_constants_scope"]="draw-batch VS slot 0 ranges copied at G-buffer exit; per-draw execution not hooked";
     geometry_gpu_["vehicle_constants_truncated_for_read_budget"]=false;
-    for(const auto& vehicle:geometry_pass_.at("vehicles_at_compile").at("vehicles")) {
-        for(const auto& draw:vehicle.at("draws")) {
-            const auto& bound=draw.at("vs_cb0");
-            if(!bound.at("known").get<bool>() || !bound.at("source_buffer").get<uintptr_t>()) continue;
+    for(const auto& vehicle:geometry_pass_->vehicles->vehicles) {
+        for(const auto& draw:vehicle.draws) {
+            if(!draw.known || !draw.buffer) continue;
             if(vehicle_constants_used_>=64) {
                 geometry_gpu_["vehicle_constants_truncated_for_read_budget"]=true;return;
             }
             // The engine keeps these draw resources alive through command
             // execution. Acquire our reference while still inside that pass.
-            Com<ID3D11Buffer> source=reinterpret_cast<ID3D11Buffer*>(bound.at("source_buffer").get<uintptr_t>());
+            Com<ID3D11Buffer> source=reinterpret_cast<ID3D11Buffer*>(draw.buffer);
             D3D11_BUFFER_DESC desc{};source->GetDesc(&desc);
             if(!(desc.BindFlags&D3D11_BIND_CONSTANT_BUFFER))
                 throw std::runtime_error("Vehicle draw references a non-constant buffer");
-            const uint64_t offset=bound.at("first_constant").get<uint32_t>()*uint64_t{16};
-            const uint64_t size=bound.at("num_constants").get<uint32_t>()*uint64_t{16};
+            const uint64_t offset=draw.first*uint64_t{16};
+            const uint64_t size=draw.count*uint64_t{16};
             const auto bytes=offset<desc.ByteWidth?std::min<uint64_t>(size,desc.ByteWidth-offset):0;
             if(bytes>65536) throw std::runtime_error("Vehicle constant range exceeds the D3D11 shader limit");
             const auto index=vehicle_constants_used_++;
             if(index==vehicle_constants_.size()) vehicle_constants_.emplace_back();
             auto& sample=vehicle_constants_[index];
-            sample.description=bound;
-            sample.description.update({{"stage","vs"},{"slot",0},{"actor_address",vehicle.at("actor_address")},
-                {"geometry_address",draw.at("geometry_address")},{"draw_item_index",draw.at("draw_item_index")},
+            sample.description=draw.binding();
+            sample.description.update({{"stage","vs"},{"slot",0},{"actor_address",vehicle.actor},
+                {"geometry_address",draw.geometry},{"draw_item_index",draw.item_index},
                 {"source_byte_width",desc.ByteWidth},{"source_byte_offset",offset},{"copied_bytes",bytes}});
             if(bytes) {
                 prepare_constants(sample,static_cast<UINT>(bytes),device);
@@ -353,8 +355,7 @@ void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t 
     context->End(completion_.Get());
     ++sequence_;
     metadata_={{"capture_sequence",sequence_},{"camera",camera_},{"capture_format",options_.format},{"phase","leaving_camera_composition"},
-        {"geometry_pass",geometry_pass_},{"color_pass",color_pass_},
-        {"geometry_gpu",geometry_gpu_},{"sensor_dimensions",{images_[2].desc.Width,images_[2].desc.Height}},
+        {"geometry_gpu",std::move(geometry_gpu_)},{"sensor_dimensions",{images_[2].desc.Width,images_[2].desc.Height}},
         {"render_frame_id",render_frame},{"frame_id_source","Present return intervals"},
         {"observation_session_qpc",observation_session},{"qpc_frequency",qpc_frequency()},
         {"copy_submission_qpc",cpu_begin},{"copy_submission_cpu_ticks",qpc_now()-cpu_begin},
@@ -433,7 +434,7 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
         }
         if(!sample.description.is_null()) vehicle_json.push_back(sample.description);
     }
-    if(geometry_pass_.contains("vehicles_at_compile"))
+    if(geometry_pass_ && geometry_pass_->vehicles)
         metadata_["geometry_gpu"]["vehicle_constant_buffers"]=std::move(vehicle_json);
     metadata_["readback_ready_qpc"]=qpc_now();
     metadata_["readback_cpu_ticks"]=qpc_now()-cpu_begin;
@@ -442,6 +443,7 @@ void GpuCapture::collect(ID3D11DeviceContext* context) {
 void GpuCapture::append_bundle(json& views,std::vector<BundleBlob>& blobs) {
     std::lock_guard lock(mutex_);
     if(phase_!=Phase::ready) throw std::runtime_error("Camera CPU sample is not complete");
+    describe_metadata();
     views.push_back({{"camera",camera_},{"metadata",metadata_}});
     for(size_t i=0;i<images_.size();++i) if(!images_[i].pixels.empty())
         blobs.push_back({camera_,metadata_.at("images")[i].at("file").get<std::string>(),images_[i].pixels.data(),images_[i].pixels.size()});
@@ -459,6 +461,7 @@ void GpuCapture::append_bundle(json& views,std::vector<BundleBlob>& blobs) {
 json GpuCapture::save() {
     if(phase_!=Phase::ready) throw std::runtime_error("No completed camera CPU sample to save");
     if(!saved_.empty()) return status();
+    describe_metadata();
     // GetTickCount64 also distinguishes SDK reloads within one game PID.
     const auto directory=log_directory()/(camera_+"-"+std::to_string(GetTickCount64()));
     if(!fs::create_directory(directory)) throw std::runtime_error("Capture output directory already exists");

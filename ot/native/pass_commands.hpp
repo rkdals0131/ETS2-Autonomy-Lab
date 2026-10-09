@@ -1,5 +1,5 @@
 #pragma once
-#include "ot.hpp"
+#include "render_sample.hpp"
 #include <memory>
 #include <unordered_map>
 
@@ -8,28 +8,23 @@ namespace ot {
 class PassCommands {
 public:
     void draw_batch(uintptr_t input,uintptr_t items,uintptr_t bindings,uint32_t count) noexcept;
-    void begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,bool vehicles=false,std::shared_ptr<const json> sdk={},uint32_t camera_mask=UINT32_MAX) noexcept;
+    void begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,uint32_t vehicle_mask=0,std::shared_ptr<const json> sdk={},uint32_t camera_mask=UINT32_MAX,bool diagnostic=true) noexcept;
     void end(uintptr_t frame) noexcept;
-    std::shared_ptr<const json> lookup(uint16_t id,uintptr_t token) noexcept;
+    RenderPassPtr lookup(uint16_t id,uintptr_t token) noexcept;
     void clear();
     json status();
 private:
     struct Block {uintptr_t data;uint64_t size,capacity;};
-    struct Span {uintptr_t begin,end;std::shared_ptr<const json> pass;};
+    struct Span {uintptr_t begin,end;RenderPassPtr pass;};
     struct Pending {
         uintptr_t output;
         uint16_t id;
         std::vector<Block> before;
-        std::shared_ptr<const json> pass;
+        RenderPassPtr pass;
     };
     static std::vector<Block> blocks(uintptr_t output);
-    std::shared_ptr<const json> describe(uintptr_t input,bool vehicles,const std::shared_ptr<const json>& sdk,uint32_t camera_mask);
-    struct Draw {
-        uintptr_t geometry{},buffer{};
-        uint32_t first{},count{};
-        bool known=false;
-        uint64_t qpc{};
-    };
+    RenderPassPtr describe(uintptr_t input,uint32_t vehicle_mask,const std::shared_ptr<const json>& sdk,uint32_t camera_mask,bool diagnostic);
+    using Draw=RenderDrawSample;
     struct DrawBatch {std::vector<Draw> draws;bool truncated=false;std::string error;};
     std::mutex draws_mutex_;
     std::unordered_map<uintptr_t,DrawBatch> draws_;

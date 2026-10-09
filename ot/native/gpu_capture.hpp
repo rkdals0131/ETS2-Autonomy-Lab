@@ -1,6 +1,7 @@
 #pragma once
 #include "ot.hpp"
 #include "gpu_pack.hpp"
+#include "render_sample.hpp"
 #include <array>
 #include <d3d11_1.h>
 #include <wrl/client.h>
@@ -36,13 +37,13 @@ public:
     uint64_t captured_frame() const noexcept {return geometry_frame_;}
     bool reusable() {std::lock_guard lock(mutex_);return packed_.reusable();}
     void abandon_shared() {std::lock_guard lock(mutex_);packed_.abandon();}
-    explicit GpuCapture(std::string camera):camera_(std::move(camera)) {}
+    explicit GpuCapture(std::string camera):camera_(std::move(camera)),camera_slot_(camera_.back()-'0') {}
     json command(const std::string& action,uint64_t requested_frame=0,bool metadata=true,const CaptureOptions& options={});
     void cancel() noexcept;
     void append_bundle(json& views,std::vector<BundleBlob>& blobs);
     void observe(ID3D11DeviceContext* context, uint32_t count, const uintptr_t* targets,
                  uint64_t binding_sequence, uint64_t sdk_frame, uint64_t render_frame,
-                 uint64_t observation_session,const json* pass) noexcept;
+                 uint64_t observation_session,const RenderPassPtr& pass) noexcept;
 private:
     template<class T> using Com=Microsoft::WRL::ComPtr<T>;
     struct Image {
@@ -65,11 +66,14 @@ private:
     void release_sources();
     void prepare_staging(Image& image,const D3D11_TEXTURE2D_DESC& desc,ID3D11Device* device);
     void prepare_constants(Constants& sample,UINT bytes,ID3D11Device* device);
-    json status(bool metadata=true) const;
+    void describe_metadata();
+    json status(bool metadata=true);
     json save();
     std::mutex mutex_;
     const std::string camera_;
-    json metadata_=json::object(),geometry_pass_,color_pass_,geometry_gpu_;
+    const unsigned camera_slot_;
+    RenderPassPtr geometry_pass_,color_pass_;
+    json metadata_=json::object(),geometry_gpu_;
     std::atomic<Phase> phase_{Phase::idle};
     std::array<Image,3> images_; // attributes0, attributes3, color
     CaptureOptions options_;

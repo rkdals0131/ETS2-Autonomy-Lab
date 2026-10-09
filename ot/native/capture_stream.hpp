@@ -14,18 +14,21 @@ public:
     void update(const CaptureOptions& options) {pending_options_.store(std::make_shared<const CaptureOptions>(options));}
     bool running() const noexcept {return running_.load();}
     uint32_t select_pending() noexcept;
-    uint32_t compiling_mask() const noexcept;
+    uint32_t compiling_mask(bool vehicles_only=false) const noexcept;
     bool compiling() const noexcept;
+    bool compiling_diagnostics() const noexcept;
     bool pending() const noexcept;
     json status();
     void observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
-                 uint64_t sequence,uint64_t sdk_frame,uint64_t render_frame,const json* pass) noexcept;
+                 uint64_t sequence,uint64_t sdk_frame,uint64_t render_frame,const RenderPassPtr& pass) noexcept;
 private:
     struct Slot {
         std::atomic<bool> active{false};
         std::atomic<bool> selected{false};
         std::atomic<uint64_t> frame{0};
         std::atomic<uint32_t> mask{0};
+        std::atomic<uint32_t> vehicle_mask{0};
+        std::atomic<bool> diagnostic{true};
         std::vector<std::unique_ptr<GpuCapture>> cameras;
     };
     void run() noexcept;

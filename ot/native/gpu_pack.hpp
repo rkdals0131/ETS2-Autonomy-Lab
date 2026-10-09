@@ -31,7 +31,7 @@ public:
     };
     void depth(ID3D11DeviceContext1* context,ID3D11Texture2D* source,
                ID3D11Texture2D* attributes,ID3D11Texture2D* material,
-               const D3D11_VIEWPORT& viewport,const std::string& camera,const json* projection=nullptr,bool readback=true,
+               const D3D11_VIEWPORT& viewport,const std::string& camera,const std::array<float,16>* projection=nullptr,bool readback=true,
                std::shared_ptr<const LidarPattern> lidar={});
     void color(ID3D11DeviceContext1* context,ID3D11Texture2D* source,float gain,const std::string& camera,bool preview=false);
     bool collect(ID3D11DeviceContext* context);
@@ -81,7 +81,7 @@ private:
         ID3D11Texture2D* depth_source=nullptr;
     } lidar_;
     void gather(ID3D11DeviceContext1* context,const std::shared_ptr<const LidarPattern>& pattern,
-                const json& projection,const D3D11_VIEWPORT& viewport,const std::string& camera);
+                const std::array<float,16>& projection,const D3D11_VIEWPORT& viewport,const std::string& camera);
     void dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*,3> sources,
                   const std::array<float,28>& constants,unsigned kind,const std::string& camera,bool readback=true);
 };

@@ -28,11 +28,15 @@ void CaptureStream::stop() noexcept {
 bool CaptureStream::compiling() const noexcept {
     return compiling_mask()!=0;
 }
-uint32_t CaptureStream::compiling_mask() const noexcept {
+bool CaptureStream::compiling_diagnostics() const noexcept {
+    for(const auto& slot:slots_) if(slot.active.load() && slot.selected.load() && slot.diagnostic.load()) return true;
+    return false;
+}
+uint32_t CaptureStream::compiling_mask(bool vehicles_only) const noexcept {
     uint32_t mask=0;
     for(const auto& slot:slots_) if(slot.active.load() && slot.selected.load())
         for(size_t i=0;i<slot.cameras.size();++i)
-            if((slot.mask.load()&(1u<<camera_indices_[i])) && slot.cameras[i]->phase()==GpuCapture::Phase::armed)
+            if(((vehicles_only?slot.vehicle_mask.load():slot.mask.load())&(1u<<camera_indices_[i])) && slot.cameras[i]->phase()==GpuCapture::Phase::armed)
                 mask|=1u<<camera_indices_[i];
     return mask;
 }
@@ -53,7 +57,7 @@ bool CaptureStream::pending() const noexcept {
     return false;
 }
 void CaptureStream::observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
-        uint64_t sequence,uint64_t sdk_frame,uint64_t render_frame,const json* pass) noexcept {
+        uint64_t sequence,uint64_t sdk_frame,uint64_t render_frame,const RenderPassPtr& pass) noexcept {
     for(auto& slot:slots_) if(slot.active.load() && slot.selected.load())
         for(size_t i=0;i<slot.cameras.size();++i)
             if(slot.mask.load()&(1u<<camera_indices_[i]))
@@ -133,7 +137,7 @@ void CaptureStream::run() noexcept {
                     }
                     if(!available) ++ring_busy_;
                     else {
-                        uint32_t mask=0;bool armed_lidar=false;
+                        uint32_t mask=0,vehicle_mask=0;bool armed_lidar=false;
                         const bool lidar_due=options_.lidar_hz==0 || elapsed>=next_lidar;
                         for(size_t i=0;i<available->cameras.size();++i) {
                             auto options=options_;options.products=options.outputs[camera_indices_[i]];
@@ -144,11 +148,14 @@ void CaptureStream::run() noexcept {
                             // The next selection claims this request exactly
                             // once. Actual execution determines its Present ID.
                             available->cameras[i]->command("arm",0,false,options);mask|=1u<<camera_indices_[i];
+                            if(!options.selective || (options.products&16)) vehicle_mask|=1u<<camera_indices_[i];
                             armed_lidar|=options.lidar();
                         }
                         if(armed_lidar && options_.lidar_hz>0)
                             next_lidar=(std::floor(elapsed*options_.lidar_hz)+1)/options_.lidar_hz;
                         available->mask=mask;
+                        available->vehicle_mask=vehicle_mask;
+                        available->diagnostic=options_.format!="ros";
                         if(mask) {available->frame=0;available->selected=false;available->active=true;previous_frame=frame;++armed_;}
                     }
                 }

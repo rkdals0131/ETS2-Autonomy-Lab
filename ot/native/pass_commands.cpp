@@ -32,54 +32,165 @@ template<size_t N> std::array<float,N> floats_at(uintptr_t address) {
         throw std::runtime_error("Nonfinite pass camera value");
     return values;
 }
-json camera_at_compile(uintptr_t pass,uintptr_t base) {
-    json result={{"available",false},{"sample_phase","dx11_compile_pass_begin"},
-        {"qpc",qpc_now()},{"scope","pass_base_state; per-draw overrides not inspected"}};
+struct CameraLayout {
+    uintptr_t callback_offset;
+    uintptr_t wrapper_vtable_rva;
+    uintptr_t inner_callback_offset;
+    uintptr_t inner_vtable_rva;
+    uintptr_t work_offset;
+    uintptr_t batch_id_offset;
+    uintptr_t batch_pool_rva;
+    uintptr_t batch_stride;
+    uintptr_t camera_vtable_rva;
+    uintptr_t deferred_vtable_rva;
+    uintptr_t position_offset;
+    uintptr_t cell_offset;
+    uintptr_t batch_mask_offset;
+    uintptr_t viewport_depth_offset;
+    uintptr_t viewport_mode_offset;
+    uintptr_t viewport_rect_offset;
+    uintptr_t projection_offset;
+    uintptr_t projection_modifier_offset;
+    uintptr_t projection_modifier_flag_offset;
+    uintptr_t rotation_offset;
+    uintptr_t ray_offset;
+    uintptr_t dimensions_offset;
+    double cell_scale;
+};
+const CameraLayout& camera_layout() {
+    static const CameraLayout value=[] {
+        const auto s=json::parse(OT_SCHEMA).at("render_pass_camera");
+        return CameraLayout{
+            s.at("callback_offset").get<uintptr_t>(),
+            s.at("wrapper_vtable_rva").get<uintptr_t>(),
+            s.at("inner_callback_offset").get<uintptr_t>(),
+            s.at("inner_vtable_rva").get<uintptr_t>(),
+            s.at("work_offset").get<uintptr_t>(),
+            s.at("batch_id_offset").get<uintptr_t>(),
+            s.at("batch_pool_rva").get<uintptr_t>(),
+            s.at("batch_stride").get<uintptr_t>(),
+            s.at("camera_vtable_rva").get<uintptr_t>(),
+            s.at("deferred_vtable_rva").get<uintptr_t>(),
+            s.at("position_offset").get<uintptr_t>(),
+            s.at("cell_offset").get<uintptr_t>(),
+            s.at("batch_mask_offset").get<uintptr_t>(),
+            s.at("viewport_depth_offset").get<uintptr_t>(),
+            s.at("viewport_mode_offset").get<uintptr_t>(),
+            s.at("viewport_rect_offset").get<uintptr_t>(),
+            s.at("projection_offset").get<uintptr_t>(),
+            s.at("projection_modifier_offset").get<uintptr_t>(),
+            s.at("projection_modifier_flag_offset").get<uintptr_t>(),
+            s.at("rotation_offset").get<uintptr_t>(),
+            s.at("ray_offset").get<uintptr_t>(),
+            s.at("dimensions_offset").get<uintptr_t>(),
+            s.at("cell_scale").get<double>()};
+    }();
+    return value;
+}
+struct VehicleLayout {
+    uintptr_t work_scene_offset;
+    uintptr_t scene_groups_offset;
+    uintptr_t scene_geometry_offset;
+    uintptr_t scene_overrides_offset;
+    uintptr_t group_stride;
+    uintptr_t group_items_offset;
+    uintptr_t draw_item_stride;
+    uintptr_t draw_item_geometry_offset;
+    uintptr_t traffic_pointer_rva;
+    uintptr_t traffic_objects_offset;
+    uintptr_t parked_actor_model_holder_offset;
+    uintptr_t holder_model_offset;
+    uintptr_t ai_actor_model_offset;
+    uintptr_t model_vtable_rva;
+    uintptr_t model_lod_array_offset;
+    uintptr_t model_object_geometry_array_offset;
+    uintptr_t model_object_component_offset;
+    uintptr_t model_component_vtable_rva;
+    uintptr_t geometry_additional_batch_id_offset;
+    uintptr_t model_component_local_xyz_offset;
+    uintptr_t model_component_cell_xz_offset;
+    uintptr_t model_component_rotation_offset;
+    uintptr_t model_reference_offset;
+    uintptr_t actor_placement_offset;
+    uintptr_t actor_aabb_offset;
+    uintptr_t spawned_array_1_offset;
+    uintptr_t spawned_array_2_offset;
+};
+const VehicleLayout& vehicle_layout() {
+    static const VehicleLayout value=[] {
+        const auto s=json::parse(OT_SCHEMA).at("render_vehicle");
+        return VehicleLayout{
+            s.at("work_scene_offset").get<uintptr_t>(),
+            s.at("scene_groups_offset").get<uintptr_t>(),
+            s.at("scene_geometry_offset").get<uintptr_t>(),
+            s.at("scene_overrides_offset").get<uintptr_t>(),
+            s.at("group_stride").get<uintptr_t>(),
+            s.at("group_items_offset").get<uintptr_t>(),
+            s.at("draw_item_stride").get<uintptr_t>(),
+            s.at("draw_item_geometry_offset").get<uintptr_t>(),
+            s.at("traffic_pointer_rva").get<uintptr_t>(),
+            s.at("traffic_objects_offset").get<uintptr_t>(),
+            s.at("parked_actor_model_holder_offset").get<uintptr_t>(),
+            s.at("holder_model_offset").get<uintptr_t>(),
+            s.at("ai_actor_model_offset").get<uintptr_t>(),
+            s.at("model_vtable_rva").get<uintptr_t>(),
+            s.at("model_lod_array_offset").get<uintptr_t>(),
+            s.at("model_object_geometry_array_offset").get<uintptr_t>(),
+            s.at("model_object_component_offset").get<uintptr_t>(),
+            s.at("model_component_vtable_rva").get<uintptr_t>(),
+            s.at("geometry_additional_batch_id_offset").get<uintptr_t>(),
+            s.at("model_component_local_xyz_offset").get<uintptr_t>(),
+            s.at("model_component_cell_xz_offset").get<uintptr_t>(),
+            s.at("model_component_rotation_offset").get<uintptr_t>(),
+            s.at("model_reference_offset").get<uintptr_t>(),
+            s.at("actor_placement_offset").get<uintptr_t>(),
+            s.at("actor_aabb_offset").get<uintptr_t>(),
+            s.at("spawned_array_1_offset").get<uintptr_t>(),
+            s.at("spawned_array_2_offset").get<uintptr_t>()};
+    }();
+    return value;
+}
+RenderCameraSample camera_at_compile(uintptr_t pass,uintptr_t base) {
+    RenderCameraSample result;result.qpc=qpc_now();
     try {
-        static const json s=json::parse(OT_SCHEMA).at("render_pass_camera");
-        const auto offset=[&](const char* key){return s.at(key).get<uintptr_t>();};
-        const auto callback=read<uintptr_t>(pass+offset("callback_offset"));
-        if(!callback || read<uintptr_t>(callback)!=base+offset("wrapper_vtable_rva"))
+        const auto& layout=camera_layout();
+        const auto callback=read<uintptr_t>(pass+layout.callback_offset);
+        if(!callback || read<uintptr_t>(callback)!=base+layout.wrapper_vtable_rva)
             throw std::runtime_error("Unsupported surface pass callback");
-        const auto inner=read<uintptr_t>(callback+offset("inner_callback_offset"));
-        if(!inner || read<uintptr_t>(inner)!=base+offset("inner_vtable_rva"))
+        const auto inner=read<uintptr_t>(callback+layout.inner_callback_offset);
+        if(!inner || read<uintptr_t>(inner)!=base+layout.inner_vtable_rva)
             throw std::runtime_error("Unsupported surface pass work layout");
-        const auto work=read<uintptr_t>(pass+offset("work_offset"));
-        if(!work) throw std::runtime_error("Surface pass work is absent");
-        const auto id=read<uint16_t>(work+offset("batch_id_offset"));
-        const auto pool=array(base+offset("batch_pool_rva"));
-        if(id>=pool.size) throw std::runtime_error("Surface pass component batch is absent");
-        const auto batch=pool.data+id*offset("batch_stride");
+        result.work=read<uintptr_t>(pass+layout.work_offset);
+        if(!result.work) throw std::runtime_error("Surface pass work is absent");
+        result.batch=read<uint16_t>(result.work+layout.batch_id_offset);
+        const auto pool=array(base+layout.batch_pool_rva);
+        if(result.batch>=pool.size) throw std::runtime_error("Surface pass component batch is absent");
+        const auto batch=pool.data+result.batch*layout.batch_stride;
         const auto components=array(batch);
-        uintptr_t camera{},deferred{};
         for(uint64_t i=0;i<components.size;++i) {
             const auto component=read<uintptr_t>(components.data+i*sizeof(uintptr_t));
             if(!component) continue;
             const auto type=read<uintptr_t>(component);
-            if(type==base+offset("camera_vtable_rva")) camera=component;
-            if(type==base+offset("deferred_vtable_rva")) deferred=component;
+            if(type==base+layout.camera_vtable_rva) result.camera=component;
+            if(type==base+layout.deferred_vtable_rva) result.deferred=component;
         }
-        if(!camera || !deferred) throw std::runtime_error("Pass camera or deferred state is absent");
-        const auto local=floats_at<3>(camera+offset("position_offset"));
-        const auto cells=read<std::array<int16_t,2>>(camera+offset("cell_offset"));
-        const auto scale=s.at("cell_scale").get<double>();
-        result.update({{"work_address",work},{"component_batch_id",id},
-            {"component_mask",read<uint32_t>(batch+offset("batch_mask_offset"))},
-            {"camera_address",camera},{"deferred_state_address",deferred},
-            {"viewport_depth",floats_at<2>(work+offset("viewport_depth_offset"))},
-            {"viewport_mode",read<uint32_t>(work+offset("viewport_mode_offset"))},
-            {"viewport_rect_raw",floats_at<4>(work+offset("viewport_rect_offset"))},
-            {"projection_row_major",floats_at<16>(work+offset("projection_offset"))},
-            {"projection_modifier",floats_at<4>(work+offset("projection_modifier_offset"))},
-            {"projection_modifier_flag",read<uint8_t>(work+offset("projection_modifier_flag_offset"))},
-            {"camera_rotation_row_major",floats_at<16>(camera+offset("rotation_offset"))},
-            {"camera_local_xyz",local},{"camera_cell_xz",cells},
-            {"camera_world_xyz",std::array<double,3>{local[0]+scale*cells[0],local[1],local[2]+scale*cells[1]}},
-            {"world_units","game_length_units"},
-            {"ray",floats_at<4>(deferred+offset("ray_offset"))},
-            {"deferred_dimensions",floats_at<4>(deferred+offset("dimensions_offset"))}});
-        result["available"]=true;
-    } catch(const std::exception& e) {result["error"]=e.what();}
+        if(!result.camera || !result.deferred) throw std::runtime_error("Pass camera or deferred state is absent");
+        result.local=floats_at<3>(result.camera+layout.position_offset);
+        result.cells=read<std::array<int16_t,2>>(result.camera+layout.cell_offset);
+        const auto scale=layout.cell_scale;
+        result.world={result.local[0]+scale*result.cells[0],result.local[1],result.local[2]+scale*result.cells[1]};
+        result.component_mask=read<uint32_t>(batch+layout.batch_mask_offset);
+        result.viewport_depth=floats_at<2>(result.work+layout.viewport_depth_offset);
+        result.viewport_mode=read<uint32_t>(result.work+layout.viewport_mode_offset);
+        result.viewport_rect=floats_at<4>(result.work+layout.viewport_rect_offset);
+        result.projection=floats_at<16>(result.work+layout.projection_offset);
+        result.projection_modifier=floats_at<4>(result.work+layout.projection_modifier_offset);
+        result.projection_modifier_flag=read<uint8_t>(result.work+layout.projection_modifier_flag_offset);
+        result.rotation=floats_at<16>(result.camera+layout.rotation_offset);
+        result.ray=floats_at<4>(result.deferred+layout.ray_offset);
+        result.dimensions=floats_at<4>(result.deferred+layout.dimensions_offset);
+        result.available=true;
+    } catch(const std::exception& e) {result.error=e.what();}
     return result;
 }
 
@@ -97,53 +208,44 @@ std::vector<uintptr_t> pointers(uintptr_t address,size_t stride,size_t offset,
     for(size_t i=0;i<result.size();++i) std::memcpy(&result[i],bytes.data()+i*stride+offset,sizeof(uintptr_t));
     return result;
 }
-json actor_placement(uintptr_t address) {
-    struct Placement {std::array<float,3> local;std::array<int16_t,2> cells;std::array<float,4> quaternion;};
-    static_assert(sizeof(Placement)==32);
-    const auto p=read<Placement>(address);
+RenderActorPlacement actor_placement(uintptr_t address) {
+    static_assert(sizeof(RenderActorPlacement)==32);
+    const auto p=read<RenderActorPlacement>(address);
     for(auto x:p.local) if(!std::isfinite(x)) throw std::runtime_error("Nonfinite actor position");
     for(auto x:p.quaternion) if(!std::isfinite(x)) throw std::runtime_error("Nonfinite actor quaternion");
-    return {{"local_xyz",p.local},{"cell_xz",p.cells},{"quaternion_wxyz",p.quaternion},
-        {"world_xyz",std::array<double,3>{p.local[0]+512.0*p.cells[0],p.local[1],p.local[2]+512.0*p.cells[1]}}};
+    return p;
 }
-json vehicles_at_compile(uintptr_t work,uintptr_t base) {
-    json result={{"available",false},{"qpc_begin",qpc_now()},
-        {"sample_phase","dx11_compile_pass_begin"},
-        {"scope","AI and parked body models in this pass; actor pose is a separate simulation observation"},
-        {"vehicles",json::array()},{"errors",json::array()}};
+RenderVehiclesSample vehicles_at_compile(uintptr_t work,uintptr_t base) {
+    RenderVehiclesSample result;result.qpc_begin=qpc_now();
     bool truncated=false;
     try {
-        static const json schema=json::parse(OT_SCHEMA);
-        const auto& s=schema.at("render_vehicle");
-        const auto offset=[&](const char* key){return s.at(key).get<uintptr_t>();};
-        const auto& camera=schema.at("render_pass_camera");
-        const auto pool=array(base+camera.at("batch_pool_rva").get<uintptr_t>());
-        const auto batch_stride=camera.at("batch_stride").get<size_t>();
-        const auto scene=read<uintptr_t>(work+offset("work_scene_offset"));
+        const auto& layout=vehicle_layout();const auto& camera=camera_layout();
+        const auto pool=array(base+camera.batch_pool_rva);
+        const auto batch_stride=camera.batch_stride;
+        const auto scene=read<uintptr_t>(work+layout.work_scene_offset);
         if(!scene) throw std::runtime_error("Pass has no scene draw list");
-        const auto groups=array(scene+offset("scene_groups_offset"));
-        const auto source=array(scene+offset("scene_geometry_offset"));
-        const auto overrides=array(scene+offset("scene_overrides_offset"));
-        result.update({{"scene_address",scene},{"source_geometry_count",source.size},
-            {"prepared_group_count",groups.size},{"state_override_count",overrides.size}});
+        const auto groups=array(scene+layout.scene_groups_offset);
+        const auto source=array(scene+layout.scene_geometry_offset);
+        const auto overrides=array(scene+layout.scene_overrides_offset);
+        result.scene=scene;result.source_count=source.size;result.group_count=groups.size;
+        result.override_count=overrides.size;result.scene_observed=true;
         std::unordered_set<uintptr_t> submitted;
         if(source.size && !groups.size)
             throw std::runtime_error("Pass geometry has no prepared draw groups at this compilation boundary");
         const auto count=std::min<uint64_t>(groups.size,1024);
         truncated=truncated || count<groups.size;
         for(uint64_t i=0;i<count;++i) {
-            const auto group=groups.data+i*offset("group_stride");
-            for(auto q:pointers(group+offset("group_items_offset"),offset("draw_item_stride"),
-                                 offset("draw_item_geometry_offset"),8192,truncated)) if(q) submitted.insert(q);
+            const auto group=groups.data+i*layout.group_stride;
+            for(auto q:pointers(group+layout.group_items_offset,layout.draw_item_stride,
+                                 layout.draw_item_geometry_offset,8192,truncated)) if(q) submitted.insert(q);
         }
-        result["geometry_scope"]="prepared_draw_items; per-range dispatch suppression and final draw execution not traced";
-        result["unique_geometry_count"]=submitted.size();
-        const auto traffic=read<uintptr_t>(base+offset("traffic_pointer_rva"));
+        result.unique_count=submitted.size();result.geometry_observed=true;
+        const auto traffic=read<uintptr_t>(base+layout.traffic_pointer_rva);
         if(!traffic) throw std::runtime_error("Traffic manager is absent");
         std::unordered_map<uintptr_t,bool> actors; // false=AI, true=parked
-        for(const auto key:{"spawned_array_1_offset","spawned_array_2_offset"})
-            for(auto a:pointers(traffic+offset(key),16,0,128,truncated)) if(a) actors.emplace(a,false);
-        for(auto a:pointers(traffic+offset("traffic_objects_offset"),8,0,512,truncated)) {
+        for(const auto offset:{layout.spawned_array_1_offset,layout.spawned_array_2_offset})
+            for(auto a:pointers(traffic+offset,16,0,128,truncated)) if(a) actors.emplace(a,false);
+        for(auto a:pointers(traffic+layout.traffic_objects_offset,8,0,512,truncated)) {
             if(!a) continue;
             const auto vtable=read<uintptr_t>(a);
             const auto getter=read<uintptr_t>(vtable+8);
@@ -152,54 +254,53 @@ json vehicles_at_compile(uintptr_t work,uintptr_t base) {
             uint32_t type{};std::memcpy(&type,code.data()+1,sizeof(type));
             if(type==5 || type==6) actors.insert_or_assign(a,true);
         }
-        result["actors_considered"]=actors.size();
+        result.actors_considered=actors.size();result.actors_observed=true;
         for(const auto& [actor,parked]:actors) {
             try {
-                const auto holder=parked?read<uintptr_t>(actor+offset("parked_actor_model_holder_offset")):0;
-                const auto model=parked?(holder?read<uintptr_t>(holder+offset("holder_model_offset")):0):
-                    read<uintptr_t>(actor+offset("ai_actor_model_offset"));
+                const auto holder=parked?read<uintptr_t>(actor+layout.parked_actor_model_holder_offset):0;
+                const auto model=parked?(holder?read<uintptr_t>(holder+layout.holder_model_offset):0):
+                    read<uintptr_t>(actor+layout.ai_actor_model_offset);
                 if(!model) continue;
-                if(read<uintptr_t>(model)!=base+offset("model_vtable_rva"))
+                if(read<uintptr_t>(model)!=base+layout.model_vtable_rva)
                     throw std::runtime_error("Unsupported vehicle model layout");
-                const auto lods=pointers(model+offset("model_lod_array_offset"),8,0,8,truncated);
+                const auto lods=pointers(model+layout.model_lod_array_offset,8,0,8,truncated);
                 for(size_t lod=0;lod<lods.size();++lod) {
                     const auto object=lods[lod];if(!object) continue;
                     std::vector<uintptr_t> matches;
-                    for(auto q:pointers(object+offset("model_object_geometry_array_offset"),8,0,256,truncated))
+                    for(auto q:pointers(object+layout.model_object_geometry_array_offset,8,0,256,truncated))
                         if(q && submitted.contains(q)) matches.push_back(q);
                     if(matches.empty()) continue;
-                    const auto component=read<uintptr_t>(object+offset("model_object_component_offset"));
-                    if(!component || read<uintptr_t>(component)!=base+offset("model_component_vtable_rva"))
+                    const auto component=read<uintptr_t>(object+layout.model_object_component_offset);
+                    if(!component || read<uintptr_t>(component)!=base+layout.model_component_vtable_rva)
                         throw std::runtime_error("Unsupported vehicle transform component");
                     // Establish the actual Q -> additional batch -> model link;
                     // cached Q slots can still describe a previous pass.
                     for(auto q:matches) {
-                        const auto id=read<uint16_t>(q+offset("geometry_additional_batch_id_offset"));
+                        const auto id=read<uint16_t>(q+layout.geometry_additional_batch_id_offset);
                         if(id>=pool.size) throw std::runtime_error("Vehicle geometry has no component batch");
                         const auto components=pointers(pool.data+id*batch_stride,8,0,32,truncated);
                         if(std::find(components.begin(),components.end(),component)==components.end())
                             throw std::runtime_error("Vehicle geometry no longer references its model component");
                     }
-                    const auto local=floats_at<3>(component+offset("model_component_local_xyz_offset"));
-                    const auto cells=read<std::array<int16_t,2>>(component+offset("model_component_cell_xz_offset"));
-                    result["vehicles"].push_back({{"actor_address",actor},{"kind",parked?"parked":"ai"},
-                        {"model_address",model},{"model_object_address",object},{"lod_index",lod},
-                        {"component_address",component},{"geometry_addresses",matches},{"qpc",qpc_now()},
-                        {"model_rotation_row_major",floats_at<16>(component+offset("model_component_rotation_offset"))},
-                        {"model_local_xyz",local},{"model_cell_xz",cells},
-                        {"model_world_xyz",std::array<double,3>{local[0]+512.0*cells[0],local[1],local[2]+512.0*cells[1]}},
-                        {"model_reference_offset_raw",floats_at<3>(model+offset("model_reference_offset"))},
-                        {"actor_observation",{{"placement",actor_placement(actor+offset("actor_placement_offset"))},
-                                               {"aabb_raw",floats_at<6>(actor+offset("actor_aabb_offset"))}}}});
+                    const auto local=floats_at<3>(component+layout.model_component_local_xyz_offset);
+                    const auto cells=read<std::array<int16_t,2>>(component+layout.model_component_cell_xz_offset);
+                    RenderVehicleSample vehicle;
+                    vehicle.actor=actor;vehicle.parked=parked;vehicle.model=model;vehicle.object=object;
+                    vehicle.lod=lod;vehicle.component=component;vehicle.geometry=std::move(matches);vehicle.qpc=qpc_now();
+                    vehicle.rotation=floats_at<16>(component+layout.model_component_rotation_offset);
+                    vehicle.local=local;vehicle.cells=cells;
+                    vehicle.reference=floats_at<3>(model+layout.model_reference_offset);
+                    vehicle.actor_placement=actor_placement(actor+layout.actor_placement_offset);
+                    vehicle.aabb=floats_at<6>(actor+layout.actor_aabb_offset);
+                    result.vehicles.push_back(std::move(vehicle));
                 }
             } catch(const std::exception& e) {
-                result["errors"].push_back({{"actor_address",actor},{"error",e.what()}});
+                result.errors.emplace_back(actor,e.what());
             }
         }
-        result["available"]=true;
-    } catch(const std::exception& e) {result["error"]=e.what();}
-    result["truncated_for_read_budget"]=truncated;
-    result["qpc_end"]=qpc_now();
+        result.available=true;
+    } catch(const std::exception& e) {result.error=e.what();}
+    result.truncated=truncated;result.qpc_end=qpc_now();
     return result;
 }
 }
@@ -247,7 +348,7 @@ std::vector<PassCommands::Block> PassCommands::blocks(uintptr_t output) {
             throw std::runtime_error("Compiled command block changed or is invalid");
     return result;
 }
-std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles,const std::shared_ptr<const json>& sdk,uint32_t camera_mask) {
+RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const std::shared_ptr<const json>& sdk,uint32_t camera_mask,bool diagnostic) {
     DrawBatch draw_batch;
     {
         std::lock_guard lock(draws_mutex_);
@@ -269,7 +370,9 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
         if(index<passes.size && read<uintptr_t>(passes.data+index*8)==pass) {
             const auto images=array(manager);
             const auto outputs=array(pass+0x658);
-            bool mirror_output=false;
+            bool mirror_output=false,geometry_output=false;
+            unsigned camera_slot=9;
+            std::array<RenderTarget,8> targets{};
             for(uint64_t j=0;j<outputs.size;++j) {
                 const auto id=read<uint32_t>(outputs.data+j*8);
                 if(id>=images.size) continue;
@@ -281,81 +384,65 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
                     // Streaming consumes the geometry and final-color targets.
                     // Lighting/blur intermediates need no JSON or command labels;
                     // their binds still end the outgoing capture normally.
-                    if(camera_mask!=UINT32_MAX) {
-                        const auto address=read<uintptr_t>(images.data+id*0x7F0+8);
-                        std::array<char,16> name{};
-                        if(!address || !copy_memory(address,name.data(),name.size()) ||
-                           (std::memcmp(name.data(),"attributes_0",sizeof("attributes_0"))!=0 &&
-                            std::memcmp(name.data(),"composition_raw",sizeof("composition_raw"))!=0)) continue;
+                    const auto address=read<uintptr_t>(images.data+id*0x7F0+8);
+                    std::array<char,16> name{};
+                    RenderTarget target=RenderTarget::other;
+                    if(address && copy_memory(address,name.data(),name.size())) {
+                        if(std::memcmp(name.data(),"attributes_0",sizeof("attributes_0"))==0) target=RenderTarget::attributes0;
+                        else if(std::memcmp(name.data(),"attributes_3",sizeof("attributes_3"))==0) target=RenderTarget::attributes3;
+                        else if(std::memcmp(name.data(),"composition_raw",sizeof("composition_raw"))==0) target=RenderTarget::color;
                     }
-                    mirror_output=true;break;
+                    if(j<targets.size()) targets[j]=target;
+                    if(target!=RenderTarget::other) camera_slot=prefix[6]-'0';
+                    geometry_output|=target==RenderTarget::attributes0;
+                    mirror_output|=camera_mask==UINT32_MAX || target==RenderTarget::attributes0 || target==RenderTarget::color;
                 }
             }
             // pass+0xC0 names the implementation (e.g. deferred or quad_drawer),
             // not the camera. Filter on output image namespaces before building
-            // strings/JSON. Only requested cameras need metadata; begin/end
-            // still retain unnamed intervals for all other command ranges.
+            // strings or samples. Empty boundaries in begin retire reused ranges.
             if(!mirror_output) return {};
-            json result={{"pass_address",pass},{"command_buffer",input},{"graph_buffer",b},
-                {"pass_name",string_at(read<uintptr_t>(pass+0x20))},
-                {"pass_namespace",string_at(read<uintptr_t>(pass+0xC0))}};
-            json links=json::array();
-            for(const auto offset:{0x658,0x6C0}) {
-                const auto refs=array(pass+offset);
-                for(uint64_t j=0;j<refs.size;++j) {
-                    const auto id=read<uint32_t>(refs.data+j*8);
-                    if(id>=images.size) continue;
-                    const auto image=images.data+id*0x7F0;
-                    links.push_back({{"reference_array_offset",offset},{"graph_image_id",id},
-                        {"namespace",string_at(read<uintptr_t>(image+0xA8))},
-                        {"name",string_at(read<uintptr_t>(image+8))},
-                        {"pool_id_at_compile",read<uint16_t>(image+0x740)}});
+            auto result=std::make_shared<RenderPassSample>();
+            result->pass=pass;result->input=input;result->graph=b;
+            result->camera_slot=camera_slot;result->targets=targets;result->geometry=geometry_output;
+            if(diagnostic) {
+                result->name=string_at(read<uintptr_t>(pass+0x20));
+                result->space=string_at(read<uintptr_t>(pass+0xC0));
+                for(const auto offset:{0x658,0x6C0}) {
+                    const auto refs=array(pass+offset);
+                    for(uint64_t j=0;j<refs.size;++j) {
+                        const auto id=read<uint32_t>(refs.data+j*8);
+                        if(id>=images.size) continue;
+                        const auto image=images.data+id*0x7F0;
+                        result->links.push_back({static_cast<uintptr_t>(offset),id,read<uint16_t>(image+0x740),
+                            string_at(read<uintptr_t>(image+0xA8)),string_at(read<uintptr_t>(image+8))});
+                    }
                 }
             }
-            const bool mirror_surface=std::any_of(links.begin(),links.end(),[](const json& image) {
-                return image.at("reference_array_offset")==0x658 && image.at("name")=="attributes_0" &&
-                    image.at("namespace").get_ref<const std::string&>().starts_with("mirror");
-            });
-            if(mirror_surface) {
-                if(sdk) {
-                    auto& sample=result["sdk_at_compile"]=json::object();
-                    for(const auto* key:{"frame_id","truck_generation","paused","render_time_us","simulation_time_us",
-                            "paused_simulation_time_us","timer_flags","sdk"}) sample[key]=sdk->at(key);
-                    sample["association"]="last SDK frame_end before pass compilation";
-                    if(sdk->contains("engine") && sdk->at("engine").contains("vehicle"))
-                        result["ego_at_compile"]=sdk->at("engine").at("vehicle");
-                }
-                auto camera=camera_at_compile(pass,base);
-                if(vehicles && camera.at("available").get<bool>()) {
-                    result["vehicles_at_compile"]=vehicles_at_compile(camera.at("work_address").get<uintptr_t>(),base);
-                    auto& observation=result["vehicles_at_compile"];
-                    observation["draw_bindings"]={{"sample_phase","after_dx11_draw_binding_preparation"},
-                        {"scope","emitted draw batch VS slot 0; final draw execution not hooked"},
-                        {"observed_draw_items",draw_batch.draws.size()},
-                        {"truncated_for_read_budget",draw_batch.truncated},{"error",draw_batch.error}};
-                    for(auto& vehicle:observation["vehicles"]) {
-                        auto& draws=vehicle["draws"]=json::array();
-                        const auto geometry=vehicle.at("geometry_addresses").get<std::vector<uintptr_t>>();
+            if(result->geometry) {
+                result->sdk=sdk;
+                result->camera=camera_at_compile(pass,base);
+                if((vehicle_mask&(1u<<result->camera_slot)) && result->camera.available) {
+                    auto& observation=result->vehicles.emplace(vehicles_at_compile(result->camera.work,base));
+                    observation.draw_count=draw_batch.draws.size();
+                    observation.draws_truncated=draw_batch.truncated;observation.draw_error=std::move(draw_batch.error);
+                    for(auto& vehicle:observation.vehicles) {
                         for(size_t i=0;i<draw_batch.draws.size();++i) {
-                            const auto& d=draw_batch.draws[i];
-                            if(std::find(geometry.begin(),geometry.end(),d.geometry)==geometry.end()) continue;
-                            draws.push_back({{"draw_item_index",i},{"geometry_address",d.geometry},{"qpc",d.qpc},
-                                {"vs_cb0",{{"known",d.known},{"source_buffer",d.buffer},
-                                    {"first_constant",d.first},{"num_constants",d.count}}}});
+                            auto d=draw_batch.draws[i];
+                            if(std::find(vehicle.geometry.begin(),vehicle.geometry.end(),d.geometry)==vehicle.geometry.end()) continue;
+                            d.item_index=i;vehicle.draws.push_back(d);
                         }
                     }
                 }
-                result["camera_at_compile"]=std::move(camera);
             }
-            result["linked_images"]=std::move(links);
-            return std::make_shared<const json>(std::move(result));
+            return result;
         }
     }
     return {};
 }
-void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,bool vehicles,std::shared_ptr<const json> sdk,uint32_t camera_mask) noexcept {
+void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,uint32_t vehicle_mask,std::shared_ptr<const json> sdk,uint32_t camera_mask,bool diagnostic) noexcept {
     try {
-        auto pass=describe(input,vehicles,sdk,camera_mask);
+        auto pass=describe(input,vehicle_mask,sdk,camera_mask,diagnostic);
         if(!pass) {
             // Unlabelled appends cannot overlap an earlier labelled span. Pool
             // reuse does: retire the old spans at the engine's empty boundary,
@@ -404,7 +491,7 @@ void PassCommands::end(uintptr_t frame) noexcept {
         compiled_.clear();pending_.erase(frame);
     }
 }
-std::shared_ptr<const json> PassCommands::lookup(uint16_t id,uintptr_t token) noexcept {
+RenderPassPtr PassCommands::lookup(uint16_t id,uintptr_t token) noexcept {
     std::lock_guard lock(mutex_);
     const auto found=compiled_.find(id);
     if(found!=compiled_.end())

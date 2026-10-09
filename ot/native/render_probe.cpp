@@ -347,7 +347,9 @@ void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept 
         uintptr_t input{},output{};uint16_t id{};
         if(read_memory(context.r10,input) && read_memory(context.rsp+0x58,output) &&
            read_memory(context.rbp+0x240,id))
-            self->pass_commands_.begin(context.rbp,input,output,id,self->vehicle_metadata_.load(),self->sdk_state_.load(),mask);
+            self->pass_commands_.begin(context.rbp,input,output,id,
+                self->vehicle_metadata_.load()?(stream && stream->running()?stream->compiling_mask(true):UINT32_MAX):0,
+                self->sdk_state_.load(),mask,!stream || !stream->running() || stream->compiling_diagnostics());
         self->compile_begin_timing_.add(qpc_now()-start);
     }
     callbacks.fetch_sub(1);
@@ -500,10 +502,10 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     }
     if(!stream || !stream->running()) for(auto* camera:cameras())
         camera->observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
-            record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,observation_session_,record.pass.get());
+            record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,observation_session_,record.pass);
     if(stream)
         stream->observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
-            record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,record.pass.get());
+            record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,record.pass);
     if(!TryAcquireSRWLockExclusive(&records_lock_)) {missed_.fetch_add(1);return;}
     records_[records_written_%records_.size()]=record;
     ++records_written_;
@@ -630,7 +632,7 @@ json RenderProbe::status() {
             {"render_frame_id",record.render_frame?json(record.render_frame):json(nullptr)},
             {"thread_id",record.thread},{"context",record.context},{"render_target_count",record.count},
             {"compiled_buffer_id",record.compiled_id},{"command_token",record.token},
-            {"logical_pass",record.pass?*record.pass:json(nullptr)},
+            {"logical_pass",record.pass?record.pass->describe():json(nullptr)},
             {"render_targets",std::vector<uintptr_t>(record.targets.begin(),record.targets.begin()+record.count)},
             {"depth_view",record.depth}});
     }

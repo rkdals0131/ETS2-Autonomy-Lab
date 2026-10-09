@@ -33,7 +33,7 @@ private:
         std::array<uintptr_t,8> targets{};
         uint16_t compiled_id{};
         uintptr_t token{};
-        std::shared_ptr<const json> pass;
+        RenderPassPtr pass;
     };
     static void callback(safetyhook::Context& context) noexcept;
     static void present_callback(safetyhook::Context& context) noexcept;
