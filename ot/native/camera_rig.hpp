@@ -12,7 +12,13 @@ public:
     json configure(const json& request);
     json status();
     void clear() noexcept { configuration_.store(nullptr); }
-    void select(safetyhook::Context& context,uint32_t capture_mask=UINT32_MAX) noexcept;
+    void select(safetyhook::Context& context,uint32_t capture_mask=UINT32_MAX,uint32_t warmup_mask=0,uint64_t present_id=0) noexcept;
+    uint32_t ready_mask(uint64_t present_id) const noexcept {
+        const auto c=configuration_.load();
+        if(!c || !c->private_outputs || !c->capture_warmup) return UINT32_MAX;
+        const auto previous=last_render_frame_.load();
+        return present_id==previous+1?last_render_mask_.load():0;
+    }
     void begin(safetyhook::Context& context) noexcept;
     void end(safetyhook::Context& context) noexcept;
     void dimensions(safetyhook::Context& context) noexcept;
@@ -38,7 +44,9 @@ private:
         float hfov{},vfov{};
         std::array<uint32_t,2> resolution{};
     };
-    struct Configuration { std::array<View,9> views;uint32_t mask=0;bool ego_full_model=false,private_outputs=false; };
+    struct Configuration { std::array<View,9> views;uint32_t mask=0;bool ego_full_model=false,private_outputs=false,capture_warmup=false; };
+    std::atomic<uint64_t> last_render_frame_{0};
+    std::atomic<uint32_t> last_render_mask_{0};
     struct Array {uintptr_t vtable=0,data=0;uint64_t size=0,capacity=0;};
     struct PrivateView {
         alignas(16) std::array<uint8_t,0x540> camera{};

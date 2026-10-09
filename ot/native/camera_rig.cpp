@@ -61,6 +61,8 @@ json CameraRig::configure(const json& request) {
     auto config=std::make_shared<Configuration>();
     config->ego_full_model=request.value("ego_full_model",false);
     config->private_outputs=request.value("private_outputs",false);
+    config->capture_warmup=request.value("capture_warmup",false);
+    last_render_mask_=0;
     for(const auto& item:request.at("views")) {
         const int slot=item.at("slot").get<int>();
         if(slot<0 || slot>=9 || config->views[slot].enabled)
@@ -110,23 +112,27 @@ json CameraRig::status() {
     return {{"enabled",config!=nullptr},{"selected_mask",config?config->mask:0},
         {"ego_full_model",config && config->ego_full_model},{"ego_parts_applied",ego_parts_applied_.load()},
         {"private_outputs",config && config->private_outputs},{"private_ready",private_ready_.load()},
+        {"capture_warmup",config && config->capture_warmup},
         {"in_flight",in_flight()},{"pending_graphs",graphs_.load()},{"unavailable",unavailable_.load()},{"views",views},
         {"source","private submission copy; persistent mirror fields unchanged"}};
 }
-void CameraRig::select(safetyhook::Context& context,uint32_t capture_mask) noexcept {
+void CameraRig::select(safetyhook::Context& context,uint32_t capture_mask,uint32_t warmup_mask,uint64_t present_id) noexcept {
     if(auto config=configuration_.load()) {
         // This hook runs after native camera updates. Register-only array
         // redirection leaves the engine's owning arrays and HUD aliases intact.
         if(config->private_outputs) {
-            if(in_flight()) {context.r12&=~uint64_t(config->mask);return;}
+            if(in_flight()) {context.r12&=~uint64_t(config->mask);last_render_mask_=0;return;}
+            if(config->capture_warmup && !(capture_mask|warmup_mask)) {
+                context.r12&=~uint64_t(config->mask);last_render_mask_=0;return;
+            }
             if(!prepare_private(context.r14,*config)) {++unavailable_;return;}
             prepared_configuration_.store(config);
             context.r14=reinterpret_cast<uintptr_t>(&camera_array_);
-            // Skipping engine sensor renders makes trees and poles disappear on
-            // subsequent captures. Keep each configured view rendering; the
-            // stream still selects readback at its requested sensor rates.
-            capture_mask=config->mask;
-            selection_mask=config->mask;
+            // After an idle interval the engine needs one complete preparation
+            // render. Only a following consecutive frame is eligible to capture.
+            capture_mask=config->capture_warmup?capture_mask|warmup_mask:config->mask;
+            selection_mask=config->mask&capture_mask;
+            last_render_frame_=present_id;last_render_mask_=selection_mask;
             if(selection_mask) {selection_owner=this;selection_config=config;++selections_;}
         }
         // Unowned mirrors retain the engine's choice.

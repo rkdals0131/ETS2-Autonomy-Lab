@@ -14,7 +14,7 @@ ETS2의 FH5에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 
 | 구성 | 구현 |
 | --- | --- |
-| 게임 | ETS2 1.61.1.1, DX11, core 0.26.0, 상주 메타로더 |
+| 게임 | ETS2 1.61.1.1, DX11, core 0.26.1, 상주 메타로더 |
 | 카메라 | C_FN·C_FW 1280×720, C_RL·C_RR 960×544, 기본 30 Hz 요청 |
 | 배치 | FH5 4x2 / l2h1 / LHD / mirror_01 / sunshield_01, 캐빈 부착 |
 | 출력 | RGB8, 미터 광축 깊이, CameraInfo, JPEG, TF, 차량 GT |
@@ -29,9 +29,9 @@ ETS2의 FH5에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 
 ![측면 센서 장착 수정 전후](docs/images/side-mirror-rim-fix.png)
 
-고해상도 센서·카메라 30 Hz·라이다 10 Hz·GT·Foxglove의 60초 전경 비교에서 0.25.0은 **35.66 → 39.72 FPS**, 프레임 p99는 **42.92 → 38.48ms**였습니다. 실제 수신은 29.81묶음/초였습니다. 원본 RGB·depth 전송은 껐으며, 장면·Foxglove 화면 구성에 따라 부하가 달라집니다. [성능과 운용 구성](docs/18_performance.md).
+0.26.1의 FH5 정차·60초 전경 실측은 JPEG 30 Hz·전체 라이다 10 Hz·GT 30 Hz에서 **62.46 FPS**, JPEG 10 Hz·표시용 라이다 10 Hz·같은 GT에서 **66.00 FPS**였습니다. Foxglove를 종료하고 실제 ROS 수신기를 사용했으며, 원본 RGB·depth 전송은 껐습니다. [측정 조건과 남은 비용](docs/18_performance.md).
 
-평상시에는 인지용 축소 RGB·JPEG·라이다를 구독합니다. 원본 RGB·depth는 데이터셋 기록과 비교 검증에 필요할 때 구독하며, 구독이 없으면 해당 pack·readback·전송을 생략합니다. 라이다용 깊이는 GPU에서 계속 사용합니다.
+평상시에는 필요한 인지용 축소 RGB와 JPEG·표시용 라이다를 구독합니다. JPEG 기본 주기는 10 Hz이며 인지용 영상은 카메라 주기를 따릅니다. Foxglove의 기존 점군 패널은 `/ets2/lidar/{name}/preview/points`를 선택해야 표시용 점군을 사용합니다. 원본 RGB·depth는 구독할 때 pack·readback·전송하며, 라이다용 깊이는 GPU에서 사용합니다.
 
 상태 센서 계산·렌더 수집·ROS 직렬화·통신 수명을 분리했습니다. 영상 수집을 꺼도 IMU·휠·GNSS가 유지되고, TCP 재연결에도 오도메트리·가상 GNSS 기준점이 이어집니다. `slots: []`로 상태 센서만 실행할 수 있습니다. 차량별 외부 보정은 FH5 프리셋을 기준으로 수동 확장합니다. 다음은 주행 센서 정합과 M8 입력 API입니다. [현재 구조](docs/03_system_design.md), [진행 상태](docs/13_game_operating_table.md).
 

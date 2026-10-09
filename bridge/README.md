@@ -12,7 +12,7 @@
 
 화면은 SDK 연결, 프로세스 PID, ROS 상태 수신, 전송·수신 묶음 수, 큐 누락, Foxglove 주소를 표시합니다. 연결 상태는 실제 ROS 응답과 SDK 상태 메시지의 최근 수신으로 판정합니다. 센서 구독이 없으면 영상 수집을 기다립니다.
 
-`실행 시간(초)`, `카메라 Hz`, `라이다 Hz`는 시작할 때 `config/bridge.local.json`에 저장됩니다. 기본 주기는 카메라 30 Hz·라이다 10 Hz입니다. Windows 릴레이는 BELOW_NORMAL 우선순위로 게임에 CPU를 양보합니다. 시간이 끝나면 중지합니다. F11·게임 오류·프로세스 종료 뒤에는 사용자가 시작을 눌러 새 실행을 엽니다. 게임 실행과 운전은 사용자가 맡습니다.
+`실행 시간(초)`, `카메라 Hz`, `라이다 Hz`, `미리보기 Hz`는 시작할 때 `config/bridge.local.json`에 저장됩니다. 기본 주기는 카메라 30 Hz·라이다 10 Hz·JPEG 미리보기 10 Hz입니다. 기존 설정에 미리보기 주기가 없어도 다음 시작부터 10 Hz를 사용합니다. Windows 릴레이는 BELOW_NORMAL 우선순위로 게임에 CPU를 양보합니다. 시간이 끝나면 중지합니다. F11·게임 오류·프로세스 종료 뒤에는 사용자가 시작을 눌러 새 실행을 엽니다. 게임 실행과 운전은 사용자가 맡습니다.
 
 기존 수동 브리지가 같은 포트를 사용하면 런처가 충돌을 표시합니다. 기존 실행을 종료한 뒤 시작합니다. 다른 WSL 작업과 게임 프로세스는 유지됩니다.
 
@@ -26,6 +26,7 @@ Windows와 WSL은 같은 `config/bridge.local.json`을 읽습니다. 현재 배�
 | duration_s | 실행 제한 시간 |
 | camera_hz / lidar_hz | 기본 30 / 10. 라이다는 필요한 카메라 프레임에서만 gather·readback |
 | preview_hz / lidar_preview_stride | 표시용 JPEG 기본 10 Hz. 표시용 점군은 수평 빔 4개마다 1개, 모든 수직 링 유지 |
+| capture_warmup | 기본 true. private 센서는 유휴 뒤 한 프레임 준비하고 다음 프레임에서 수집. false는 연속 렌더 비교용 |
 | imu_mount_base_m / gnss_mount_base_m | 섀시 고정 장착점, base_link 기준 m. 기본 [0,0,1] |
 | gnss_reference_lla | 시작 위치의 가상 기준 위도·경도(deg)·타원체 고도(m), 기본 [0,0,0] |
 | recording_root | 차량 상태 기록 폴더. 생략하면 bridge/recordings |

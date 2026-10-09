@@ -26,7 +26,9 @@ RenderCapture::RenderCapture(Control control,const json& rig,const json& pattern
     control_(std::move(control)),rig_(rig),options_{{"format","ros"},{"shared_gpu",settings.value("shared_gpu",true)},
         {"hz",settings.value("camera_hz",30.0)},{"lidar_hz",settings.value("lidar_hz",10.0)},
         {"preview_hz",settings.value("preview_hz",10.0)},
-        {"auto_exposure",settings.value("auto_exposure",true)},{"color_gain",settings.value("color_gain",1.0)},{"lidars",patterns}} {}
+        {"auto_exposure",settings.value("auto_exposure",true)},{"color_gain",settings.value("color_gain",1.0)},{"lidars",patterns}} {
+    rig_["capture_warmup"]=settings.value("capture_warmup",true);
+}
 RenderCapture::~RenderCapture() {try{stop();}catch(...) {}}
 void RenderCapture::stop() {
     if(hooks_owned_) {

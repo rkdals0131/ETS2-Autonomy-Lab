@@ -40,13 +40,19 @@ uint32_t CaptureStream::compiling_mask(bool vehicles_only) const noexcept {
                 mask|=1u<<camera_indices_[i];
     return mask;
 }
-uint32_t CaptureStream::select_pending() noexcept {
+uint32_t CaptureStream::unselected_mask() const noexcept {
+    uint32_t mask=0;
+    for(const auto& slot:slots_) if(slot.active.load() && !slot.selected.load()) mask|=slot.mask.load();
+    return mask;
+}
+uint32_t CaptureStream::select_pending(uint32_t ready_mask) noexcept {
     if(selecting_.test_and_set()) return 0;
     struct Unlock {std::atomic_flag& flag;~Unlock(){flag.clear();}} unlock{selecting_};
     // Only one selected bundle may still be waiting for its render commands.
     // GPU readback of older bundles can overlap the next submission.
     if(compiling()) return 0;
-    for(auto& slot:slots_) if(slot.active.load() && !slot.selected.exchange(true)) {
+    for(auto& slot:slots_) if(slot.active.load() && !slot.selected.load() &&
+            !(slot.mask.load()&~ready_mask) && !slot.selected.exchange(true)) {
         ++selected_;
         return slot.mask.load();
     }

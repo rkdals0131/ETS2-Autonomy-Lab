@@ -13,7 +13,8 @@ public:
     void stop() noexcept;
     void update(const CaptureOptions& options) {pending_options_.store(std::make_shared<const CaptureOptions>(options));}
     bool running() const noexcept {return running_.load();}
-    uint32_t select_pending() noexcept;
+    uint32_t select_pending(uint32_t ready_mask=UINT32_MAX) noexcept;
+    uint32_t unselected_mask() const noexcept;
     uint32_t compiling_mask(bool vehicles_only=false) const noexcept;
     bool compiling() const noexcept;
     bool compiling_diagnostics() const noexcept;

@@ -119,7 +119,7 @@ std::shared_ptr<const LidarPattern> make_lidar_pattern(const json& config) {
 void GpuPack::gather(ID3D11DeviceContext1* context,const std::shared_ptr<const LidarPattern>& pattern,
                      const std::array<float,16>& projection,const D3D11_VIEWPORT& vp,const std::string& camera) {
     auto& work=lidar_;const auto count=static_cast<UINT>(pattern->directions.size());
-    if(!work.pattern || work.pattern->description!=pattern->description) {
+    if(work.pattern!=pattern && (!work.pattern || work.pattern->description!=pattern->description)) {
         work=LidarWork{};work.pattern=pattern;
         D3D11_BUFFER_DESC desc{};desc.ByteWidth=count*16;desc.Usage=D3D11_USAGE_DEFAULT;
         desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;desc.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;desc.StructureByteStride=16;

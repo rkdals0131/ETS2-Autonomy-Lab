@@ -370,8 +370,11 @@ void RenderProbe::rig_select_callback(safetyhook::Context& context) noexcept {
         // Finish an initial scene preparation for a new rig before capturing;
         // its first render can still lack trees and poles. Also keep private
         // descriptors immutable until the previous queued graphs finish.
-        self->rig_.select(context,self->rig_.can_capture()?
-            (stream && stream->running()?stream->select_pending():UINT32_MAX):0);
+        const auto frame=self->presents_.load();
+        const bool streaming=stream && stream->running();
+        const auto capture=self->rig_.can_capture()?
+            (streaming?stream->select_pending(self->rig_.ready_mask(frame)):UINT32_MAX):0;
+        self->rig_.select(context,capture,streaming?stream->unselected_mask():UINT32_MAX,frame);
     }
     --callbacks;
 }
