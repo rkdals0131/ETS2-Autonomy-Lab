@@ -81,6 +81,7 @@ private:
     size_t vehicle_constants_used_=0;
     Com<ID3D11Query> completion_;
     Com<ID3D11DeviceContext> context_;
+    Com<ID3D11RenderTargetView> geometry_view_,color_view_;
     Com<ID3D11Device> device_;
     uint64_t allocations_=0;
     uint64_t sequence_=0,request_started_=0,geometry_binding_=0,geometry_sdk_=0;

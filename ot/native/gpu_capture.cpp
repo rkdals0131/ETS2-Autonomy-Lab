@@ -35,6 +35,7 @@ void check(HRESULT result,const char* operation) {
 
 void GpuCapture::release_sources() {
     for(auto& image:images_) image.source.Reset();
+    geometry_view_.Reset();color_view_.Reset();
     geometry_depth_.source.Reset();context_.Reset();
 }
 void GpuCapture::release_gpu() {
@@ -122,7 +123,7 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
     try {
         ++bindings_seen_;
         if(GetTickCount64()-request_started_>30000) throw std::runtime_error("Camera capture timed out after 30 seconds");
-        if(!context || context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE)
+        if(!context)
             throw std::runtime_error("Camera readback requires the observed immediate context");
         if(phase_==Phase::waiting_gpu) {
             if(context!=context_.Get()) return;
@@ -133,22 +134,31 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
         if(!render_frame || (requested_frame_ && render_frame<requested_frame_)) return;
         if(requested_frame_ && render_frame>requested_frame_)
             throw std::runtime_error(camera_+" did not finish rendering in the requested Present interval");
-        auto next=count?texture(targets[0]):ComPtr<ID3D11Texture2D>{};
+        ComPtr<ID3D11Texture2D> next;
+        bool resolved=false;
+        const auto next_texture=[&]() {
+            if(!resolved) {if(count) next=texture(targets[0]);resolved=true;}
+            return next.Get();
+        };
+        // Retained views cannot be recycled during this sample. Most binds
+        // need only pointer comparison; resolve a resource on an actual change.
+        const auto leaves=[&](unsigned expected,ID3D11RenderTargetView* view,ID3D11Texture2D* source) {
+            return count!=expected || (targets[0]!=reinterpret_cast<uintptr_t>(view) && next_texture()!=source);
+        };
         if(images_[0].source && geometry_gpu_.is_null() && context==context_.Get() &&
-           geometry_frame_==render_frame && (count!=4 || next.Get()!=images_[0].source.Get())) {
+           geometry_frame_==render_frame && leaves(4,geometry_view_.Get(),images_[0].source.Get())) {
             ComPtr<ID3D11RenderTargetView> current;
             context->OMGetRenderTargets(1,&current,nullptr);
-            if(texture(reinterpret_cast<uintptr_t>(current.Get())).Get()==images_[0].source.Get())
+            if(current.Get()==geometry_view_.Get() || texture(reinterpret_cast<uintptr_t>(current.Get())).Get()==images_[0].source.Get())
                 geometry_constants(context,binding_sequence);
         }
         // Copy before a new group overwrites the shared G-buffer. Unbinding or
         // switching to multiple targets also ends the outgoing color pass.
         if(images_[2].source && context==context_.Get() &&
-           (count!=1 || next.Get()!=images_[2].source.Get())) {
+           leaves(1,color_view_.Get(),images_[2].source.Get())) {
             ComPtr<ID3D11RenderTargetView> current;
             context->OMGetRenderTargets(1,&current,nullptr);
-            auto current_texture=texture(reinterpret_cast<uintptr_t>(current.Get()));
-            if(current_texture.Get()==images_[2].source.Get() && geometry_frame_==render_frame) {
+            if((current.Get()==color_view_.Get() || texture(reinterpret_cast<uintptr_t>(current.Get())).Get()==images_[2].source.Get()) && geometry_frame_==render_frame) {
                 submit(context,binding_sequence,sdk_frame,render_frame,observation_session);
                 return;
             }
@@ -159,16 +169,21 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
         if(count==4) {
             release_sources();
             if(label!=camera_+"/attributes_0" || target_name(pass,3)!=camera_+"/attributes_3") return;
+            if(context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE)
+                throw std::runtime_error("Camera readback requires the observed immediate context");
+            next_texture();
             auto flags=texture(targets[3]);
             if(!next || !flags) return;
             Com<ID3D11Device> device;context->GetDevice(&device);
             if(device_.Get()!=device.Get()) {release_gpu();device_=device;}
             images_[0].source=std::move(next);images_[1].source=std::move(flags);
+            geometry_view_=reinterpret_cast<ID3D11RenderTargetView*>(targets[0]);
             context_=context;geometry_binding_=binding_sequence;geometry_sdk_=sdk_frame;geometry_frame_=render_frame;
             geometry_pass_=*pass;geometry_gpu_=nullptr;geometry_depth_.pixels.clear();
             for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
             clear_vehicle_constants();
         } else if(count==1 && images_[0].source && context==context_.Get() && label==camera_+"/composition_raw") {
+            next_texture();color_view_=reinterpret_cast<ID3D11RenderTargetView*>(targets[0]);
             images_[2].source=std::move(next);color_pass_=*pass;
         }
     } catch(const std::exception& e) {error_=e.what();release_gpu();phase_=Phase::error;}

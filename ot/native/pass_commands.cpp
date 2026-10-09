@@ -343,11 +343,24 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
 }
 void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,bool vehicles,std::shared_ptr<const json> sdk,uint32_t camera_mask) noexcept {
     try {
+        auto pass=describe(input,vehicles,sdk,camera_mask);
+        if(!pass) {
+            // Unlabelled appends cannot overlap an earlier labelled span. Pool
+            // reuse does: retire the old spans at the engine's empty boundary,
+            // without allocating before/after vectors for unrelated passes.
+            const auto header=array(output+0x18);
+            bool empty=true;
+            for(uint64_t i=0;i<header.size;++i)
+                if(read<Block>(header.data+i*sizeof(Block)).size) {empty=false;break;}
+            std::lock_guard lock(mutex_);
+            ++inputs_;pending_.erase(frame);
+            if(empty) compiled_.erase(id);
+            return;
+        }
         auto before=blocks(output);
         const bool empty=std::all_of(before.begin(),before.end(),[](const Block& b){return b.size==0;});
-        auto pass=describe(input,vehicles,sdk,camera_mask);
         std::lock_guard lock(mutex_);
-        ++inputs_;if(pass) ++named_;
+        ++inputs_;++named_;
         // The engine resets an allocated compiled buffer before filling it.
         // Its first empty boundary retires the previous use of this pool ID.
         if(empty) compiled_.erase(id);
