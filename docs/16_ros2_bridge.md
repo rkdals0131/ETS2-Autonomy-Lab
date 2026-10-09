@@ -47,7 +47,7 @@ Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다
 
 ## 수집과 노출
 
-실제 구독 요구를 합쳐 color·depth·preview·metadata·lidar를 선택합니다. 변경은 묶음 경계에서 반영합니다. 처리 중인 GPU 자원은 소비 완료까지 유지합니다. preview와 perception은 같은 축소 출력을 공유합니다.
+실제 구독 요구를 합쳐 color·depth·preview·metadata·lidar를 선택합니다. GT 요구도 카메라별로 적용해, GT를 구독하지 않은 뷰의 주변 차량 목록을 읽지 않습니다. 변경은 묶음 경계에서 반영합니다. 처리 중인 GPU 자원은 소비 완료까지 유지합니다. preview와 perception은 같은 축소 출력을 공유합니다.
 
 평상시에는 perception·JPEG·라이다를 사용합니다. 원본 RGB·depth는 구독할 때만 pack·readback·전송합니다. 라이다 구독은 GPU 깊이를 사용하고 전체 depth 영상 readback을 요구하지 않습니다. 렌더 출력 요구가 모두 사라지면 hook·stream을 해제합니다. 상태 토픽만의 구독 변경은 GPU stream을 재설정하지 않습니다.
 
