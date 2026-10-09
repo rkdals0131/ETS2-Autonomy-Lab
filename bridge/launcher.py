@@ -356,7 +356,8 @@ class Controller:
             code = self.relay.returncode
             self._stop("stopped" if code == 0 else "error",
                        "실행이 종료됐습니다. 시작을 누르면 새 세션을 엽니다." if code == 0 else
-                       "릴레이 종료: F11·게임 연결·아래 로그를 확인해 주세요. 자동 재시작은 멈췄습니다.")
+                       ("현재 차량과 센서 보정이 다릅니다. 차량에 맞는 rig를 선택하거나 ‘입력·상태만’을 선택하고 시작하세요." if code == 2 else
+                        "릴레이 종료: F11·게임 연결·아래 로그를 확인해 주세요. 자동 재시작은 멈췄습니다."))
             return
         if not self.relay and now - self.started > 35:
             raise TimeoutError("WSL 서버 준비 시간이 초과됐습니다.")

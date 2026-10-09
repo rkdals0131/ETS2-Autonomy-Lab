@@ -1,5 +1,5 @@
 {
-  "description": "Ideal instantaneous depth-derived beams for the FH5 body-fit camera rig. Angles are relative to each axis_camera: azimuth left, elevation up. Research sampling pattern, not a vendor sensor model. Distances retain capture world_units.",
+  "description": "Ideal instantaneous depth-derived beams for the four-camera private rig. Mounts follow the selected vehicle preset. Azimuth left, elevation up; research pattern, not a vendor sensor model. Distances retain capture world_units.",
   "sensors": [
     {
       "name": "L_F",

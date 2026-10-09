@@ -43,7 +43,7 @@ x64 MSVC Build Tools, CMake·Ninja, 공식 SCS SDK가 필요합니다. `build.cm
 
 ## Phase 1 고속도로 4뷰
 
-[phase1-highway-private.json](presets/phase1-highway-private.json)과 [phase1-lidar-private.json](presets/phase1-lidar-private.json)을 함께 사용합니다. 장착 좌표와 해상도는 [FH5 리그](../docs/14_phase1_highway_sensors.md)에 있습니다.
+[phase1-highway-fh4-private.json](presets/phase1-highway-fh4-private.json)과 [phase1-lidar-private.json](presets/phase1-lidar-private.json)을 함께 사용합니다. 장착 좌표와 해상도는 [FH4 리그](../docs/14_phase1_highway_sensors.md)에 있습니다.
 
 전방은 선바이저 바깥에, 측면은 미러 하우징 뒤쪽에 부착했습니다. 네 카메라는 캐빈 서스펜션을 따릅니다. 자차 body는 엔진의 full-list 제출 경로를 사용합니다.
 
@@ -52,8 +52,8 @@ core 0.26.1의 브리지 private 리그는 `capture_warmup: true`를 사용합�
 ## 실시간 미리보기
 
 ```powershell
-.\ot\ot.cmd preview --config .\ot\presets\phase1-highway-private.json --format rgbd8
-.\ot\ot.cmd camera_rig apply --config .\ot\presets\phase1-highway-private.json --rig-only
+.\ot\ot.cmd preview --config .\ot\presets\phase1-highway-fh4-private.json --format rgbd8
+.\ot\ot.cmd camera_rig apply --config .\ot\presets\phase1-highway-fh4-private.json --rig-only
 .\ot\ot.cmd panic
 ```
 
@@ -62,7 +62,7 @@ Python 미리보기는 배치 실험용입니다. ROS 실시간 표시는 런처
 ## 기록·오프라인 도구
 
 ```powershell
-.\ot\ot.cmd record_bundles --config .\ot\presets\phase1-highway-private.json --vehicles --hz 10 --duration 5 --output '<새 출력 폴더>'
+.\ot\ot.cmd record_bundles --config .\ot\presets\phase1-highway-fh4-private.json --vehicles --hz 10 --duration 5 --output '<새 출력 폴더>'
 .\ot\ot.cmd lidar '<frame.tar.zst>' --config .\ot\presets\phase1-lidar-private.json --output lidar.npz
 ```
 

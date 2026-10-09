@@ -222,5 +222,6 @@ int main(int argc,char** argv) {
             for(int i=0;i<20 && !stopped && lease_ok;++i) std::this_thread::sleep_for(50ms);
         }
         return lease_ok?0:1;
-    } catch(const std::exception& e) {std::cerr<<e.what()<<std::endl;return 1;}
+    } catch(const SensorMountMismatch& e) {std::cerr<<e.what()<<std::endl;return 2;}
+    catch(const std::exception& e) {std::cerr<<e.what()<<std::endl;return 1;}
 }

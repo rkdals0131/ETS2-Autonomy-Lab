@@ -131,7 +131,7 @@ arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기
 
 수동 해제는 현재 프로필의 A/Left·D/Right·W/Up·S/Down 및 `joy.x/rt/lt`를 직접 읽습니다. controls.sii의 deadzone·축 변환을 적용하고, 반대 키나 키보드/패드가 서로 상쇄돼도 각 물리 source의 활동을 보고 해제합니다. pad 부재는 프로필의 `?0` fallback대로 중립이며 키보드 조작은 유지합니다. pad 연결 변화는 arm을 해제하고 읽기 오류·지원하지 않는 binding에서는 arm을 허용하지 않습니다. 프로필 변경은 권한 재읽기 또는 재시작으로 반영합니다. 현재 프로필의 `xinput_gamepad_1`과 Windows index 0은 disarmed 좌우 stick·RT/LT 대조에서 대응했습니다. deadzone 경계의 세밀한 대조와 armed 상태의 수동 해제·F11 시험은 남아 있습니다.
 
-2026-10-10 입력 시험 차량은 FH4였고 기존 카메라 보정은 FH5입니다. `slots: []`에서는 현재 SDK 바퀴로 base_link를 계산해 상태·입력을 연결합니다. 센서 슬롯을 선택하면 기존 차량·장착 검사로 잘못된 보정을 거절합니다. FH5 보정 파일은 변경하지 않았으며 이 시험은 IMU/GNSS 보정 검증이 아닙니다. 자동 시동 옵션이 켜진 상태를 유지했습니다.
+이전 2026-10-10 입력 시험은 FH4에서 FH5 센서 보정을 요청하지 않고 수행했습니다. 현재 기본 센서 리그는 FH4 장착 프리셋으로 전환했습니다. `slots: []`에서는 현재 SDK 바퀴로 base_link를 계산해 상태·입력을 연결합니다. 센서 슬롯을 선택하면 기존 차량·장착 검사로 잘못된 보정을 거절합니다. FH5 보정 파일은 변경하지 않았으며 이 시험은 IMU/GNSS 보정 검증이 아닙니다. 자동 시동 옵션이 켜진 상태를 유지했습니다.
 
 ### 속도 목표와 조향 위치 목표
 
@@ -140,7 +140,7 @@ core 0.28.0은 카메라와 독립된 `/ets2/ground_truth/traffic`을 SDK frame_
 `drive_speed`는 GT 속도로 throttle/brake를 계산하고 SDK applied steering으로 정규화 조향 위치를 추적합니다. `steering_target`은 **왼쪽 양수 [-1,1]인 applied steering 목표**이며 실제 바퀴 각도(rad)나 토크가 아닙니다. 현재 상대 입력 프로필에서는 PI feedback으로 하위 조향 입력을 계산하므로 사람의 Xbox 설정과 게임의 복귀·차량 물리를 유지합니다. 지도 경로 모드는 ACC·LCC를 연결하며 `acc_enabled`·`lcc_enabled`를 독립 bool 파라미터로 바꿀 수 있습니다.
 
 1. 게임에서 엔진·D 기어·주차브레이크를 주행 가능한 상태로 설정합니다.
-2. `bridge/launch.cmd`에서 **입력·상태만**을 체크하고 **시작**합니다. 현재 FH4에 FH5 센서 보정을 적용하지 않으며 설정 파일의 slots를 편집할 필요가 없습니다.
+2. `bridge/launch.cmd`에서 **입력·상태만**을 체크하고 **시작**합니다. 센서 수집 없이 상태·입력만 연결하며 설정 파일의 slots를 편집할 필요가 없습니다.
 3. WSL에서 저장소 환경을 불러온 뒤 명시적으로 노드를 실행하고 게임 창으로 돌아갑니다. 런처와 같은 ROS domain 42를 사용합니다.
 
 ```bash
@@ -225,3 +225,5 @@ ros2 launch ets2_bridge bridge.launch.py config:="$REPO/bridge/config/bridge.loc
 종료 확인이 실패하면 해당 WSL 실행을 화면에 남기고 새 시작을 막습니다. 중지를 다시 눌러 같은 실행의 정리를 확인합니다.
 
 [센서 프리셋](../docs/14_phase1_highway_sensors.md), [성능과 운영 구성](../docs/18_performance.md), [주요 시행착오](../docs/history/lessons.md).
+
+현재 센서 기본은 `phase1-highway-fh4-private.json`입니다. `bridge/configure.py`의 새 설정과 이 머신의 `bridge.local.json`도 FH4를 선택합니다. 기존 런처를 정상 닫고 `bridge/launch.cmd`로 다시 열어 **시작**하면 됩니다. 게임 재시작은 필요 없습니다. ACC/LCC만 쓸 때는 **입력·상태만**을 선택합니다. 다른 차량을 센서 모드로 요청하면 보정 불일치 이유를 표시하고 종료하며 자동으로 재시도하지 않습니다. [FH4 장착점과 확인 범위](../docs/14_phase1_highway_sensors.md).

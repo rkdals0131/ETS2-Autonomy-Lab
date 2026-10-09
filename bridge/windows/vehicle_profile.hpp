@@ -1,8 +1,10 @@
 #pragma once
 #include "geometry.hpp"
 #include <vector>
+#include <stdexcept>
 
 namespace bridge {
+struct SensorMountMismatch:std::runtime_error {using std::runtime_error::runtime_error;};
 struct WheelGeometry {
     uint32_t index;
     V position;
