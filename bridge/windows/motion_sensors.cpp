@@ -11,7 +11,7 @@ MotionSensors::MotionSensors(const VehicleProfile& vehicle,const json& settings)
         throw std::runtime_error("Invalid motion sensor mounts or WGS84 reference");
 }
 json MotionSensors::configuration() const {
-    return {{"core_version","0.23.0"},{"model","ideal"},{"angular_velocity_unit","rad/s"},
+    return {{"core_version","0.24.0"},{"model","ideal"},{"angular_velocity_unit","rad/s"},
         {"imu_mount_base_m",mount_},{"gnss_mount_base_m",gnss_mount_},{"gnss_reference_lla",reference_},
         {"gnss_reference","virtual ENU at first observed base_link; WGS84 ellipsoid"},
         {"gnss_hz",10},{"motion_rate","one fresh SDK frame; no interpolation"},

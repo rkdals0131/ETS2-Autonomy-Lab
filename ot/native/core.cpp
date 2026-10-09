@@ -81,7 +81,8 @@ void Runtime::initialize() {
     const auto& fields=schema_.at("sdk_fields");
     for(const auto& field:fields) {
         std::string type=field.at("type"),name=field.at("name");
-        auto kind=type=="dplacement"?SCS_VALUE_TYPE_dplacement:type=="fvector"?SCS_VALUE_TYPE_fvector:SCS_VALUE_TYPE_float;
+        auto kind=type=="dplacement"?SCS_VALUE_TYPE_dplacement:type=="fvector"?SCS_VALUE_TYPE_fvector:
+            type=="s32"?SCS_VALUE_TYPE_s32:SCS_VALUE_TYPE_float;
         channels_.push_back({this,name,kind});
     }
     for(auto& channel:channels_) {
@@ -141,6 +142,7 @@ void Runtime::value(const Channel& channel,const scs_value_t* value) {
     if(value) {
         if(value->type!=channel.type) throw std::runtime_error("SDK channel type mismatch");
         if(value->type==SCS_VALUE_TYPE_float) item["value"]=value->value_float.value;
+        else if(value->type==SCS_VALUE_TYPE_s32) item["value"]=value->value_s32.value;
         else if(value->type==SCS_VALUE_TYPE_bool) item["value"]=value->value_bool.value!=0;
         else if(value->type==SCS_VALUE_TYPE_fvector) {
             const auto& v=value->value_fvector; item["value"]={v.x,v.y,v.z};

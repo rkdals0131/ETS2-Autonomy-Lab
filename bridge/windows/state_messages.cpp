@@ -72,6 +72,15 @@ Packet state_messages(const json& state,const std::string& session,const V& base
             c.serialize_array(value.data(),3);
         }
     }));
+    add_message(packet,"/ets2/vehicle/actuation",cdr(256,[&](Cdr& c){
+        header(c,us,"base_link");c<<state.at("frame_id").get<uint64_t>();
+        for(const auto* key:{"truck.input.steering","truck.input.throttle","truck.input.brake",
+                            "truck.effective.steering","truck.effective.throttle","truck.effective.brake"}) c<<channel(state,key);
+        for(const auto* key:{"truck.engine.gear","truck.displayed.gear"}) {
+            const auto& sdk=state.at("sdk");const bool available=sdk.contains(key) && sdk.at(key).value("available",false);
+            c<<available<<(available?sdk.at(key).at("value").get<int32_t>():int32_t{0});
+        }
+    }));
     if(state.contains("engine") && state["engine"].contains("vehicle") && state["engine"]["vehicle"].value("available",false)) {
         const auto& p=state["engine"]["vehicle"]["pose_physics"];
         const M rotation=from_quat(p.at("quaternion_wxyz").get<Q>());

@@ -126,6 +126,11 @@
     {"name": "truck.engine.rpm", "type": "float"},
     {"name": "truck.input.steering", "type": "float"},
     {"name": "truck.input.throttle", "type": "float"},
-    {"name": "truck.input.brake", "type": "float"}
+    {"name": "truck.input.brake", "type": "float"},
+    {"name": "truck.effective.steering", "type": "float"},
+    {"name": "truck.effective.throttle", "type": "float"},
+    {"name": "truck.effective.brake", "type": "float"},
+    {"name": "truck.engine.gear", "type": "s32"},
+    {"name": "truck.displayed.gear", "type": "s32"}
   ]
 }
