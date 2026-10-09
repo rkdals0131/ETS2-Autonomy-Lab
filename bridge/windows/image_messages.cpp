@@ -40,7 +40,7 @@ static Bytes jpeg(IWICImagingFactory* factory,std::span<const uint8_t> rgba,uint
     LARGE_INTEGER zero{};check(stream->Seek(zero,STREAM_SEEK_SET,nullptr));ULONG read{};check(stream->Read(data.data(),static_cast<ULONG>(data.size()),&read));
     if(read!=data.size()) throw std::runtime_error("Incomplete JPEG output");return data;
 }
-static Bytes camera_info(uint64_t us,const std::string& frame,uint32_t width,uint32_t height,const json& projection,const json& vp,double scale) {
+static void append_camera_info(Packet& packet,const std::string& topic,uint64_t us,const std::string& frame,uint32_t width,uint32_t height,const json& projection,const json& vp,double scale) {
     const auto p=projection.get<std::array<double,16>>();
     const std::array<double,5> viewport{vp.at("width"),vp.at("height"),vp.at("x"),vp.at("y"),scale};
     struct Calibration {std::array<double,16> projection{};std::array<double,5> viewport{};std::array<double,9> k{};std::array<double,12> project{};};
@@ -57,7 +57,7 @@ static Bytes camera_info(uint64_t us,const std::string& frame,uint32_t width,uin
     }
     const auto& k=calibration.k;const auto& project=calibration.project;
     const std::array<double,9> r{1,0,0,0,1,0,0,0,1};
-    return cdr(1024,[&](Cdr& c){header(c,us,frame);c<<height<<width<<std::string("plumb_bob")<<uint32_t{5};
+    append_cdr(packet,topic,1024,[&](Cdr& c){header(c,us,frame);c<<height<<width<<std::string("plumb_bob")<<uint32_t{5};
         for(int i=0;i<5;++i) c<<double{0};c.serialize_array(k.data(),9);c.serialize_array(r.data(),9);c.serialize_array(project.data(),12);
         c<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<false;
     });
@@ -105,8 +105,9 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
     const M cabin_rotation=mul(transpose(matrix(camera.at("camera_rotation_row_major"))),transpose(from_quat(mount->at("quaternion_wxyz").get<Q>())));
     const V cabin_position=sub(camera.at("camera_world_xyz").get<V>(),mul(cabin_rotation,mount->at("position").get<V>()));
     const M body_rotation=from_quat(body.at("quaternion_wxyz").get<Q>());
-    const V base_world=mul(enu,add(body.at("position_m").get<V>(),mul(body_rotation,rig.at("base_origin").get<V>())));
-    const M world_from_base=mul(mul(enu,body_rotation),base_to_model);
+    const auto ego=world_base_pose(body.at("position_m").get<V>(),body_rotation,rig.at("base_origin").get<V>());
+    const V base_world=ego.position;
+    const M world_from_base=ego.rotation;
     transforms.push_back({"world","base_link",base_world,quaternion(world_from_base)});
     transforms.push_back({"base_link","cabin",mul(transpose(world_from_base),sub(mul(enu,cabin_position),base_world)),
         quaternion(mul(mul(transpose(world_from_base),enu),mul(cabin_rotation,base_to_model)))});
@@ -146,14 +147,14 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
                     const auto world=add(v.at("model_world_xyz").get<V>(),mul(model,sub(center,v.at("model_reference_offset_raw").get<V>())));
                     boxes.push_back({mul(optical,mul(rotation,sub(world,origin))),size,quaternion(mul(mul(optical,rotation),model)),session+":"+std::to_string(v.at("actor_address").get<uint64_t>())});
             }
-            if(demand.contains(gt_topic)) add_message(packet,gt_topic,cdr(1024+boxes.size()*512,[&](Cdr& c){
+            if(demand.contains(gt_topic)) append_cdr(packet,gt_topic,1024+boxes.size()*512,[&](Cdr& c){
                 header(c,us,frame);c<<uint32_t(boxes.size());
                 for(const auto& b:boxes) {
                     header(c,us,frame);c<<uint32_t{0}; // No invented semantic class/confidence.
                     pose(c,b.p,b.q);c.serialize_array(b.size.data(),3);c<<b.id;
                 }
-            }));
-            if(demand.contains(marker_topic)) add_message(packet,marker_topic,cdr(1024+boxes.size()*512,[&](Cdr& c){
+            });
+            if(demand.contains(marker_topic)) append_cdr(packet,marker_topic,1024+boxes.size()*512,[&](Cdr& c){
                 c<<uint32_t(boxes.size()+1);
                 auto marker=[&](int32_t id,int32_t action,const Box& b) {
                     header(c,us,frame);c<<name<<id<<int32_t{1}<<action;pose(c,b.p,b.q);c.serialize_array(b.size.data(),3);
@@ -164,7 +165,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
                 };
                 marker(0,3,{{0,0,0},{1,1,1},{0,0,0,1},""});
                 for(size_t i=0;i<boxes.size();++i) marker(static_cast<int32_t>(i),0,boxes[i]);
-            }));
+            });
         }
         uint32_t width=meta.at("sensor_dimensions").at(0),height=meta.at("sensor_dimensions").at(1);
         for(const auto& desc:meta.at("images")) {
@@ -197,15 +198,15 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
             if(preview && meta.value("display_due",true) && demand.contains(base+"/preview/image/compressed")) {
                 auto bytes=jpeg(imaging,data,width,height);
                 append_cdr(packet,base+"/preview/image/compressed",bytes.size()+512,[&](Cdr& c){header(c,us,frame);c<<std::string("rgb8; jpeg compressed bgr8")<<uint32_t(bytes.size());c.serialize_array(bytes.data(),bytes.size());});
-                add_message(packet,base+"/preview/camera_info",camera_info(us,frame,width,height,camera.at("projection_row_major"),vp,.5));
+                append_camera_info(packet,base+"/preview/camera_info",us,frame,width,height,camera.at("projection_row_major"),vp,.5);
             }
         }
         if(demand.contains(base+"/preview/camera_info") && !demand.contains(base+"/preview/image/compressed"))
-            add_message(packet,base+"/preview/camera_info",camera_info(us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5));
+            append_camera_info(packet,base+"/preview/camera_info",us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5);
         if(demand.contains(base+"/perception/image_raw") || demand.contains(base+"/perception/camera_info"))
-            add_message(packet,base+"/perception/camera_info",camera_info(us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5));
+            append_camera_info(packet,base+"/perception/camera_info",us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5);
         if(width && (demand.contains(base+"/camera_info") || demand.contains(base+"/image_raw") || demand.contains(base+"/depth/image_raw")))
-            add_message(packet,base+"/camera_info",camera_info(us,frame,width,height,camera.at("projection_row_major"),vp,1));
+            append_camera_info(packet,base+"/camera_info",us,frame,width,height,camera.at("projection_row_major"),vp,1);
     }
     for(auto& [name,sources]:lidars) {
         const auto topic="/ets2/lidar/"+name+"/points",preview_topic="/ets2/lidar/"+name+"/preview/points";
@@ -302,19 +303,19 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         });
         }
     }
-    add_message(packet,"/tf",cdr(512+transforms.size()*256,[&](Cdr& c){c<<uint32_t(transforms.size());for(const auto& t:transforms) {header(c,us,t.parent);c<<t.frame;pose(c,t.position,t.rotation);}}));
-    add_message(packet,"/ets2/frame_info/exposure",cdr(1024,[&](Cdr& c){
+    append_cdr(packet,"/tf",512+transforms.size()*256,[&](Cdr& c){c<<uint32_t(transforms.size());for(const auto& t:transforms) {header(c,us,t.parent);c<<t.frame;pose(c,t.position,t.rotation);}});
+    append_cdr(packet,"/ets2/frame_info/exposure",1024,[&](Cdr& c){
         header(c,us,"world");c<<manifest.at("render_frame_id").get<uint64_t>();
         c<<uint32_t(cameras.size());for(const auto& name:cameras) c<<name.get<std::string>();
         c<<uint32_t(gains.size());c.serialize_array(gains.data(),gains.size());
         c<<uint32_t(automatic.size());for(bool value:automatic) c<<value;
-    }));
-    add_message(packet,"/ets2/frame_info",cdr(8192,[&](Cdr& c){
+    });
+    append_cdr(packet,"/ets2/frame_info",8192,[&](Cdr& c){
         header(c,us,"world");c<<session<<manifest.at("render_frame_id").get<uint64_t>()<<first.at("frame_id").get<uint64_t>();
         for(const auto* key:{"render_time_us","simulation_time_us","paused_simulation_time_us"}) c<<first.at(key).get<uint64_t>();
         c<<uint32_t(cameras.size());for(const auto& name:cameras) c<<name.get<std::string>();
         c<<uint32_t(packet.meta["messages"].size());for(const auto& message:packet.meta["messages"]) c<<message.at("topic").get<std::string>();c<<dropped;
-    }));
+    });
     return packet;
 }
 }

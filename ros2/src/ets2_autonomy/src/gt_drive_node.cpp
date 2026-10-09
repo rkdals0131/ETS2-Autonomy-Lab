@@ -6,6 +6,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/string.hpp>
 #include "control/path_following.hpp"
+#include "control/parameters.hpp"
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <algorithm>
 #include <atomic>
@@ -24,59 +25,25 @@ int main(int argc,char** argv) {
     rclcpp::init(argc,argv,rclcpp::InitOptions(),rclcpp::SignalHandlerOptions::None);
     std::signal(SIGINT,stop);std::signal(SIGTERM,stop);
     auto node=std::make_shared<rclcpp::Node>("ets2_drive_speed");
-    const auto arm=node->declare_parameter("arm",false);
-    node->declare_parameter("acc_enabled",true);
-    node->declare_parameter("lcc_enabled",true);
-    node->declare_parameter("target_speed_mps",0.0);
-    node->declare_parameter("steering_target",0.0);
-    node->declare_parameter("relative_steering",true);
-    node->declare_parameter("steering_gain",2.0);
-    node->declare_parameter("steering_integral_gain",1.0);
-    node->declare_parameter("throttle_gain",0.2);
-    node->declare_parameter("brake_gain",0.2);
-    node->declare_parameter("speed_integral_gain",0.08);
-    node->declare_parameter("speed_derivative_gain",0.0);
-    const auto path_file=node->declare_parameter("path_file",std::string{});
-    node->declare_parameter("lookahead_m",6.0);
-    node->declare_parameter("lookahead_time_s",0.7);
-    node->declare_parameter("steering_angle_per_unit_rad",0.7);
-    node->declare_parameter("lateral_acceleration_mps2",1.5);
-    node->declare_parameter("stopping_deceleration_mps2",1.5);
-    node->declare_parameter("following_time_s",1.5);
-    node->declare_parameter("standstill_gap_m",5.0);
-    node->declare_parameter("following_gain",0.5);
+    const auto initial=declare_driving_parameters(*node);
+    std::atomic<std::shared_ptr<const DrivingParameters>> configuration{std::make_shared<const DrivingParameters>(initial)};
+    auto parameters=node->add_on_set_parameters_callback([](const auto& values) {
+        return check_driving_parameter_changes(values);
+    });
+    auto parameter_updates=node->add_post_set_parameters_callback([&](const auto& values) {
+        auto next=std::make_shared<DrivingParameters>(*configuration.load());
+        apply_driving_parameter_changes(*next,values);
+        configuration.store(std::move(next));
+    });
     std::unique_ptr<LanePath> lane;
-    if(!path_file.empty()) try {lane=std::make_unique<LanePath>(path_file);} catch(const std::exception& e) {
+    if(!initial.path_file.empty()) try {lane=std::make_unique<LanePath>(initial.path_file);} catch(const std::exception& e) {
         std::cerr<<e.what()<<std::endl;rclcpp::shutdown();return 1;
     }
-    const auto owner="speed-"+std::to_string(getpid())+"-"+std::to_string(Clock::now().time_since_epoch().count());
-    auto parameters=node->add_on_set_parameters_callback([](const auto& values) {
-        rcl_interfaces::msg::SetParametersResult result;result.successful=true;
-        for(const auto& p:values) {
-            if((p.get_name()=="acc_enabled" || p.get_name()=="lcc_enabled") && p.get_type()!=rclcpp::ParameterType::PARAMETER_BOOL) {result.successful=false;result.reason="ACC/LCC modes must be bool";break;}
-            if(p.get_name()=="arm" || p.get_name()=="relative_steering" || p.get_name()=="path_file") {result.successful=false;result.reason="Input mode and arm are startup options; restart explicitly";break;}
-            if(p.get_name()=="target_speed_mps" || p.get_name()=="steering_target" || p.get_name()=="throttle_gain" || p.get_name()=="brake_gain" || p.get_name()=="steering_gain" || p.get_name()=="steering_integral_gain" || p.get_name()=="speed_integral_gain" || p.get_name()=="speed_derivative_gain" || p.get_name()=="lookahead_m" || p.get_name()=="lookahead_time_s" || p.get_name()=="steering_angle_per_unit_rad" || p.get_name()=="lateral_acceleration_mps2" || p.get_name()=="stopping_deceleration_mps2" || p.get_name()=="following_time_s" || p.get_name()=="standstill_gap_m" || p.get_name()=="following_gain") {
-                if(p.get_type()!=rclcpp::ParameterType::PARAMETER_DOUBLE || !std::isfinite(p.as_double()) ||
-                   (p.get_name()=="steering_target"?std::abs(p.as_double())>1:
-                    (p.get_name()=="lookahead_m" || p.get_name()=="steering_angle_per_unit_rad" || p.get_name()=="stopping_deceleration_mps2"?p.as_double()<=0:p.as_double()<0))) {
-                    result.successful=false;result.reason="Speed/gains must be finite and nonnegative; steering must be in [-1,1]";break;
-                }
-            }
-        }
-        return result;
-    });
-    const auto settings_valid=[&] {
-        for(const auto* name:{"target_speed_mps","steering_target","throttle_gain","brake_gain","steering_gain","steering_integral_gain","speed_integral_gain","speed_derivative_gain","lookahead_m","lookahead_time_s","steering_angle_per_unit_rad","lateral_acceleration_mps2","stopping_deceleration_mps2","following_time_s","standstill_gap_m","following_gain"}) {
-            const auto value=node->get_parameter(name).as_double();
-            if(!std::isfinite(value) || (std::string_view(name)=="steering_target"?std::abs(value)>1:
-                (std::string_view(name)=="lookahead_m" || std::string_view(name)=="steering_angle_per_unit_rad" || std::string_view(name)=="stopping_deceleration_mps2"?value<=0:value<0))) return false;
-        }
-        return true;
-    };
-    if(!arm || !settings_valid()) {
-        std::cerr<<(arm?"Invalid driving parameters":"No driving enabled; start explicitly with -p arm:=true")<<std::endl;
-        rclcpp::shutdown();return arm?1:0;
+    if(!initial.arm || !valid_driving_parameters(initial)) {
+        std::cerr<<(initial.arm?"Invalid driving parameters":"No driving enabled; start explicitly with -p arm:=true")<<std::endl;
+        rclcpp::shutdown();return initial.arm?1:0;
     }
+    const auto owner="speed-"+std::to_string(getpid())+"-"+std::to_string(Clock::now().time_since_epoch().count());
     ets2_msgs::msg::DriveState::SharedPtr drive;
     ets2_msgs::msg::VehicleState::SharedPtr vehicle;
     Clock::time_point drive_time{},vehicle_time{};
@@ -119,7 +86,7 @@ int main(int argc,char** argv) {
     auto publisher=node->create_publisher<ets2_msgs::msg::DriveCommand>("/ets2/drive/command",rclcpp::QoS(1).best_effort());
     auto service=node->create_client<ets2_msgs::srv::DriveControl>("/ets2/drive/control");
     uint64_t epoch=0,sequence=0;int result=0;
-    const auto axes=[&]() -> uint8_t {return (node->get_parameter("lcc_enabled").as_bool()?1:0)|(node->get_parameter("acc_enabled").as_bool()?2:0);};
+    const auto axes=[&]() {return configuration.load()->axes();};
     const auto control=[&](bool enabled) {
         auto request=std::make_shared<ets2_msgs::srv::DriveControl::Request>();
         request->owner=owner;request->arm=enabled;request->epoch=epoch;
@@ -154,7 +121,8 @@ int main(int argc,char** argv) {
         while(!stopped && rclcpp::ok()) {
             rclcpp::spin_some(node);const auto now=Clock::now();
             if(!drive->armed || drive->owner!=owner || drive->epoch!=epoch) throw std::runtime_error("Driving released: "+drive->reason);
-            const auto enabled_axes=axes();
+            const auto settings=configuration.load();
+            const auto enabled_axes=settings->axes();
             if(!enabled_axes) {std::cout<<"ACC and LCC disabled; releasing control"<<std::endl;break;}
             const bool acc=enabled_axes&2,lcc=enabled_axes&1;
             if(!acc) speed_integral=0;
@@ -162,19 +130,19 @@ int main(int argc,char** argv) {
             if(now-drive_time>200ms || now-vehicle_time>200ms || vehicle->paused || !std::isfinite(vehicle->speed_mps))
                 throw std::runtime_error("Current game state is unavailable or paused");
             const auto dt=std::chrono::duration<double>(now-previous).count();
-            auto speed_target=node->get_parameter("target_speed_mps").as_double();
-            auto steering_target=node->get_parameter("steering_target").as_double();
+            auto speed_target=settings->target_speed_mps;
+            auto steering_target=settings->steering_target;
             double path_error=0,remaining=0,lead_gap=std::numeric_limits<double>::infinity();
             if(lane) {
                 if(now-pose_time>200ms || now-traffic_time>200ms) throw std::runtime_error("Current GT path/traffic observation is unavailable");
-                const auto goal=lane->follow(ego_x,ego_y,ego_yaw,node->get_parameter("lookahead_m").as_double()+std::max(0.0,vehicle->speed_mps)*node->get_parameter("lookahead_time_s").as_double());
+                const auto goal=lane->follow(ego_x,ego_y,ego_yaw,settings->lookahead_m+std::max(0.0,vehicle->speed_mps)*settings->lookahead_time_s);
                 path_error=goal.error;remaining=goal.remaining;
                 if(lcc) {
-                    steering_target=std::clamp(std::atan(wheelbase*goal.curvature)/node->get_parameter("steering_angle_per_unit_rad").as_double(),-1.0,1.0);
+                    steering_target=std::clamp(std::atan(wheelbase*goal.curvature)/settings->steering_angle_per_unit_rad,-1.0,1.0);
                     if(path_error>lane->width/2) throw std::runtime_error("LCC lane reference lost; releasing assistance");
                     if(acc) {
-                        speed_target=std::min(speed_target,std::sqrt(2*node->get_parameter("stopping_deceleration_mps2").as_double()*std::max(0.0,remaining-1)));
-                        if(std::abs(goal.curvature)>0) speed_target=std::min(speed_target,std::sqrt(node->get_parameter("lateral_acceleration_mps2").as_double()/std::abs(goal.curvature)));
+                        speed_target=std::min(speed_target,std::sqrt(2*settings->stopping_deceleration_mps2*std::max(0.0,remaining-1)));
+                        if(std::abs(goal.curvature)>0) speed_target=std::min(speed_target,std::sqrt(settings->lateral_acceleration_mps2/std::abs(goal.curvature)));
                     }
                 }
                 for(const auto& actor:actors) {
@@ -192,8 +160,8 @@ int main(int argc,char** argv) {
                     }
                     if(!acc || ahead<=0 || lateral>(lane->width+actor.width)/2 || std::cos(actor.yaw-heading)<=0) continue;
                     const auto gap=ahead-actor.length/2;
-                    const auto desired=wheelbase+node->get_parameter("standstill_gap_m").as_double()+std::max(0.0,vehicle->speed_mps)*node->get_parameter("following_time_s").as_double();
-                    speed_target=std::min(speed_target,std::max(0.0,actor.speed+node->get_parameter("following_gain").as_double()*(gap-desired)));
+                    const auto desired=wheelbase+settings->standstill_gap_m+std::max(0.0,vehicle->speed_mps)*settings->following_time_s;
+                    speed_target=std::min(speed_target,std::max(0.0,actor.speed+settings->following_gain*(gap-desired)));
                     lead_gap=std::min(lead_gap,gap);
                 }
                 if(lcc && remaining<=1 && (!acc || std::abs(vehicle->speed_mps)<0.1)) {std::cout<<"Lane reference ended; releasing control"<<std::endl;break;}
@@ -203,19 +171,19 @@ int main(int argc,char** argv) {
             command.owner=owner;command.epoch=epoch;command.sequence=++sequence;command.command_window_ms=drive->command_window_ms;
             command.axes=enabled_axes;
             command.steering=lcc?steering_target:0;
-            if(lcc && node->get_parameter("relative_steering").as_bool()) {
+            if(lcc && settings->relative_steering) {
                 if(!std::isfinite(drive->steering_applied)) throw std::runtime_error("Applied steering feedback is unavailable");
                 const auto steering_error=steering_target-drive->steering_applied;
-                const auto proportional=steering_error*node->get_parameter("steering_gain").as_double();
-                const auto candidate=steering_integral+steering_error*node->get_parameter("steering_integral_gain").as_double()*std::chrono::duration<double>(now-previous).count();
+                const auto proportional=steering_error*settings->steering_gain;
+                const auto candidate=steering_integral+steering_error*settings->steering_integral_gain*dt;
                 // Do not accumulate error pushing further into a saturated input.
                 if(std::abs(proportional+candidate)<=1 || steering_error*(proportional+candidate)<0) steering_integral=candidate;
                 command.steering=std::clamp(proportional+steering_integral,-1.0,1.0);
             }
-            const auto speed_kp=node->get_parameter(error>=0?"throttle_gain":"brake_gain").as_double();
+            const auto speed_kp=(error>=0?settings->throttle_gain:settings->brake_gain);
             if(speed_target==0) speed_integral=0;
-            const auto candidate=speed_integral+error*node->get_parameter("speed_integral_gain").as_double()*dt;
-            const auto derivative=dt>0?-(vehicle->speed_mps-previous_speed)/dt*node->get_parameter("speed_derivative_gain").as_double():0;
+            const auto candidate=speed_integral+error*settings->speed_integral_gain*dt;
+            const auto derivative=dt>0?-(vehicle->speed_mps-previous_speed)/dt*settings->speed_derivative_gain:0;
             if(speed_target>0 && (std::abs(speed_kp*error+candidate+derivative)<=1 || error*(speed_kp*error+candidate+derivative)<0)) speed_integral=candidate;
             const auto effort=std::clamp(speed_kp*error+speed_integral+derivative,-1.0,1.0);
             previous=now;previous_speed=vehicle->speed_mps;

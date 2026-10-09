@@ -1,7 +1,6 @@
 """One launcher-owned rosbag2 recorder, with observed process and file status."""
 from datetime import datetime
 import json
-import os
 from pathlib import Path
 import shutil
 import signal
@@ -10,6 +9,8 @@ import time
 import uuid
 
 import yaml
+
+from processes import signal_group
 
 
 STATE_TOPICS = [
@@ -80,11 +81,7 @@ class BagRecording:
             return
         self.stop_at = time.monotonic()
         self.status["phase"] = "stopping"
-        if self.process.poll() is None:
-            try:
-                os.killpg(self.process.pid, signal.SIGINT)
-            except ProcessLookupError:
-                pass
+        signal_group(self.process, signal.SIGINT)
 
     def poll(self):
         try:
@@ -102,10 +99,7 @@ class BagRecording:
         code = self.process.poll()
         if code is None:
             if self.stop_at is not None and time.monotonic() - self.stop_at > 8:
-                try:
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                signal_group(self.process, signal.SIGKILL)
                 self.process.wait(timeout=2)
                 self.status["error"] = "기록기 정상 종료 시간 초과. bag 복구가 필요할 수 있습니다."
                 return self.poll()

@@ -166,8 +166,4 @@ inline std::vector<Topic> topics() {
     }
     return result;
 }
-inline void add_message(Packet& packet,const std::string& topic,Bytes bytes) {
-    packet.meta["messages"].push_back({{"topic",topic},{"offset",packet.data.size()},{"length",bytes.size()}});
-    packet.data.insert(packet.data.end(),bytes.begin(),bytes.end());
-}
 }

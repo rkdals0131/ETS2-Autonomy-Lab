@@ -8,7 +8,7 @@ using Demand=std::set<std::string>;
 struct SensorBundle {json manifest;Bytes data;size_t blob_offset=0;};
 SensorBundle decode_bundle(Bytes data);
 Packet state_messages(const json& state,const std::string& session,const std::array<double,3>& base);
-Packet static_messages(const json& rig,const json& patterns,const std::string& session,const json& settings);
+Packet static_messages(const json& rig,const json& patterns,const std::string& session,const json& sensors);
 void append_motion_messages(Packet& packet,const MotionSample& sample,const Demand& demand,uint64_t& last_gnss_us);
 void add_sensor_configuration(Packet& packet,const json& configuration);
 void add_diagnostics(Packet& packet,const json& values);

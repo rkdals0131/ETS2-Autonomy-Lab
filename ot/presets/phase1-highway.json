@@ -22,7 +22,8 @@
       "base_resolution": [
         640,
         360
-      ]
+      ],
+      "camera_id": "C_FN"
     },
     {
       "slot": 1,
@@ -45,7 +46,8 @@
       "base_resolution": [
         640,
         360
-      ]
+      ],
+      "camera_id": "C_FW"
     },
     {
       "slot": 2,
@@ -68,7 +70,8 @@
       "base_resolution": [
         480,
         270
-      ]
+      ],
+      "camera_id": "C_RL"
     },
     {
       "slot": 5,
@@ -91,7 +94,8 @@
       "base_resolution": [
         480,
         270
-      ]
+      ],
+      "camera_id": "C_RR"
     }
   ],
   "truck_id": "vehicle.volvo.fh_2021",

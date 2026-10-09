@@ -1,4 +1,5 @@
 #include "pass_commands.hpp"
+#include "../include/geometry.hpp"
 #include "build_identity.hpp"
 #include <algorithm>
 #include <bit>
@@ -177,8 +178,7 @@ RenderCameraSample camera_at_compile(uintptr_t pass,uintptr_t base) {
         if(!result.camera || !result.deferred) throw std::runtime_error("Pass camera or deferred state is absent");
         result.local=floats_at<3>(result.camera+layout.position_offset);
         result.cells=read<std::array<int16_t,2>>(result.camera+layout.cell_offset);
-        const auto scale=layout.cell_scale;
-        result.world={result.local[0]+scale*result.cells[0],result.local[1],result.local[2]+scale*result.cells[1]};
+        result.world=world_position(result.local,result.cells,layout.cell_scale);
         result.component_mask=read<uint32_t>(batch+layout.batch_mask_offset);
         result.viewport_depth=floats_at<2>(result.work+layout.viewport_depth_offset);
         result.viewport_mode=read<uint32_t>(result.work+layout.viewport_mode_offset);

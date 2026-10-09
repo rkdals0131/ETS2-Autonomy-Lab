@@ -1,7 +1,7 @@
 #pragma once
 #include "wire.hpp"
 #include "windows_support.hpp"
-#include "../../ot/native/ipc_layout.hpp"
+#include "../../ot/include/ipc_reader.hpp"
 
 namespace bridge {
 json command(json request);
@@ -29,28 +29,9 @@ public:
     bool available() const {return base_!=nullptr;}
     DWORD producer() const {return producer_;}
     bool read(Bytes& bytes) {
-        if(bundles_) {
-            ot::BundleSlot* oldest=nullptr;
-            for(uint32_t i=0;i<ot::bundle_slots;++i) {
-                auto* slot=ot::bundle_slot(base_,capacity_,i);
-                if(InterlockedCompareExchange(&slot->state,2,2)==2 && (!oldest || slot->sequence<oldest->sequence)) oldest=slot;
-            }
-            if(!oldest || InterlockedCompareExchange(&oldest->state,3,2)!=2) return false;
-            struct Return {ot::BundleSlot* s;~Return(){InterlockedExchange(&s->state,0);}} release{oldest};
-            if(oldest->length>capacity_) throw std::runtime_error("Invalid shared-memory slot length");
-            bytes.resize(oldest->length);std::memcpy(bytes.data(),oldest+1,bytes.size());return true;
-        }
-        bool copied=false;
-        for(uint32_t i=0;i<(bundles_?ot::bundle_slots:ot::ring_slots);++i) {
-            auto* slot=ot::bundle_slot(base_,capacity_,i);
-            if(InterlockedCompareExchange(&slot->state,3,2)!=2) continue;
-            struct Return {ot::BundleSlot* s;~Return(){InterlockedExchange(&s->state,0);}} release{slot};
-            if(slot->length>capacity_) throw std::runtime_error("Invalid shared-memory slot length");
-            if(slot->sequence<=sequence_) continue;
-            // Latest ready bundle wins. The copied bytes are owned before the slot is returned.
-            bytes.resize(slot->length);std::memcpy(bytes.data(),slot+1,bytes.size());sequence_=slot->sequence;copied=true;
-        }
-        return copied;
+        const auto copy=[&](const char* data,uint32_t length) {bytes.assign(data,data+length);};
+        return (bundles_?ot::read_bundle(base_,capacity_,sequence_,sequence_,copy):
+            ot::read_state(static_cast<ot::Ring*>(base_),sequence_,sequence_,copy))>0;
     }
 };
 }

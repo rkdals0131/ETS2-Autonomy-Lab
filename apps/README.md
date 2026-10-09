@@ -2,7 +2,7 @@
 
 ## Windows 전체 모드
 
-`apps/launch.cmd`를 열고 **시작**을 누릅니다. 기존 UI가 Windows 릴레이와 WSL ROS/Foxglove·GT 주행·기록을 함께 관리합니다. `bridge/launch.cmd`도 같은 진입점으로 넘깁니다.
+`apps/launch.cmd`를 열고 **시작**을 누릅니다. 기존 UI가 Windows 릴레이와 WSL ROS/Foxglove·GT 주행·기록을 함께 관리합니다.
 
 ## Linux가 ROS를 관리하는 모드
 

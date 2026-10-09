@@ -7,7 +7,6 @@ import math
 import os
 from pathlib import Path
 import queue
-import shlex
 import subprocess
 import sys
 import threading
@@ -17,9 +16,9 @@ import uuid
 APP_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_ROOT.parents[1]
 BRIDGE_ROOT = PROJECT_ROOT / "bridge"
-ROS_ROOT = PROJECT_ROOT / "ros2"
 sys.path.insert(0, str(PROJECT_ROOT / "ot" / "py"))
 from otpy.client import Client, LoaderClient
+import session
 
 K = C.WinDLL("kernel32", use_last_error=True)
 for name, result, args in [
@@ -160,7 +159,7 @@ class Controller:
             finally:
                 temporary.unlink(missing_ok=True)
         duration = float(settings.get("duration_s", 60))
-        if duration <= 0:
+        if not math.isfinite(duration) or duration <= 0:
             raise ValueError("duration_s must be positive")
         client = Client(timeout=0.5)
         if client.tier()["tier"] != 0:
@@ -176,19 +175,13 @@ class Controller:
                     wsl={}, relay={}, duration_s=duration)
         bridge, app, config = self.linux_paths(BRIDGE_ROOT, APP_ROOT, self.config)
         self.unit = "ets2-launcher-" + uuid.uuid4().hex
-        shell = f"source {shlex.quote(bridge + '/ros-env.sh')} && exec python3 -u {shlex.quote(app + '/wsl_session.py')} {shlex.quote(config)}"
-        self.wsl = self.spawn(["wsl.exe", "-d", "Ubuntu", "--cd", "/", "--exec",
-                              "systemd-run", "--user", "--quiet", "--pipe", "--wait", "--collect",
-                              "--unit=" + self.unit, "--property=KillMode=control-group",
-                              "--property=RuntimeDirectory=" + self.unit,
-                              "--property=TimeoutStopSec=15", "--", "/bin/bash", "-c", shell], "wsl")
+        command = session.command(self.unit, config, bridge + '/ros-env.sh', app, duration)
+        self.wsl = self.spawn(["wsl.exe", "-d", "Ubuntu", "--cd", "/", "--exec", *command], "wsl")
         self.started = time.monotonic()
         self.update(wsl_pid=self.wsl.pid, unit=self.unit)
 
     def _signal_wsl(self, action, **values):
-        if self.wsl and self.wsl.poll() is None:
-            self.wsl.stdin.write(json.dumps({"action": action, **values}) + "\n")
-            self.wsl.stdin.flush()
+        session.send(self.wsl, action, **values)
 
     def _drive(self, action, speed_kmh=30, acc=True, lcc=True):
         if action == "drive_stop":
@@ -305,7 +298,7 @@ class Controller:
                     process.stdin.close()
             if self.stop_event:
                 K.CloseHandle(self.stop_event)
-            self.relay = self.wsl = self.job = self.stop_event = None
+            self.relay = self.wsl = self.job = self.stop_event = self.provider = None
         self.update(phase="error" if errors else phase,
                     message="; ".join(errors) if errors else message, relay_pid=None, wsl_pid=None, unit=self.unit)
 
@@ -321,7 +314,7 @@ class Controller:
             except ValueError:
                 self.log(source + ": " + line)
                 continue
-            if source == "wsl" and data.get("type") == "wsl_error":
+            if source == "wsl" and data.get("type") == "session_error":
                 raise RuntimeError(data["error"])
             if source == "wsl" and data.get("type") == "recording_error":
                 self.update(recording_error=data["error"])
@@ -329,7 +322,7 @@ class Controller:
                 self.update(message=data["error"])
             if source == "wsl" and data.get("type") == "recording_status":
                 self.update(recording=data["recording"])
-            if source == "wsl" and data.get("type") == "wsl_status":
+            if source == "wsl" and data.get("type") == "session_status":
                 self.last_wsl = now
                 self.update(wsl=data, recording=data.get("recording", {"phase": "idle"}))
                 if self.relay and not data["listeners_ready"]:
@@ -556,14 +549,10 @@ def show_window(controller):
             entry.config(state="disabled" if active else "normal")
         summary.config(text=state["message"])
         relay, wsl = state["relay"], state["wsl"]
-        driving = bool(wsl.get("drive_pid"))
         drive_start.config(state="normal" if phase == "running" and not closing else "disabled")
         drive_stop.config(state="normal" if phase == "running" and not closing else "disabled")
-        actual = wsl.get("drive_state") or {}
-        fresh = wsl.get("drive_state_age_s") is not None and wsl["drive_state_age_s"] < 2
-        mask = actual.get("axes", 0) if fresh and actual.get("armed") else 0
-        drive_status.config(text=(f"실제 상태: ACC {'켜짐' if mask & 2 else '꺼짐'} · LCC {'켜짐' if mask & 1 else '꺼짐'} · " +
-                                  (actual.get("reason", "") if fresh else "게임 상태 응답 대기")))
+        mask, reason = session.observed_drive(wsl, controller.last_wsl if wsl else time.monotonic())
+        drive_status.config(text=f"실제 상태: ACC {'켜짐' if mask & 2 else '꺼짐'} · LCC {'켜짐' if mask & 1 else '꺼짐'} · {reason}")
         recording = state["recording"]
         record_phase = recording.get("phase", "idle")
         writing = record_phase in ("starting", "recording", "stopping")

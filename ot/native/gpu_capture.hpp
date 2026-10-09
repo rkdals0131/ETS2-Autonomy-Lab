@@ -30,7 +30,7 @@ struct CaptureOptions {
     bool packed() const {return format!="raw";}
 };
 // One requested camera sample. All context calls run on the game's render
-// thread; file I/O runs only in the existing command worker.
+// thread; the stream worker publishes completed CPU bytes.
 class GpuCapture {
 public:
     enum class Phase { idle,armed,waiting_gpu,ready,error };
@@ -40,7 +40,8 @@ public:
     bool reusable() {std::lock_guard lock(mutex_);return packed_.reusable();}
     void abandon_shared() {std::lock_guard lock(mutex_);packed_.abandon();}
     explicit GpuCapture(std::string camera):camera_(std::move(camera)),camera_slot_(camera_.back()-'0') {}
-    json command(const std::string& action,uint64_t requested_frame=0,bool metadata=true,const CaptureOptions& options={});
+    void arm(const CaptureOptions& options);
+    json status(bool metadata=false);
     void cancel() noexcept;
     void append_bundle(json& views,std::vector<BundleBlob>& blobs);
     void observe(ID3D11DeviceContext* context, uint32_t count, const uintptr_t* targets,
@@ -69,8 +70,6 @@ private:
     void prepare_staging(Image& image,const D3D11_TEXTURE2D_DESC& desc,ID3D11Device* device);
     void prepare_constants(Constants& sample,UINT bytes,ID3D11Device* device);
     void describe_metadata();
-    json status(bool metadata=true);
-    json save();
     std::mutex mutex_;
     const std::string camera_;
     const unsigned camera_slot_;
@@ -91,10 +90,9 @@ private:
     Com<ID3D11Device> device_;
     uint64_t allocations_=0;
     uint64_t sequence_=0,request_started_=0,geometry_binding_=0,geometry_sdk_=0;
-    uint64_t geometry_frame_=0,requested_frame_=0;
+    uint64_t geometry_frame_=0;
     uint64_t gpu_polls_=0,bindings_seen_=0;
     uint64_t polled_frame_=0;
     std::string error_,last_label_;
-    fs::path saved_;
 };
 }

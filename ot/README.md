@@ -4,7 +4,7 @@ core/loader 0.29.0 빌드는 선택적 ABI-1 확장으로 ACC·LCC 축 소유권
 
 core 0.28.0·상주 loader 0.27.0은 센서와 독립된 운전 명령·AI traffic GT를 연결합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 현재 core 0.28.0을 설치해 실제 지도 차로·GT 위치 기반 주행을 확인했습니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api).
 
-브리지는 카메라 30 Hz·라이다 10 Hz·표시용 JPEG 10 Hz를 요청합니다. FH5 프리셋은 슬롯 3·4·6·7을 사용하고 기본 미러 0·1·2·5를 유지합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
+브리지는 카메라 30 Hz·라이다 10 Hz·표시용 JPEG 10 Hz를 요청합니다. FH4 private 프리셋은 슬롯 3·4·6·7을 센서 제출에 사용하며 native mirror 배열은 보존합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
 
 ## 빌드와 설치
 
@@ -47,22 +47,21 @@ x64 MSVC Build Tools, CMake·Ninja, 공식 SCS SDK가 필요합니다. `build.cm
 
 전방은 선바이저 바깥에, 측면은 미러 하우징 뒤쪽에 부착했습니다. 네 카메라는 캐빈 서스펜션을 따릅니다. 자차 body는 엔진의 full-list 제출 경로를 사용합니다.
 
-core 0.26.1의 브리지 private 리그는 `capture_warmup: true`를 사용합니다. 유휴 뒤 요청된 뷰를 한 프레임 준비하고, 바로 다음 Present의 같은 뷰에서 수집합니다. 요청이 없으면 센서 렌더를 생략합니다. 이전 queued graph가 끝난 뒤 private 배열을 갱신합니다. 수동·rig-only와 non-private 리그는 연속 렌더하며, 비교용으로 `capture_warmup: false`를 지정할 수 있습니다.
+core 0.26.1의 브리지 private 리그는 `capture_warmup: true`를 사용합니다. 유휴 뒤 요청된 뷰를 한 프레임 준비하고, 바로 다음 Present의 같은 뷰에서 수집합니다. 요청이 없으면 센서 렌더를 생략합니다. 이전 queued graph가 끝난 뒤 private 배열을 갱신합니다. rig-only와 non-private 리그는 연속 렌더하며, 비교용으로 `capture_warmup: false`를 지정할 수 있습니다.
 
 ## 실시간 미리보기
 
 ```powershell
-.\ot\ot.cmd preview --config .\ot\presets\phase1-highway-fh4-private.json --format rgbd8
+.\ot\ot.cmd preview --config .\ot\presets\phase1-highway-fh4-private.json --format rgbd8 --duration 60
 .\ot\ot.cmd camera_rig apply --config .\ot\presets\phase1-highway-fh4-private.json --rig-only
 .\ot\ot.cmd panic
 ```
 
-Python 미리보기는 배치 실험용입니다. ROS 실시간 표시는 런처와 Foxglove를 사용합니다. 과거 슬롯 0·1·2·5 실험에는 `phase1-highway.json`을 유지합니다.
+Python 미리보기는 장착 위치·회전·FOV를 편집하는 개발 UI입니다. 수집은 릴레이와 같은 native stream/IPC를 사용하고 종료 시 자기 lease만 해제합니다. `--duration`으로 실행 시간을 명시합니다. 장착 원점 계산은 DLL과 릴레이가 같은 SDK 기반 함수를 사용합니다. 일반 실시간 표시는 apps 런처와 Foxglove를 사용합니다.
 
 ## 기록·오프라인 도구
 
 ```powershell
-.\ot\ot.cmd record_bundles --config .\ot\presets\phase1-highway-fh4-private.json --vehicles --hz 10 --duration 5 --output '<새 출력 폴더>'
 .\ot\ot.cmd lidar '<frame.tar.zst>' --config .\ot\presets\phase1-lidar-private.json --output lidar.npz
 ```
 
@@ -76,7 +75,7 @@ Python 미리보기는 배치 실험용입니다. ROS 실시간 표시는 런처
 
 명령 pipe는 `\\.\pipe\ot`, 로더는 `\\.\pipe\ot_loader`입니다. SDK 상태는 `Local\OT_State`, 센서 묶음은 `Local\OT_Bundles`를 사용합니다. 슬롯은 원자적 소유권 전환 뒤 읽고 즉시 반환합니다. 공유 GPU stream 소비자는 fence 반환까지 담당합니다.
 
-카메라·차량 관측은 `render_sample.*`의 숫자 구조체로 전달합니다. SDK 스냅샷은 참조로 공유하고, 완성된 슬롯의 JSON은 전송 작업자가 생성합니다. `ros` 형식은 촬영 자세·시각·요청한 GT를 담고, `raw`·`raw+ros`와 수동 관측은 pass·이미지 연결·전체 SDK 진단도 유지합니다.
+카메라·차량 관측은 `render_sample.*`의 숫자 구조체로 전달합니다. SDK 스냅샷은 참조로 공유하고, 완성된 슬롯의 JSON은 전송 작업자가 생성합니다. `ros` 형식은 촬영 자세·시각·요청한 GT를 담고, `raw`·`raw+ros` stream과 진단 관측은 pass·이미지 연결·전체 SDK 진단도 유지합니다.
 
 SDK frame_end는 물리 결과 이후이며 렌더 보간·장면 준비가 뒤따릅니다. 센서 묶음은 실제 pass Present ID를 기준으로 맞춥니다. [좌표·시각](../docs/04_sensors_and_data.md), [렌더 구조](../docs/12_dx11_mirror_render_path.md).
 

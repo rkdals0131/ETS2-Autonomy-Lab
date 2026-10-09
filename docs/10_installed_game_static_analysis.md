@@ -7,7 +7,7 @@
 | 게임 | Euro Truck Simulator 2 1.61.1.1 |
 | Steam build | 25482642 |
 | 렌더 경로 | Windows x64 DX11 |
-| 현재 차량 | Volvo FH5 4x2 / l2h1 / LHD |
+| 최초 분석 차량 | Volvo FH5 4x2 / l2h1 / LHD |
 | SDK | SCS SDK 1.15 |
 | 빌드 식별 | ot/schema/1.61.1.1/game.json |
 
@@ -20,7 +20,7 @@
 - FH5 chassis·cabin·mirror_01·sunshield_01 메시와 로케이터.
 - RGB·DSV·셰이더·투영·visibility 경로의 후속 런타임 연결.
 
-현재 센서 장착은 추출한 FH5 메시를 기준으로 하고, 실제 SDK 바퀴 위치·반지름으로 base_link를 계산합니다. [현재 리그](14_phase1_highway_sensors.md).
+현재 센서 장착은 추출한 FH4 메시를 기준으로 하고, 실제 SDK 바퀴 위치·반지름으로 base_link를 계산합니다. [현재 리그](14_phase1_highway_sensors.md).
 
 ## 자료 위치
 

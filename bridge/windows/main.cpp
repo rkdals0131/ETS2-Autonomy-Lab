@@ -68,8 +68,10 @@ int main(int argc,char** argv) {
         const bool publish_sensors=sensor_stage=="publish";
         const auto token=config.at("token").get<std::string>();if(token.size()<32) throw std::runtime_error("Missing pairing token");
         std::ifstream preset(path.parent_path()/config.at("rig").get<std::string>());json rig;preset>>rig;
+        const auto selected=input_only?json::array():config.value("slots",json::array({0}));
+        if(!selected.empty()) (void)rig.at("truck_id").get<std::string>();
         const auto truck=command({{"cmd","truck_config"}});
-        const auto vehicle=resolve_vehicle(rig,truck,input_only?json::array():config.value("slots",json::array({0})));
+        const auto vehicle=resolve_vehicle(rig,truck,selected);
         rig=vehicle.rig;
         rig["ego_full_model"]=true;
         const auto base=rig.at("base_origin").get<std::array<double,3>>();
@@ -134,7 +136,7 @@ int main(int argc,char** argv) {
             const auto echo=p.meta.value("echo_us",uint64_t{0});if(echo) {latency.add(echo);last_ack=ticks();}
         }});
         workers.start([&]{
-            auto fixed=static_messages(rig,patterns,session,config);add_sensor_configuration(fixed,source.configuration());state_send(fixed.meta,fixed.data);
+            auto fixed=static_messages(rig,patterns,session,source.configuration());add_sensor_configuration(fixed,source.configuration());state_send(fixed.meta,fixed.data);
             uint64_t diagnostic_time=0,last_stamp=0,last_frame=0,last_send=0,last_gnss_us=0;
             while(workers.alive) {Packet packet{{{"session",session}}, {}};
                 if(const auto sample=source.latest()) {

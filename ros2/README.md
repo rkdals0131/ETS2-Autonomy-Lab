@@ -33,4 +33,4 @@ source "$REPO/bridge/ros-env.sh"
 ros2 launch ets2_bridge bridge.launch.py config:="$REPO/bridge/config/bridge.local.json"
 ```
 
-GT baseline 실행 패키지는 `ets2_autonomy`입니다. `ros2 run ets2_bridge drive_speed`도 새 실행파일로 넘기는 호환 진입점이며 노드명 `/ets2_drive_speed`, 메시지·토픽·파라미터는 유지합니다. 실제 운전은 [ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행)을 따릅니다. 인지·위치 추정·FSM·목적지 경로 계획은 아직 없으며 [다음 모듈 경계](../docs/03_system_design.md#ros-개발과-다음-스택)에 따라 이 패키지부터 확장합니다.
+GT baseline은 `ros2 run ets2_autonomy drive_speed`로 실행합니다. 노드명은 `/ets2_drive_speed`입니다. 실제 운전은 [ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행)을 따릅니다. 인지·위치 추정·FSM·목적지 경로 계획은 아직 없으며 [다음 모듈 경계](../docs/03_system_design.md#ros-개발과-다음-스택)에 따라 이 패키지부터 확장합니다.

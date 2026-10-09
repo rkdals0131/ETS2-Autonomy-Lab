@@ -1,11 +1,7 @@
 #include "render_sample.hpp"
+#include "../include/geometry.hpp"
 
 namespace ot {
-namespace {
-std::array<double,3> world_position(const std::array<float,3>& local,const std::array<int16_t,2>& cells) {
-    return {local[0]+512.0*cells[0],local[1],local[2]+512.0*cells[1]};
-}
-}
 json RenderDrawSample::binding() const {
     return {{"known",known},{"source_buffer",buffer},{"first_constant",first},{"num_constants",count}};
 }

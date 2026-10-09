@@ -9,4 +9,4 @@
 
 MinHook, Dear ImGui, RenderDoc은 DLL에 포함하지 않았습니다. 게임 EXE와 추출 게임 자산도 배포물에 포함하지 않습니다.
 
-Python의 무손실 기록에는 선택 의존성 **python-zstandard 0.25.0 / BSD-3-Clause**를 사용합니다. [공식 패키지](https://pypi.org/project/zstandard/0.25.0/), [stream API](https://python-zstandard.readthedocs.io/en/latest/compressor.html). Python 3.13 Windows x64 wheel의 SHA256을 `requirements-recording.txt`에 고정하고 취득 시 pip `--require-hashes`로 확인했습니다. 설치는 로컬 `ot/.venv`에만 있으며 wheel·가상환경은 Git에 넣지 않습니다. 배포 라이선스는 설치된 `zstandard-0.25.0.dist-info/licenses/LICENSE`에 보존됩니다. DLL에는 이 라이브러리를 연결하지 않습니다.
+기존 TAR.ZST 결과를 읽는 Python 오프라인 도구에는 선택 의존성 **python-zstandard 0.25.0 / BSD-3-Clause**를 사용합니다. [공식 패키지](https://pypi.org/project/zstandard/0.25.0/), [stream API](https://python-zstandard.readthedocs.io/en/latest/compressor.html). Python 3.13 Windows x64 wheel의 SHA256을 `requirements-recording.txt`에 고정하고 취득 시 pip `--require-hashes`로 확인했습니다. 설치는 로컬 `ot/.venv`에만 있으며 wheel·가상환경은 Git에 넣지 않습니다. 배포 라이선스는 설치된 `zstandard-0.25.0.dist-info/licenses/LICENSE`에 보존됩니다. DLL에는 이 라이브러리를 연결하지 않습니다.

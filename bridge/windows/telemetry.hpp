@@ -13,4 +13,6 @@ inline V vector_channel(const json& state,const char* name) {
     if(!sdk.contains(name) || !sdk.at(name).value("available",false)) return {nan,nan,nan};
     return mul(transpose(base_to_model),sdk.at(name).at("value").get<V>());
 }
+inline double rotation_channel(const json& state,const char* name) {return channel(state,name)*(2*std::numbers::pi);}
+inline V angular_vector_channel(const json& state,const char* name) {return scale(vector_channel(state,name),2*std::numbers::pi);}
 }

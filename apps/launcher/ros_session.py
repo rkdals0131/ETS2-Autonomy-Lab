@@ -17,6 +17,7 @@ from rcl_interfaces.srv import SetParametersAtomically
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from bag_recording import BagRecording
+from processes import stop_group
 
 
 def run_session():
@@ -81,13 +82,7 @@ def run_session():
     drive_exit = None
     def release_drive():
         nonlocal drive, drive_log, drive_exit
-        if drive and drive.poll() is None:
-            os.killpg(drive.pid, signal.SIGINT)
-            try:
-                drive.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                os.killpg(drive.pid, signal.SIGKILL)
-                drive.wait(timeout=2)
+        stop_group(drive, timeout=3)
         if drive:
             drive_exit = drive.returncode
         if drive_log:
@@ -170,7 +165,7 @@ def run_session():
                 if not ip:
                     interfaces = json.loads(subprocess.check_output(["ip", "-j", "-4", "addr", "show", "eth0"]))
                     ip = next(a["local"] for i in interfaces for a in i["addr_info"] if a["family"] == "inet")
-                status = {"type": "wsl_status", "pid": os.getpid(), "ros_pid": child.pid,
+                status = {"type": "session_status", "pid": os.getpid(), "ros_pid": child.pid,
                                   "observed_at": now,
                                   "ip": ip, "listeners_ready": ports <= listeners(), "paused": paused,
                                   "state_age_s": now - last_state if last_state else None,
@@ -185,20 +180,14 @@ def run_session():
                 os.replace(temporary, runtime_directory / "status.json")
                 print(json.dumps(status), flush=True)
                 last_report = now
-        print(json.dumps({"type": "wsl_stopping"}), flush=True)
+        print(json.dumps({"type": "session_stopping"}), flush=True)
     finally:
         try:
             release_drive()
             recording.close()
             print(json.dumps({"type": "recording_status", "recording": recording.poll()}), flush=True)
         finally:
-            if child and child.poll() is None:
-                os.killpg(child.pid, signal.SIGINT)
-                try:
-                    child.wait(timeout=4)
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
-                    child.wait(timeout=2)
+            stop_group(child, timeout=4)
             node.destroy_node()
             rclpy.shutdown()
 
@@ -218,5 +207,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print(json.dumps({"type": "wsl_error", "error": str(error)}), flush=True)
+        print(json.dumps({"type": "session_error", "error": str(error)}), flush=True)
         sys.exit(1)

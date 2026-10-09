@@ -9,8 +9,6 @@
 
 # Keep analysis programs, not their captures, process data or generated outputs.
 /research/live/**
-!/research/live/**/
-!/research/live/**/*.py
 
 # Machine-specific handoff notes; public documentation lives in docs/.
 /ETS2-Autonomy-Lab-STATIC-ANALYSIS.md

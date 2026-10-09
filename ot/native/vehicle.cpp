@@ -1,4 +1,5 @@
 #include "ot.hpp"
+#include "../include/geometry.hpp"
 #include <array>
 #include <cmath>
 #include <set>
@@ -13,17 +14,6 @@ static_assert(sizeof(PxPose)==28 && sizeof(CellPosition)==16);
 Vec add(Vec a,Vec b) {return {a[0]+b[0],a[1]+b[1],a[2]+b[2]};}
 Vec negate(Vec a) {return {-a[0],-a[1],-a[2]};}
 Vec cross(Vec a,Vec b) {return {a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]};}
-Quat conjugate(Quat q) {return {q[0],-q[1],-q[2],-q[3]};}
-Quat multiply(Quat a,Quat b) {
-    return {a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
-            a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
-            a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
-            a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]};
-}
-Vec rotate(Quat q,Vec v) {
-    Vec u{q[1],q[2],q[3]},t=cross(u,v),uxt=cross(u,t);
-    return {v[0]+2*(q[0]*t[0]+uxt[0]),v[1]+2*(q[0]*t[1]+uxt[1]),v[2]+2*(q[0]*t[2]+uxt[2])};
-}
 bool decode(const PxPose& p,Quat& q,Vec& position) {
     q={p.w,p.x,p.y,p.z};position={p.px,p.py,p.pz};
     double norm=0;
@@ -37,7 +27,6 @@ bool decode(const PxPose& p,Quat& q,Vec& position) {
 
 json read_world_traffic(const json& schema) {
     struct Array {uintptr_t vtable,data;uint64_t size,capacity;};
-    struct Placement {float x,y,z;int16_t cx,cz;float w,qx,qy,qz;};
     const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     const auto& layout=schema.at("render_vehicle");const auto& physics=schema.at("traffic_physics");
     json result={{"available",false},{"phase","sdk_frame_end"},{"vehicles",json::array()}};
@@ -72,10 +61,11 @@ json read_world_traffic(const json& schema) {
             result["error"]="Invalid traffic observation";return result;
         }
         for(auto& v:q) v/=std::sqrt(norm);
+        const auto position=world_position(p);
         const auto center=rotate(q,{(bounds[0]+bounds[3])/2,(bounds[1]+bounds[4])/2,(bounds[2]+bounds[5])/2});
         const auto forward=rotate(q,{0,0,-1});
-        result["vehicles"].push_back({{"id",actor},{"x",p.x+512.0*p.cx+center[0]},
-            {"y",-(p.z+512.0*p.cz+center[2])},{"yaw",std::atan2(-forward[2],forward[0])},
+        result["vehicles"].push_back({{"id",actor},{"x",position[0]+center[0]},
+            {"y",-(position[2]+center[2])},{"yaw",std::atan2(-forward[2],forward[0])},
             {"speed_mps",speed},{"length_m",bounds[5]-bounds[2]},{"width_m",bounds[3]-bounds[0]}});
     }
     result["available"]=true;return result;

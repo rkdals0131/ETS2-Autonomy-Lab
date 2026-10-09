@@ -1,4 +1,4 @@
-"""OT_Bundles reader and Python-owned image recording (Windows x64)."""
+"""OT_Bundles reader and offline capture loader (Windows x64)."""
 import ctypes as C
 from contextlib import ExitStack
 import io
@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import struct
 import tarfile
-from zipfile import ZipFile, ZIP_STORED
+from zipfile import ZipFile
 
 from .client import W, _api, _open_mapping, _map, _unmap, _close, _free_library, _wait
 
@@ -120,62 +120,6 @@ class BundleReader:
 
     def __exit__(self, *_):
         self.close()
-
-
-def save_bundle(bundle, directory):
-    """Save a decoded bundle. Existing captures/files are never overwritten."""
-    directory = Path(directory)
-    directory.mkdir()
-    manifest = bundle["manifest"]
-    for view in manifest["views"]:
-        (directory / view["camera"]).mkdir()
-    for item in bundle["files"]:
-        with open(directory / item["camera"] / item["file"], "xb") as stream:
-            stream.write(item["data"])
-    for view in manifest["views"]:
-        with open(directory / view["camera"] / "images.json", "x", encoding="utf-8") as stream:
-            json.dump(view["metadata"], stream, ensure_ascii=False, indent=2)
-    if "lidar_file" in manifest:
-        with open(directory / manifest["lidar_file"], "xb") as stream:
-            stream.write(bundle["lidar"])
-    with open(directory / "bundle.json", "x", encoding="utf-8") as stream:
-        json.dump({"sequence": bundle["sequence"], **manifest}, stream, ensure_ascii=False, indent=2)
-    return directory
-
-
-def _archive_entries(bundle):
-    for item in bundle["files"]:
-        yield item["camera"] + "/" + item["file"], item["data"]
-    for view in bundle["manifest"]["views"]:
-        yield view["camera"] + "/images.json", json.dumps(view["metadata"], ensure_ascii=False).encode("utf-8")
-    if "lidar_file" in bundle["manifest"]:
-        yield bundle["manifest"]["lidar_file"], bundle["lidar"]
-    yield "bundle.json", json.dumps({"sequence": bundle["sequence"], **bundle["manifest"]}, ensure_ascii=False).encode("utf-8")
-
-
-def save_bundle_archive(bundle, filename):
-    """One uncompressed ZIP per frame avoids opening hundreds of small files.
-
-    Its paths match save_bundle(), so ordinary ZIP extraction also exposes
-    images.json and the binary files to existing per-camera tools.
-    """
-    with ZipFile(filename, "x", compression=ZIP_STORED) as archive:
-        for name, data in _archive_entries(bundle):
-            archive.writestr(name, data)
-    return Path(filename)
-
-
-def save_bundle_zstd(bundle, filename):
-    """Lossless TAR + Zstandard level 1, retaining the existing capture files."""
-    import zstandard
-    compressor = zstandard.ZstdCompressor(level=1, write_checksum=True)
-    with open(filename, "xb") as output, compressor.stream_writer(output) as compressed:
-        with tarfile.open(fileobj=compressed, mode="w|") as archive:
-            for name, data in _archive_entries(bundle):
-                member = tarfile.TarInfo(name)
-                member.size = len(data)
-                archive.addfile(member, io.BytesIO(data))
-    return Path(filename)
 
 
 def load_bundle(directory):

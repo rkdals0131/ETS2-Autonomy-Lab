@@ -135,8 +135,6 @@ void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool fram
             disable_locked(true);
             throw std::runtime_error("Previous observation callbacks did not drain");
         }
-        for(auto* camera:cameras()) camera->cancel();
-        bundle_frame_=0;published_bundle_=nullptr;
     } else if(!disable_locked(false)) {
         rig_.clear();
         throw std::runtime_error("Previous render mode did not drain: "+last_error_);
@@ -272,8 +270,6 @@ bool RenderProbe::disable_locked(bool clear_rig) {
         for(auto* hook:hookset()) if(draining(hook) && hook->enabled() && !hook->disable()) last_error_="Camera graph drain hook disable failed";
         if(clear_rig) rig_.clear();
     } else last_error_="Camera submission still draining; payload must stay loaded";
-    for(auto* camera:cameras()) camera->cancel();
-    bundle_frame_=0;published_bundle_=nullptr;
     return last_error_.empty();
 }
 bool RenderProbe::quiescent() noexcept {
@@ -503,9 +499,6 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
        (record.count && !copy_memory(context.r8,record.targets.data(),record.count*sizeof(uintptr_t)))) {
         missed_.fetch_add(1);return;
     }
-    if(!stream || !stream->running()) for(auto* camera:cameras())
-        camera->observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
-            record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,observation_session_,record.pass);
     if(stream)
         stream->observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
             record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,record.pass);
@@ -514,86 +507,6 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     records_[records_written_%records_.size()]=record;
     ++records_written_;
     ReleaseSRWLockExclusive(&records_lock_);
-}
-json RenderProbe::capture(const std::string& action,const CaptureOptions& options) {
-    std::lock_guard lock(control_);
-    if(auto stream=stream_.load();action!="status" && stream && stream->running())
-        throw std::runtime_error("Stop the capture stream before a manual capture command");
-    if(action=="arm" && !hook_.enabled()) throw std::runtime_error("Capture requires render_probe observe mode");
-    if(action=="arm") {
-        for(auto* camera:cameras()) {
-            const auto phase=camera->command("status",0,false).at("phase");
-            if(phase=="armed" || phase=="waiting_gpu") throw std::runtime_error("A camera capture is already pending");
-        }
-        bundle_frame_=0;
-    }
-    return gpu_.command(action,0,true,options);
-}
-json RenderProbe::capture_views(const std::string& action,Transport* publisher,bool metadata,const CaptureOptions& options) {
-    std::lock_guard lock(control_);
-    if(auto stream=stream_.load();action!="status" && stream && stream->running())
-        throw std::runtime_error("Stop the capture stream before a manual capture command");
-    if(action=="arm") {
-        if(!hook_.enabled()) throw std::runtime_error("Capture requires render_probe observe mode");
-        for(auto* camera:cameras()) {
-            const auto phase=camera->command("status",0,false).at("phase");
-            if(phase=="armed" || phase=="waiting_gpu") throw std::runtime_error("A camera capture is already pending");
-        }
-        // Skip the interval already in progress so every requested view has a
-        // chance to render after every requested camera has been armed.
-        bundle_mask_=rig_.mask();if(!bundle_mask_) bundle_mask_=0x27;
-        bundle_frame_=presents_.load()+2;
-        published_bundle_=nullptr;
-        try {for(auto* camera:capture_cameras()) camera->command("arm",bundle_frame_,true,options);}
-        catch(...) {for(auto* camera:cameras()) camera->cancel();bundle_frame_=0;throw;}
-    } else if(action=="cancel") {
-        for(auto* camera:cameras()) camera->cancel();
-        bundle_frame_=0;
-    } else if(action!="status" && action!="save" && action!="save_partial" && action!="publish" && action!="publish_partial") throw std::runtime_error("Unknown camera bundle action");
-    json views=json::array();bool ready=true,error=false,pending=false;
-    for(auto* camera:capture_cameras()) {
-        auto state=camera->command("status",0,metadata);const auto phase=state.at("phase");
-        ready=ready && phase=="ready";error=error || phase=="error";
-        pending=pending || phase=="armed" || phase=="waiting_gpu";
-        views.push_back(std::move(state));
-    }
-    if(action=="save") {
-        if(!bundle_frame_ || !ready) throw std::runtime_error("No complete camera bundle to save");
-        views=json::array();for(auto* camera:capture_cameras()) views.push_back(camera->command("save"));
-    }
-    if(action=="save_partial") {
-        if(!bundle_frame_) throw std::runtime_error("No camera bundle was requested");
-        views=json::array();
-        for(auto* camera:capture_cameras()) {
-            auto state=camera->command("status");
-            views.push_back(state.at("phase")=="ready"?camera->command("save"):std::move(state));
-        }
-    }
-    if(action=="publish" || action=="publish_partial") {
-        if(!bundle_frame_ || pending || (!ready && action=="publish") || !publisher)
-            throw std::runtime_error("Camera bundle is incomplete or still pending");
-        if(!published_bundle_.is_null()) return published_bundle_;
-        json names=json::array();for(unsigned slot=0;slot<9;++slot) if(bundle_mask_&(1u<<slot)) names.push_back("mirror"+std::to_string(slot));
-        json manifest={{"render_frame_id",bundle_frame_},{"observation_session_qpc",observation_session_},
-            {"complete",ready},{"requested_cameras",names},
-            {"missing_views",json::array()},{"views",json::array()}};
-        std::vector<BundleBlob> blobs;
-        // control_ excludes arm/cancel/panic while these completed CPU spans
-        // are copied. Render callbacks leave ready samples untouched.
-        for(auto* camera:capture_cameras()) {
-            const auto state=camera->command("status",0,false);
-            if(state.at("phase")=="ready") camera->append_bundle(manifest["views"],blobs);
-            else manifest["missing_views"].push_back({{"camera",state.at("camera")},
-                {"phase",state.at("phase")},{"error",state.at("error")}});
-        }
-        if(manifest.at("views").empty()) throw std::runtime_error("No completed views to publish");
-        auto result=publisher->publish_bundle(std::move(manifest),blobs);
-        result["render_frame_id"]=bundle_frame_;result["observation_session_qpc"]=observation_session_;
-        if(result.at("published").get<bool>()) published_bundle_=result;
-        return result;
-    }
-    return {{"phase",!bundle_frame_?"idle":error?"error":ready?"ready":pending?"pending":"idle"},
-        {"render_frame_id",bundle_frame_},{"observation_session_qpc",observation_session_},{"views",views}};
 }
 json RenderProbe::stream(const json& request,Transport& publisher,const CaptureOptions& options) {
     std::lock_guard lock(control_);
@@ -606,14 +519,7 @@ json RenderProbe::stream(const json& request,Transport& publisher,const CaptureO
         const auto hz=request.at("hz").get<double>(),duration=request.at("duration").get<double>();
         if(!std::isfinite(hz) || hz<=0 || !std::isfinite(duration) || duration<=0)
             throw std::runtime_error("Stream hz and duration must be finite and positive");
-        for(auto* camera:cameras()) {
-            const auto phase=camera->phase();
-            if(phase==GpuCapture::Phase::armed || phase==GpuCapture::Phase::waiting_gpu)
-                throw std::runtime_error("A manual camera capture is still pending");
-        }
         if(stream) stream->stop();
-        for(auto* camera:cameras()) camera->cancel();
-        bundle_frame_=0;published_bundle_=nullptr;
         auto mask=rig_.mask();if(!mask) mask=0x27;
         stream=std::make_shared<CaptureStream>(mask,options,hz,duration,presents_,observation_session_,publisher);
         stream_.store(stream);stream->start();
@@ -669,7 +575,7 @@ json RenderProbe::status() {
             {{"name","camera.private_graph_drawables"},{"tier",2},{"rva",rig_graph_drawables_rva},{"enabled",rig_graph_drawables_hook_.enabled()}},
             {{"name","camera.private_graph_cameras"},{"tier",2},{"rva",rig_graph_cameras_rva},{"enabled",rig_graph_cameras_hook_.enabled()}},
             {{"name","camera.private_graph_end"},{"tier",2},{"rva",rig_graph_end_rva},{"enabled",rig_graph_end_hook_.enabled()}}})},
-        {"last_error",last_error_},{"render_coherent",false},{"capture",gpu_.command("status")},
+        {"last_error",last_error_},{"render_coherent",false},
         {"recent_bindings",entries}};
 }
 }

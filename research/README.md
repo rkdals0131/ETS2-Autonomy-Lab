@@ -16,7 +16,7 @@ ETS2 1.61.1.1의 설치 파일·SDK·엔진 분석 원본입니다. 현재 해�
 | live/2026-10-09-side-artifact/ | 하우징 가림의 on/off 비교·메시 교차·수정 영상 |
 | live/2026-10-09-optimization/ | 0.22.0 전경 성능 원본 |
 
-이전 관측 파일은 기존 경로에 보존합니다. 신규 대용량 ROS 결과는 마운트와 여유 공간을 확인한 외장 SSD의 `~/Storage/ROS2_Workspace_offload/ETS2-Autonomy-Lab/<run>/`에 저장합니다. 추출 게임 자산·다운로드·제3자 소스·대용량 캡처는 Git에서 제외합니다.
+이전 관측 파일은 기존 경로에 보존합니다. frame3160 전용 추출·복원 스크립트는 Git 기록에서 복구할 수 있으며, 같은 기능의 현재 수집·오프라인 처리는 ot를 사용합니다. 신규 대용량 ROS 결과는 마운트와 여유 공간을 확인한 외장 SSD의 `~/Storage/ROS2_Workspace_offload/ETS2-Autonomy-Lab/<run>/`에 저장합니다. 추출 게임 자산·다운로드·제3자 소스·대용량 캡처는 Git에서 제외합니다.
 
 ## 도구와 취득 기록
 
@@ -25,4 +25,4 @@ ETS2 1.61.1.1의 설치 파일·SDK·엔진 분석 원본입니다. 현재 해�
 - [Extractor 2026-07-29](https://github.com/sk-zk/Extractor/releases/tag/2026-07-29), asset digest 대조 기록 `findings/extractor_download.json`.
 - [ConverterPIX 3cd4e73a86d0](https://github.com/mwl4/ConverterPIX/tree/3cd4e73a86d0c6bd28e117664c50a36cabeccf38), 실행 파일 Git blob 대조·SHA256·LICENSE는 `tools/converterpix-3cd4e73a86d0/`의 취득 기록에 있습니다.
 
-`inspect_renderdoc_capture.py`는 RenderDoc의 Python Scripting에서 실행합니다. 외부 읽기 도구 `read_live_memory.py`·`read_render_memory.py`는 해당 게임 빌드의 짧은 관측에 사용합니다. 실시간 수집·DLL 교체는 [ot 도구](../ot/README.md), 제품 의존성은 [THIRD_PARTY](../ot/THIRD_PARTY.md)에 있습니다.
+`inspect_renderdoc_capture.py`는 RenderDoc의 Python Scripting에서 실행합니다. 외부 읽기 도구 `read_live_memory.py`·`read_render_memory.py`는 해당 게임 빌드의 짧은 관측에 사용합니다. 실시간 수집·DLL 교체는 [ot 도구](../ot/README.md), 현재 지도 provider는 `tools/dotnet10`과 `sources/TruckLib` 계열의 고정 소스를 사용합니다. 제품 의존성은 [THIRD_PARTY](../ot/THIRD_PARTY.md)에 있습니다.

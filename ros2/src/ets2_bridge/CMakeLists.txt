@@ -11,7 +11,6 @@ target_include_directories(ets2_bridge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..
 target_link_libraries(ets2_bridge nlohmann_json::nlohmann_json)
 ament_target_dependencies(ets2_bridge rclcpp std_srvs ets2_msgs)
 install(TARGETS ets2_bridge DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS scripts/drive_speed DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 ament_package()

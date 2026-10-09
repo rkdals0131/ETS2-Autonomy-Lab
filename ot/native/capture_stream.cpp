@@ -92,7 +92,7 @@ void CaptureStream::finish_slot(Slot& slot) {
         for(auto& camera:slot.cameras) camera->abandon_shared();
         std::string errors=mixed_frames?"Sensor views crossed a Present boundary":"";
         for(auto& camera:slot.cameras) if(camera->phase()==GpuCapture::Phase::error) {
-            const auto state=camera->command("status",0,false);
+            const auto state=camera->status();
             if(!errors.empty()) errors+="; ";
             errors+=state.at("error").get<std::string>();
         }
@@ -155,7 +155,7 @@ void CaptureStream::run() noexcept {
                             if(options.selective && !options.products) continue;
                             // The next selection claims this request exactly
                             // once. Actual execution determines its Present ID.
-                            available->cameras[i]->command("arm",0,false,options);mask|=1u<<camera_indices_[i];
+                            available->cameras[i]->arm(options);mask|=1u<<camera_indices_[i];
                             if(!options.selective || (options.products&16)) vehicle_mask|=1u<<camera_indices_[i];
                             armed_lidar|=options.lidar();
                             armed_preview|=(options.products&64)!=0;
@@ -187,7 +187,7 @@ json CaptureStream::status() {
     json slots=json::array();
     for(auto& slot:slots_) {
         json cameras=json::array();
-        for(auto& camera:slot.cameras) cameras.push_back(camera->command("status",0,false));
+        for(auto& camera:slot.cameras) cameras.push_back(camera->status());
         slots.push_back({{"active",slot.active.load()},{"selected",slot.selected.load()},{"render_frame_id",slot.frame.load()},{"cameras",cameras}});
     }
     std::lock_guard lock(result_mutex_);

@@ -38,14 +38,14 @@ MotionSample MotionSensors::update(const json& state) {
     const auto us=result.stamp_us;
     const auto dt=previous_us_ && us>previous_us_?(us-previous_us_)*1e-6:0;
     const auto wheel_dt=previous_wheel_us_ && us>previous_wheel_us_?(us-previous_wheel_us_)*1e-6:0;
-    const auto& sdk=state.at("sdk");constexpr double tau=2*std::numbers::pi;
+    const auto& sdk=state.at("sdk");
     auto& wheels=result.wheels;
     double aa=0,ab=0,bb=0,as=0,bs=0;
     for(const auto& wheel:wheels_) {
         const auto suffix="["+std::to_string(wheel.index)+"]";
         const auto velocity="truck.wheel.angular_velocity"+suffix,angle="truck.wheel.steering"+suffix,contact="truck.wheel.on_ground"+suffix;
         if(!sdk.contains(contact) || !sdk.at(contact).value("available",false)) continue;
-        const auto omega=channel(state,velocity.c_str())*tau,delta=channel(state,angle.c_str())*tau;
+        const auto omega=rotation_channel(state,velocity.c_str()),delta=rotation_channel(state,angle.c_str());
         if(!std::isfinite(omega) || !std::isfinite(delta)) continue;
         const bool on_ground=sdk.at(contact).at("value").get<bool>();
         wheels.indices.push_back(wheel.index);wheels.angular.push_back(omega);wheels.steering.push_back(delta);
@@ -72,7 +72,7 @@ MotionSample MotionSensors::update(const json& state) {
     const auto& vehicle=state.at("engine").at("vehicle");const auto& p=vehicle.at("pose_physics");
     const auto rotation=from_quat(p.at("quaternion_wxyz").get<Q>()),sensor_rotation=mul(rotation,base_to_model);
     const auto velocity=mul(sensor_rotation,vector_channel(state,"truck.local.velocity.linear"));
-    const auto omega=mul(sensor_rotation,scale(vector_channel(state,"truck.local.velocity.angular"),tau));
+    const auto omega=mul(sensor_rotation,angular_vector_channel(state,"truck.local.velocity.angular"));
     if(!finite(velocity) || !finite(omega)) {previous_us_=0;return result;}
     if(dt>0) {
         const auto r=mul(rotation,sub(add(base_,mul(base_to_model,mount_)),vehicle.at("mass_center_local_m").get<V>()));
@@ -82,9 +82,9 @@ MotionSample MotionSensors::update(const json& state) {
     }
     previous_velocity_=velocity;previous_omega_=omega;previous_us_=us;
     const auto origin=p.at("position_m").get<V>();
-    if(!anchored_) {anchor_=mul(enu,add(origin,mul(rotation,base_)));anchored_=true;}
+    if(!anchored_) {anchor_=world_position(origin,rotation,base_);anchored_=true;}
     if(us>=next_gnss_us_) {
-        const auto antenna=mul(enu,add(origin,mul(rotation,add(base_,mul(base_to_model,gnss_mount_)))));
+        const auto antenna=world_position(origin,rotation,add(base_,mul(base_to_model,gnss_mount_)));
         gnss_=GnssMeasurement{us,wgs84(sub(antenna,anchor_),reference_)};
         next_gnss_us_=(us/100000+1)*100000;
     }

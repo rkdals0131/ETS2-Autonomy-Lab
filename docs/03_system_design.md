@@ -60,6 +60,7 @@ Foxglove는 JPEG·라이다·GT·TF·상태를 구독합니다. 원본 RGB·dept
 | 위치 | 책임 |
 | --- | --- |
 | ot/native | SDK·물리 읽기, 리그, GPU pack·공유 자원 |
+| ot/include | core·릴레이·Python IPC DLL이 공유하는 슬롯 소유권·좌표 연산·SDK 장착 원점 계산 |
 | ot/native/pass_commands.* / render_sample.* | 엔진에서 렌더 자세·차량 관측, 불변 표본과 진단 직렬화 |
 | bridge/windows/vehicle_profile.* | SDK 바퀴 기하·기준 축·수동 장착 프리셋 해석, 라이다 소스 연결 |
 | bridge/windows/state_source.* | SDK 최신 표본 읽기, 센서 계산 스레드와 실행 수명 |
@@ -73,7 +74,8 @@ Foxglove는 JPEG·라이다·GT·TF·상태를 구독합니다. 원본 RGB·dept
 | ros2/src/ets2_bridge | ROS GenericPublisher·구독 요구·제어 요청 전달 |
 | ros2/src/ets2_autonomy | 현재 GT baseline: 앞차 선택·속도 PI·pure-pursuit·입력 adapter |
 | bridge/map_lane_provider | 설치 지도 곡선에서 현재 차로 JSON 생성, Windows SDK 위치 읽기 |
-| apps/launcher/launcher.py / wsl_session.py | Windows·WSL 실행 관리와 실제 연결 상태 표시 |
+| apps/launcher/launcher.py / linux_launcher.py | Windows UI·Linux 터미널 조작 |
+| apps/launcher/session.py / ros_session.py | 공통 세션 명령·실제 상태 해석, ROS/Foxglove·보조·기록 수명 |
 | apps/launcher/bag_recording.py | WSL 세션이 소유한 rosbag2 기록기 하나, 토픽 선택·저장 위치·종료와 결과 표시 |
 | research/ | 원본·분석·연구 도구. 현재 provider용 .NET runtime·TruckLib 고정 소스도 보존 |
 

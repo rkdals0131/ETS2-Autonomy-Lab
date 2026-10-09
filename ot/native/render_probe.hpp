@@ -19,8 +19,6 @@ public:
     void sdk_frame(std::shared_ptr<const json> state) noexcept { sdk_frame_.store(state->at("frame_id").get<uint64_t>()); sdk_state_.store(std::move(state)); }
     json status();
     json frames(uint64_t after_id=0);
-    json capture(const std::string& action,const CaptureOptions& options={});
-    json capture_views(const std::string& action,Transport* publisher=nullptr,bool metadata=true,const CaptureOptions& options={});
     json camera_rig(const json& request);
     json stream(const json& request,Transport& publisher,const CaptureOptions& options={});
     ~RenderProbe();
@@ -98,16 +96,6 @@ private:
     uintptr_t module_begin_{},module_end_{};
     std::string last_error_;
     std::string mode_="off";
-    GpuCapture gpu_{"mirror5"},gpu0_{"mirror0"},gpu1_{"mirror1"},gpu2_{"mirror2"},gpu3_{"mirror3"},gpu4_{"mirror4"};
-    GpuCapture gpu6_{"mirror6"},gpu7_{"mirror7"},gpu8_{"mirror8"};
-    uint64_t bundle_frame_=0;
-    uint32_t bundle_mask_=0x27;
-    json published_bundle_;
-    std::array<GpuCapture*,9> cameras() noexcept {return {&gpu0_,&gpu1_,&gpu2_,&gpu3_,&gpu4_,&gpu_,&gpu6_,&gpu7_,&gpu8_};}
-    std::vector<GpuCapture*> capture_cameras() {
-        std::vector<GpuCapture*> selected;const auto all=cameras();
-        for(size_t i=0;i<all.size();++i) if(bundle_mask_&(1u<<i)) selected.push_back(all[i]);
-        return selected;
-    }
+
 };
 }

@@ -36,4 +36,9 @@ inline V scale(V a,double s) {for(auto& v:a) v*=s;return a;}
 inline V cross(V a,V b) {return {a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]};}
 inline bool finite(V a) {return std::all_of(a.begin(),a.end(),[](double x){return std::isfinite(x);});}
 inline const M enu{1,0,0,0,0,-1,0,1,0},optical{1,0,0,0,-1,0,0,0,-1},base_to_model{0,-1,0,0,0,1,-1,0,0};
+inline V world_position(V origin,M rotation,V local) {return mul(enu,add(origin,mul(rotation,local)));}
+struct BasePose {V position;M rotation;};
+inline BasePose world_base_pose(V origin,M rotation,V base) {
+    return {world_position(origin,rotation,base),mul(mul(enu,rotation),base_to_model)};
+}
 }

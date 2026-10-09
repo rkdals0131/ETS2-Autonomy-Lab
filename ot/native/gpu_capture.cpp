@@ -1,14 +1,8 @@
 #include "gpu_capture.hpp"
-#include <fstream>
 #include <stdexcept>
 #include <dxgi1_4.h>
 
 namespace ot {
-uint64_t qpc_now() noexcept { LARGE_INTEGER value{};QueryPerformanceCounter(&value);return value.QuadPart; }
-uint64_t qpc_frequency() noexcept {
-    static const uint64_t frequency=[] {LARGE_INTEGER value{};QueryPerformanceFrequency(&value);return value.QuadPart;}();
-    return frequency;
-}
 namespace {
 using Microsoft::WRL::ComPtr;
 ComPtr<ID3D11Texture2D> texture(uintptr_t view) {
@@ -69,45 +63,31 @@ void GpuCapture::describe_metadata() {
     if(diagnostic) metadata_["color_pass"]=color_pass_?color_pass_->describe():json(nullptr);
 }
 json GpuCapture::status(bool metadata) {
+    std::lock_guard lock(mutex_);
     if(metadata) describe_metadata();
     const char* phase=phase_==Phase::idle?"idle":phase_==Phase::armed?"armed":
         phase_==Phase::waiting_gpu?"waiting_gpu":phase_==Phase::ready?"ready":"error";
     json result={{"phase",phase},{"capture_sequence",sequence_},{"bindings_seen",bindings_seen_},
-            {"camera",camera_},{"requested_frame_id",requested_frame_},{"last_label",last_label_},
-            {"gpu_polls",gpu_polls_},{"error",error_},{"gpu_allocations",allocations_+packed_.allocations()},
-            {"saved_directory",saved_.string()}};
+            {"camera",camera_},{"last_label",last_label_},
+            {"gpu_polls",gpu_polls_},{"error",error_},{"gpu_allocations",allocations_+packed_.allocations()}};
     if(metadata) result["metadata"]=metadata_;
     return result;
 }
-json GpuCapture::command(const std::string& action,uint64_t requested_frame,bool metadata,const CaptureOptions& options) {
+void GpuCapture::arm(const CaptureOptions& options) {
     std::lock_guard lock(mutex_);
-    if(action=="arm") {
-        if(phase_==Phase::armed || phase_==Phase::waiting_gpu)
-            throw std::runtime_error("A camera capture is already pending");
-        release_sources();
-        if(!packed_.reusable()) throw std::runtime_error("Shared GPU sample still belongs to the relay");
-        options_=options;packed_.clear();packed_.share(options.shared_gpu);packed_.exposure(options.exposure);
-        for(auto& image:images_) image.pixels.clear();
-        geometry_depth_.pixels.clear();
-        for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
-        clear_vehicle_constants();
-        metadata_=json::object();error_.clear();last_label_.clear();saved_.clear();
-        geometry_binding_=geometry_sdk_=gpu_polls_=bindings_seen_=polled_frame_=0;
-        geometry_pass_.reset();color_pass_.reset();geometry_gpu_=nullptr;requested_frame_=requested_frame;
-        request_started_=GetTickCount64();phase_=Phase::armed;
-    } else if(action=="cancel") {
-        release_gpu();if(phase_!=Phase::ready) phase_=Phase::idle;
-    } else if(action=="save") return save();
-    else if(action!="status") throw std::runtime_error("Unknown camera capture action");
-    auto result=status(metadata);
-    if(action=="status" && device_) {
-        ComPtr<IDXGIDevice> dxgi;ComPtr<IDXGIAdapter> adapter;ComPtr<IDXGIAdapter3> memory;
-        DXGI_QUERY_VIDEO_MEMORY_INFO info{};
-        if(SUCCEEDED(device_.As(&dxgi)) && SUCCEEDED(dxgi->GetAdapter(&adapter)) && SUCCEEDED(adapter.As(&memory)) &&
-           SUCCEEDED(memory->QueryVideoMemoryInfo(0,DXGI_MEMORY_SEGMENT_GROUP_LOCAL,&info)))
-            result["video_memory"]={{"usage_bytes",info.CurrentUsage},{"budget_bytes",info.Budget}};
-    }
-    return result;
+    if(phase_==Phase::armed || phase_==Phase::waiting_gpu)
+        throw std::runtime_error("A camera capture is already pending");
+    release_sources();
+    if(!packed_.reusable()) throw std::runtime_error("Shared GPU sample still belongs to the relay");
+    options_=options;packed_.clear();packed_.share(options.shared_gpu);packed_.exposure(options.exposure);
+    for(auto& image:images_) image.pixels.clear();
+    geometry_depth_.pixels.clear();
+    for(auto& constants:geometry_constants_) {constants.bytes.clear();constants.description=nullptr;}
+    clear_vehicle_constants();
+    metadata_=json::object();error_.clear();last_label_.clear();
+    geometry_binding_=geometry_sdk_=gpu_polls_=bindings_seen_=polled_frame_=0;
+    geometry_pass_.reset();color_pass_.reset();geometry_gpu_=nullptr;
+    request_started_=GetTickCount64();phase_=Phase::armed;
 }
 void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
                          uint64_t binding_sequence,uint64_t sdk_frame,uint64_t render_frame,
@@ -115,7 +95,7 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
     const auto phase=phase_.load(std::memory_order_relaxed);
     if(phase!=Phase::armed && phase!=Phase::waiting_gpu) return;
     // A status query must not make us skip the binding that ends a camera
-    // pass. Idle/ready samples skip the lock (including during file saving);
+    // pass. Idle/ready samples skip the lock;
     // pending captures serialize with the command worker and recheck state.
     std::lock_guard lock(mutex_);
     if(phase_!=Phase::armed && phase_!=Phase::waiting_gpu) return;
@@ -130,9 +110,7 @@ void GpuCapture::observe(ID3D11DeviceContext* context,uint32_t count,const uintp
             polled_frame_=render_frame;
             collect(context);return;
         }
-        if(!render_frame || (requested_frame_ && render_frame<requested_frame_)) return;
-        if(requested_frame_ && render_frame>requested_frame_)
-            throw std::runtime_error(camera_+" did not finish rendering in the requested Present interval");
+        if(!render_frame) return;
         ComPtr<ID3D11Texture2D> next;
         bool resolved=false;
         const auto next_texture=[&]() {
@@ -458,52 +436,5 @@ void GpuCapture::append_bundle(json& views,std::vector<BundleBlob>& blobs) {
         blobs.push_back({camera_,sample.description.at("file").get<std::string>(),sample.bytes.data(),sample.bytes.size()});
     for(const auto& sample:vehicle_constants_) if(!sample.bytes.empty())
         blobs.push_back({camera_,sample.description.at("file").get<std::string>(),sample.bytes.data(),sample.bytes.size()});
-}
-json GpuCapture::save() {
-    if(phase_!=Phase::ready) throw std::runtime_error("No completed camera CPU sample to save");
-    if(!saved_.empty()) return status();
-    describe_metadata();
-    // GetTickCount64 also distinguishes SDK reloads within one game PID.
-    const auto directory=log_directory()/(camera_+"-"+std::to_string(GetTickCount64()));
-    if(!fs::create_directory(directory)) throw std::runtime_error("Capture output directory already exists");
-    for(size_t i=0;i<images_.size();++i) {
-        if(images_[i].pixels.empty()) continue;
-        std::ofstream output(directory/metadata_["images"][i]["file"].get<std::string>(),std::ios::binary);
-        output.exceptions(std::ios::badbit|std::ios::failbit);
-        output.write(reinterpret_cast<const char*>(images_[i].pixels.data()),images_[i].pixels.size());
-        output.close();
-    }
-    for(const auto& image:packed_.images) if(!image.description.is_null()) {
-        std::ofstream output(directory/image.description.at("file").get<std::string>(),std::ios::binary);
-        output.exceptions(std::ios::badbit|std::ios::failbit);
-        output.write(reinterpret_cast<const char*>(image.pixels.data()),image.pixels.size());output.close();
-    }
-    if(!packed_.lidar_description.is_null()) {
-        std::ofstream output(directory/packed_.lidar_description.at("file").get<std::string>(),std::ios::binary);
-        output.exceptions(std::ios::badbit|std::ios::failbit);
-        output.write(reinterpret_cast<const char*>(packed_.lidar_pixels.data()),packed_.lidar_pixels.size());output.close();
-    }
-    for(const auto& sample:geometry_constants_) if(!sample.bytes.empty()) {
-        std::ofstream output(directory/sample.description.at("file").get<std::string>(),std::ios::binary);
-        output.exceptions(std::ios::badbit|std::ios::failbit);
-        output.write(reinterpret_cast<const char*>(sample.bytes.data()),sample.bytes.size());
-        output.close();
-    }
-    for(const auto& sample:vehicle_constants_) if(!sample.bytes.empty()) {
-        std::ofstream output(directory/sample.description.at("file").get<std::string>(),std::ios::binary);
-        output.exceptions(std::ios::badbit|std::ios::failbit);
-        output.write(reinterpret_cast<const char*>(sample.bytes.data()),sample.bytes.size());
-        output.close();
-    }
-    if(!geometry_depth_.pixels.empty()) {
-        std::ofstream output(directory/metadata_.at("geometry_gpu").at("depth_texture").at("file").get<std::string>(),std::ios::binary);
-        output.exceptions(std::ios::badbit|std::ios::failbit);
-        output.write(reinterpret_cast<const char*>(geometry_depth_.pixels.data()),geometry_depth_.pixels.size());
-        output.close();
-    }
-    // Publish metadata last; incomplete files are not presented as a saved capture.
-    std::ofstream output(directory/"images.json");output.exceptions(std::ios::badbit|std::ios::failbit);
-    output<<metadata_.dump(2);output.close();saved_=directory;
-    return status();
 }
 }

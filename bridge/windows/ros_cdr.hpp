@@ -6,12 +6,6 @@
 
 namespace bridge {
 using eprosima::fastcdr::Cdr;
-template<class F> Bytes cdr(size_t capacity,F write) {
-    Bytes bytes(capacity);eprosima::fastcdr::FastBuffer buffer(reinterpret_cast<char*>(bytes.data()),bytes.size());
-    Cdr c(buffer,Cdr::LITTLE_ENDIANNESS,eprosima::fastcdr::CdrVersion::XCDRv1);
-    c.set_encoding_flag(eprosima::fastcdr::EncodingAlgorithmFlag::PLAIN_CDR);
-    c.serialize_encapsulation();write(c);bytes.resize(c.get_serialized_data_length());return bytes;
-}
 inline void stamp(Cdr& c,uint64_t us) {c<<static_cast<int32_t>(us/1000000)<<static_cast<uint32_t>((us%1000000)*1000);}
 inline void header(Cdr& c,uint64_t us,const std::string& frame) {stamp(c,us);c<<frame;}
 inline void pose(Cdr& c,V p,Q q) {c.serialize_array(p.data(),3);c.serialize_array(q.data(),4);}

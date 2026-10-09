@@ -49,13 +49,12 @@ def load_lidar_profile(path):
     return sensors
 
 
-def sample_lidars(bundle, profile, *, include_points=True):
+def sample_lidars(bundle, profile):
     """Return all beams, including misses, from a decoded same-frame bundle.
 
     profile is the canonical result of load_lidar_profile(). Source priority is
     geometric coverage, not depth validity: a missing narrow-view pixel is not
     replaced with a potentially different broad-view surface.
-    include_points=False omits derivable XYZ/angle arrays for compact recording.
     """
     views = {v["camera"]: v["metadata"] for v in bundle["manifest"]["views"]}
     names = list(dict.fromkeys(name for s in profile for name in s["settings"]["sources"]))
@@ -168,12 +167,11 @@ def sample_lidars(bundle, profile, *, include_points=True):
         pieces.append({"range": ranges, "status": status,
                        "source_camera_index": source_index,
                        "source_pixel_xy": pixels, "source_ray_error_deg": angular_error})
-        if include_points:
-            pieces[-1].update({"sensor_index": np.full(count, sensor_index, dtype=np.int16),
-                               "azimuth_deg": sensor["azimuth"].astype(np.float32),
-                               "elevation_deg": sensor["elevation"].astype(np.float32),
-                               "xyz_sensor": (direction*ranges[:, None]).astype(np.float32),
-                               "xyz_world": origin + world_direction*ranges[:, None]})
+        pieces[-1].update({"sensor_index": np.full(count, sensor_index, dtype=np.int16),
+                           "azimuth_deg": sensor["azimuth"].astype(np.float32),
+                           "elevation_deg": sensor["elevation"].astype(np.float32),
+                           "xyz_sensor": (direction*ranges[:, None]).astype(np.float32),
+                           "xyz_world": origin + world_direction*ranges[:, None]})
         descriptions.append({"name": settings["name"], "settings": settings,
                              "first_beam": first_beam, "beam_count": count,
                              "shape_channels_columns": [len(sensor["elevations"]), len(sensor["azimuths"])],
@@ -196,19 +194,6 @@ def sample_lidars(bundle, profile, *, include_points=True):
                 "depth_source": "geometry DSV; per-sensor sampling setting, nearest reference pixel and edge fallback",
                 "scope": "Ideal instantaneous rendered-depth samples; no noise, intensity, rolling scan or ray casting. Missing beams are unknown. Engine visibility omissions remain."}
     return arrays, metadata
-
-
-def attach_lidar(bundle, profile):
-    """Add a same-frame LiDAR NPZ without changing the input bundle.
-
-    Store the inner NPZ without compression: the existing outer Zstandard
-    writer compresses it together with RGB-D, avoiding two codec passes.
-    """
-    arrays, metadata = sample_lidars(bundle, profile, include_points=False)
-    with io.BytesIO() as stream:
-        np.savez(stream, **arrays, metadata_json=json.dumps(metadata, ensure_ascii=False))
-        data = stream.getvalue()
-    return {**bundle, "manifest": {**bundle["manifest"], "lidar_file": "lidar.npz"}, "lidar": data}
 
 
 def read_lidar(bundle):

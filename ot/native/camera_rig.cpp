@@ -1,12 +1,11 @@
 #include "camera_rig.hpp"
+#include "../include/geometry.hpp"
 #include <cmath>
 #include <stdexcept>
 #include <cstdio>
 
 namespace ot {
 namespace {
-struct Placement {float x,y,z;int16_t cx,cz;float w,qx,qy,qz;};
-static_assert(sizeof(Placement)==32);
 struct SubmissionCopy {
     alignas(16) std::array<uint8_t,0x540> bytes{};
     CameraRig* owner=nullptr;
@@ -18,16 +17,6 @@ thread_local uint32_t selection_mask=0;
 thread_local uintptr_t graph_camera=0;
 using Q=std::array<double,4>;
 using V=std::array<double,3>;
-Q multiply(Q a,Q b) {
-    return {a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
-        a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
-        a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
-        a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]};
-}
-V rotate(Q q,V p) {
-    auto v=multiply(multiply(q,{0,p[0],p[1],p[2]}),{q[0],-q[1],-q[2],-q[3]});
-    return {v[1],v[2],v[3]};
-}
 bool chassis_pose(uintptr_t interior,Placement& pose) noexcept {
     uintptr_t vehicle{},state{},controller{},manager{},buffers{},placements{};
     uint32_t mode{},flags{};uint64_t handle{},count{};

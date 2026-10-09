@@ -1,4 +1,6 @@
 #include "ot.hpp"
+#include "../include/geometry.hpp"
+#include "../include/mount_layout.hpp"
 #include "build_identity.hpp"
 #include "render_probe.hpp"
 #include "module_api.hpp"
@@ -39,8 +41,6 @@ struct Channel {
     scs_u32_t index=SCS_U32_NIL; scs_result_t registration=SCS_RESULT_not_found;
     std::string key() const {return index==SCS_U32_NIL?name:name+"["+std::to_string(index)+"]";}
 };
-struct Placement { float x,y,z; int16_t cx,cz; float w,qx,qy,qz; };
-static_assert(sizeof(Placement)==32);
 struct ArrayHeader { uintptr_t vtable,data; uint64_t size,capacity; };
 
 class Runtime {
@@ -283,7 +283,7 @@ json Runtime::engine_snapshot() {
             auto mo=schema_["mirror_fields"]["projection"]["offset"].get<uintptr_t>();
             if(read_memory(camera+po,p) && read_memory(camera+mo,projection)) {
                 result["available"]=true;
-                result["pose"]={{"position_m",{static_cast<double>(p.cx)*512+p.x,static_cast<double>(p.y),static_cast<double>(p.cz)*512+p.z}},
+                result["pose"]={{"position_m",world_position(p)},
                     {"quaternion_wxyz",{p.w,p.qx,p.qy,p.qz}},{"coordinate_space","unknown"}};
                 result["projection"]=projection;
             }
@@ -364,7 +364,7 @@ json Runtime::command(const json& request) {
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","capture_mirrors","stream","manual_dump","panic","drive"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","stream","manual_dump","panic","drive"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false)},
         {"drive",current_drive()},
@@ -374,6 +374,13 @@ json Runtime::command(const json& request) {
         auto config=truck_config_.load();
         if(!config) throw std::runtime_error("No SDK truck configuration has been received");
         return *config;
+    }
+    if(cmd=="resolve_layout") {
+        const auto truck=truck_config_.load();
+        if(!truck) throw std::runtime_error("No SDK truck configuration has been received");
+        auto rig=request.at("rig");json selected=json::array();
+        for(const auto& view:rig.at("views")) selected.push_back(view.at("slot"));
+        return resolve_mount_layout(std::move(rig),*truck,selected).rig;
     }
     if(cmd=="reload_permissions") return reload_permissions();
     if(cmd=="hooks") return render_probe_->status();
@@ -391,15 +398,15 @@ json Runtime::command(const json& request) {
         }
         return render_probe_->camera_rig(request);
     }
-    if(cmd=="capture_mirror5" || cmd=="capture_mirrors" || cmd=="stream") {
+    if(cmd=="stream") {
         std::lock_guard lock(control_);
         const auto action=request.value("action",std::string("status"));
         if(action!="status") require_owner();
         if((action=="arm" || action=="start") && (tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_))
-            throw std::runtime_error("Mirror5 capture requires the permitted Tier 1 render probe");
+            throw std::runtime_error("Capture requires the permitted Tier 1 render probe");
         CaptureOptions options;
         if(action=="arm" || action=="start" || action=="update") {
-            options.format=request.value("format",std::string(cmd=="stream"?"rgbd8":"raw"));
+            options.format=request.value("format",std::string("rgbd8"));
             options.color_gain=request.value("color_gain",1.0f);
             options.shared_gpu=request.value("shared_gpu",false);
             options.auto_exposure=request.value("auto_exposure",false);
@@ -409,8 +416,7 @@ json Runtime::command(const json& request) {
                 throw std::runtime_error("preview_hz must be finite and nonnegative");
             if(!std::isfinite(options.lidar_hz) || options.lidar_hz<0)
                 throw std::runtime_error("lidar_hz must be finite and nonnegative");
-            if(options.auto_exposure && cmd!="stream") throw std::runtime_error("Auto exposure requires a continuous stream");
-            if(options.shared_gpu && (cmd!="stream" || options.format!="ros"))
+            if(options.shared_gpu && options.format!="ros")
                 throw std::runtime_error("Shared GPU output requires a ROS stream relay");
             if(request.contains("lidars")) for(const auto& item:request.at("lidars").items()) {
                 const auto& name=item.key();
@@ -439,8 +445,7 @@ json Runtime::command(const json& request) {
             if(!std::isfinite(options.color_gain) || options.color_gain<=0)
                 throw std::runtime_error("Color gain must be finite and positive");
         }
-        if(cmd=="stream") return render_probe_->stream(request,*transport_,options);
-        return cmd=="capture_mirrors"?render_probe_->capture_views(action,transport_.get(),request.value("metadata",true),options):render_probe_->capture(action,options);
+        return render_probe_->stream(request,*transport_,options);
     }
     if(cmd=="render_probe") {
         std::lock_guard lock(control_);

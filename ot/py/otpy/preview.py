@@ -1,9 +1,11 @@
 """Live camera mosaic using OT_Bundles; closing it returns the game to Tier 0."""
 from dataclasses import dataclass
 import json
+import math
 import queue
 import threading
 import time
+import uuid
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageTk, ImageOps
@@ -95,87 +97,95 @@ class PreviewState:
     config_updates: int = 0
 
 
-def _capture(config, hz, stop, output, state, updates, capture_format="raw", color_gain=None):
+def _capture(config, hz, stop, output, state, updates, capture_format, color_gain, duration):
     client, reader = Client(timeout=3), None
+    owner = uuid.uuid4().hex
+    claimed = False
+    def request(command, **arguments):
+        return client.request(command, owner=owner, **arguments)
     try:
-        client.tier(1)
-        client.request("render_probe", enabled=True)
-        client.request("camera_rig", **config)
+        request("lease", action="claim")
+        claimed = True
+        request("tier", value=1)
+        request("render_probe", enabled=True)
+        request("camera_rig", **config)
         state.applied_config = config
         state.config_result = (config, "")
         mosaic = Mosaic(config)
-        due = time.monotonic()
-        while not stop.is_set():
-            if stop.wait(max(0, due-time.monotonic())):
-                break
+        deadline = time.monotonic()+duration
+        calibrating = capture_format == "rgbd8" and color_gain is None
+        def start_stream():
+            remaining = deadline-time.monotonic()
+            if remaining <= 0:
+                return None
+            return request("stream", action="start", hz=hz, duration=remaining,
+                           format="raw" if calibrating else capture_format, color_gain=color_gain or 1.0)["stream_id"]
+        stream_id = start_stream()
+        heartbeat = last_status = time.monotonic()
+        while not stop.is_set() and time.monotonic() < deadline:
+            now = time.monotonic()
+            if now-heartbeat >= 1:
+                request("lease", action="heartbeat")
+                heartbeat = now
             try:
                 settings = updates.get_nowait()
             except queue.Empty:
                 pass
             else:
+                request("stream", action="stop")
                 try:
-                    client.request("camera_rig", **settings)
+                    request("camera_rig", **settings)
                 except RuntimeError as error:
-                    # A rejected edit leaves the previous native configuration
-                    # intact. Keep displaying it so the user can fix the input.
                     state.config_result = (settings, str(error))
                 else:
                     state.applied_config = settings
                     state.config_result = (settings, "")
                     state.config_updates += 1
-            calibrating = capture_format == "rgbd8" and color_gain is None
-            client.request("capture_mirrors", action="arm", metadata=False,
-                           format="raw" if calibrating else capture_format, color_gain=color_gain or 1.0)
-            deadline = time.monotonic()+3
-            while not stop.is_set():
-                capture = client.request("capture_mirrors", metadata=False)
-                if all(v["phase"] in ("ready", "error") for v in capture["views"]):
-                    break
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("Camera capture did not finish; check the game is rendering")
-                stop.wait(.005)
-            if stop.is_set():
-                break
-            if capture["phase"] != "ready":
-                state.misses += 1
-                missing = ", ".join(v["camera"] for v in capture["views"] if v["phase"] != "ready")
-                _latest(output, ("status", "Waiting for cameras: " + missing))
-                due = time.monotonic()+.5
-                continue
-            publication = client.request("capture_mirrors", action="publish")
+                stream_id = start_stream()
             if reader is None:
+                if not request("bundles")["enabled"]:
+                    stop.wait(.01)
+                    continue
                 reader = BundleReader()
             bundle = None
             while True:
                 candidate = reader.read_next()
                 if candidate is None:
                     break
-                bundle = candidate
-            if not publication["published"] or bundle is None:
-                raise RuntimeError("Camera bundle queue did not deliver the requested frame")
-            picture = mosaic.draw(bundle, state.exposure_ev)
-            if calibrating:
-                # One shared exposure from the first complete raw bundle.
-                # Keep it fixed thereafter so cameras/frames remain comparable.
-                color_gain = 1.0/mosaic.white
-            state.captures += 1
-            # Only decoded pictures cross to Tk; raw bundles are released here.
-            _latest(output, ("frame", picture, bundle["manifest"]["render_frame_id"], time.monotonic()))
-            due = max(due+1/hz, time.monotonic())
+                if candidate["manifest"]["stream_id"] == stream_id:
+                    bundle = candidate
+            if bundle is not None:
+                picture = mosaic.draw(bundle, state.exposure_ev)
+                state.captures += 1
+                _latest(output, ("frame", picture, bundle["manifest"]["render_frame_id"], now))
+                if calibrating:
+                    color_gain = 1.0/mosaic.white
+                    calibrating = False
+                    request("stream", action="stop")
+                    stream_id = start_stream()
+            elif now-last_status >= 1:
+                status = request("stream")
+                if not status["running"]:
+                    raise RuntimeError("Capture stream ended: "+status.get("last_error", status.get("reason", "stopped")))
+                last_status = now
+            stop.wait(.01)
     except Exception as error:
         state.error = str(error)
         _latest(output, ("status", state.error))
     finally:
         if reader is not None:
             reader.close()
-        try:
-            client.panic()
-        except Exception as error:
-            state.cleanup_error = str(error)
+        if claimed:
+            try:
+                request("lease", action="release")
+            except Exception as error:
+                state.cleanup_error = str(error)
         _latest(output, ("finished",))
 
 
 def run_preview(config_file, hz=5.0, duration=None, snapshot=None, capture_format="raw", color_gain=None):
+    if duration is None or not math.isfinite(duration) or duration <= 0:
+        raise ValueError("Rig editing requires a finite positive duration")
     with open(config_file, encoding="utf-8") as stream:
         config = json.load(stream)
     config = resolve_layout(config, Client())
@@ -221,7 +231,7 @@ def run_preview(config_file, hz=5.0, duration=None, snapshot=None, capture_forma
     exposure.pack(side="right", padx=15)
     root.protocol("WM_DELETE_WINDOW", close)
     root.bind("<F11>", lambda event: close())
-    worker = threading.Thread(target=_capture, args=(config, hz, stop, messages, state, updates, capture_format, color_gain), name="ot-preview-capture")
+    worker = threading.Thread(target=_capture, args=(config, hz, stop, messages, state, updates, capture_format, color_gain, duration), name="ot-preview-capture")
 
     def tick():
         nonlocal finished, last_picture, last_frame, last_time, image_reference, capture_status

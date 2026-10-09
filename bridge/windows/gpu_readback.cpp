@@ -1,4 +1,5 @@
 #include "gpu_readback.hpp"
+#include "windows_support.hpp"
 #include <dxgi1_4.h>
 #include <chrono>
 #include <thread>
@@ -9,12 +10,8 @@ using Microsoft::WRL::ComPtr;
 void check(HRESULT hr,const char* operation) {
     if(FAILED(hr)) throw std::runtime_error(std::string(operation)+" HRESULT="+std::to_string(hr));
 }
-struct Handle {
-    HANDLE value{};
-    ~Handle(){if(value) CloseHandle(value);}
-};
 void duplicate(HANDLE process,uint64_t original,Handle& result) {
-    if(!DuplicateHandle(process,reinterpret_cast<HANDLE>(original),GetCurrentProcess(),&result.value,0,FALSE,DUPLICATE_SAME_ACCESS))
+    if(!DuplicateHandle(process,reinterpret_cast<HANDLE>(original),GetCurrentProcess(),&result.h,0,FALSE,DUPLICATE_SAME_ACCESS))
         throw std::runtime_error("Cannot duplicate shared GPU handle");
 }
 }
@@ -45,12 +42,12 @@ void GpuReadback::read(SensorBundle& bundle,DWORD producer_pid,bool map_to_cpu) 
         }
         auto& slot=slots_[gpu.at("id").get<uint64_t>()];
         auto open_process=[&] {
-            if(!process.value) process.value=OpenProcess(PROCESS_DUP_HANDLE,FALSE,producer_pid);
-            if(!process.value) throw std::runtime_error("Cannot open GPU producer for handle duplication");
+            if(!process.h) process.h=OpenProcess(PROCESS_DUP_HANDLE,FALSE,producer_pid);
+            if(!process.h) throw std::runtime_error("Cannot open GPU producer for handle duplication");
         };
         if(!slot.fence) {
-            open_process();Handle handle;duplicate(process.value,gpu.at("handle"),handle);
-            check(device_->OpenSharedFence(handle.value,IID_PPV_ARGS(&slot.fence)),"OpenSharedFence");
+            open_process();Handle handle;duplicate(process.h,gpu.at("handle"),handle);
+            check(device_->OpenSharedFence(handle.h,IID_PPV_ARGS(&slot.fence)),"OpenSharedFence");
         }
         const uint64_t ready=gpu.at("ready"),released=gpu.at("released");
         if(released!=ready+1) throw std::runtime_error("Invalid GPU ownership fence values");
@@ -68,8 +65,8 @@ void GpuReadback::read(SensorBundle& bundle,DWORD producer_pid,bool map_to_cpu) 
             auto& [id,texture]=slot.textures[file];
             const uint64_t next=shared.at("id");
             if(id!=next || !texture.source) {
-                texture=Texture{};open_process();Handle handle;duplicate(process.value,shared.at("handle"),handle);
-                check(device_->OpenSharedResource1(handle.value,IID_PPV_ARGS(&texture.source)),"OpenSharedResource1");
+                texture=Texture{};open_process();Handle handle;duplicate(process.h,shared.at("handle"),handle);
+                check(device_->OpenSharedResource1(handle.h,IID_PPV_ARGS(&texture.source)),"OpenSharedResource1");
                 texture.source->GetDesc(&texture.desc);const auto& d=texture.desc;
                 if(d.Width!=image.at("width") || d.Height!=image.at("height") || image.at("row_bytes")!=d.Width*4 ||
                    (d.Format!=DXGI_FORMAT_R32_FLOAT && d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM) || d.SampleDesc.Count!=1 || d.MipLevels!=1 || d.ArraySize!=1)

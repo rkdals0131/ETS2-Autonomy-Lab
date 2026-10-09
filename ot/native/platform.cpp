@@ -64,6 +64,11 @@ json dump_process() {
         throw std::runtime_error("MiniDumpWriteDump failed: "+std::to_string(GetLastError()));
     return {{"path",path.generic_string()},{"kind","manual_minidump"}};
 }
+uint64_t qpc_now() noexcept { LARGE_INTEGER value{};QueryPerformanceCounter(&value);return value.QuadPart; }
+uint64_t qpc_frequency() noexcept {
+    static const uint64_t frequency=[] {LARGE_INTEGER value{};QueryPerformanceFrequency(&value);return value.QuadPart;}();
+    return frequency;
+}
 bool copy_memory(uintptr_t address,void* data,size_t size) noexcept {
     // Game-owned storage is in this process. A stale/unmapped source remains
     // a failed read; callers discard the destination when this returns false.

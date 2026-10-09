@@ -43,7 +43,7 @@ Linux에서는 `apps/launch.sh`로 ROS 실행·상태·중지·보조·기록을
 | 위치 | 역할·실행 환경 |
 | --- | --- |
 | ot/ | Windows 게임 어댑터: 상주 loader, SDK 입력·관측, 엔진 hook, 센서 리그·GPU 자원, Python API |
-| bridge/ | Windows 릴레이·TCP/CDR 계약, 로컬 설정·기록·호환 실행 진입점 |
+| bridge/ | Windows 릴레이·TCP/CDR 계약, 로컬 설정·기록 |
 | [ros2/src](ros2/README.md) | ROS 메시지·전송 패키지와 GT 자동주행 패키지. WSL에서 빌드·실행 |
 | [apps/launcher](apps/launcher/README.md) | Windows UI와 Windows/WSL 실행·기록 프로세스 관리 |
 | research/ | 분석 도구·원본 자료. 현재 지도 provider가 쓰는 로컬 .NET/TruckLib 의존성도 보존 |

@@ -12,6 +12,8 @@ import sys
 import threading
 import time
 
+import session
+
 UNIT = "ets2-linux-launcher"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,14 +28,12 @@ def describe(status):
     lag = max(0.0, time.monotonic() - status["observed_at"])
     age = status.get("state_age_s")
     connected = age is not None and age + lag < 3
-    drive = status.get("drive_state") or {}
-    drive_age = status.get("drive_state_age_s")
-    axes = drive.get("axes", 0) if drive.get("armed") and drive_age is not None and drive_age + lag < 2 else 0
+    axes, reason = session.observed_drive(status)
     recording = status.get("recording") or {}
     return (f"ROS PID {status['ros_pid']} · " +
             ("게임 상태 수신 중" if connected else "Windows 릴레이 연결 대기") +
             f" · ACC {'켜짐' if axes & 2 else '꺼짐'} · LCC {'켜짐' if axes & 1 else '꺼짐'}" +
-            (f" · {drive.get('reason', '')}" if drive_age is not None and drive_age + lag < 2 else "") +
+            f" · {reason}" +
             f" · 기록 {recording.get('phase', 'idle')}" +
             (f" · {recording['path']}" if recording.get("path") else ""))
 
@@ -53,12 +53,8 @@ def start(config, runtime):
         if unit_state().get("ActiveState") in ("active", "activating", "deactivating"):
             print("Linux ROS 세션이 이미 실행 중입니다.")
             return
-        command = ["systemd-run", "--user", "--quiet", "--pipe", "--wait", "--collect", "--unit=" + UNIT,
-                   "--property=KillMode=control-group", "--property=RuntimeDirectory=" + UNIT,
-                   "--property=TimeoutStopSec=15", "--property=RuntimeMaxSec=" + str(duration + 20), "--",
-                   "/bin/bash", "-c",
-                   f"source {shlex.quote(str(PROJECT_ROOT / 'bridge' / 'ros-env.sh'))} && "
-                   f"exec /usr/bin/python3 -u {shlex.quote(str(Path(__file__).with_name('wsl_session.py')))} {shlex.quote(str(config))}"]
+        command = session.command(UNIT, config, PROJECT_ROOT / "bridge" / "ros-env.sh",
+                                  Path(__file__).parent, duration)
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, bufsize=1)
         lines = queue.Queue()
@@ -84,8 +80,7 @@ def start(config, runtime):
                 if now - started >= duration:
                     break
                 if now - heartbeat >= 1:
-                    process.stdin.write('{"action":"heartbeat"}\n')
-                    process.stdin.flush()
+                    session.send(process, "heartbeat")
                     heartbeat = now
                 try:
                     source, line = lines.get(timeout=0.1)
@@ -122,8 +117,7 @@ def start(config, runtime):
                                 request["path"] = str(path)
                         else:
                             raise ValueError("지원하는 명령을 입력해 주세요.")
-                        process.stdin.write(json.dumps(request) + "\n")
-                        process.stdin.flush()
+                        session.send(process, **request)
                     except (OSError, ValueError) as error:
                         print(error, flush=True)
                     continue
@@ -132,17 +126,17 @@ def start(config, runtime):
                 except ValueError:
                     print(line, flush=True)
                     continue
-                if event.get("type") == "wsl_status":
+                if event.get("type") == "session_status":
                     text = describe(event)
                     if text != previous:
                         print(text, flush=True)
                         previous = text
-                elif event.get("type") in ("wsl_error", "drive_error", "recording_error"):
+                elif event.get("type") in ("session_error", "drive_error", "recording_error"):
                     print(event["error"], flush=True)
             reader.join(timeout=1)
             while not lines.empty():
                 source, line = lines.get()
-                if source == "event" and '"wsl_error"' in line:
+                if source == "event" and '"session_error"' in line:
                     print(json.loads(line)["error"], flush=True)
             if process.returncode:
                 raise RuntimeError("Linux ROS 세션이 종료됐습니다. 위 오류를 확인해 주세요.")
