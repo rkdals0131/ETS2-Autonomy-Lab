@@ -48,9 +48,11 @@ int main(int argc,char** argv) {
     if(WSAStartup(MAKEWORD(2,2),&winsock)) return 1;
     struct WinsockEnd {~WinsockEnd(){WSACleanup();}} end;
     try {
-        if(argc!=2 && argc!=3) throw std::runtime_error("Usage: ets2_relay.exe path/to/bridge.local.json [stop-event]");
-        Handle stop_event(argc==3?OpenEventA(SYNCHRONIZE,FALSE,argv[2]):nullptr);
-        if(argc==3 && !stop_event.h) throw std::runtime_error("Launcher stop event unavailable");
+        const bool input_only=argc>2 && std::string_view(argv[argc-1])=="--input-only";
+        const auto arguments=argc-(input_only?1:0);
+        if(arguments!=2 && arguments!=3) throw std::runtime_error("Usage: ets2_relay.exe path/to/bridge.local.json [stop-event] [--input-only]");
+        Handle stop_event(arguments==3?OpenEventA(SYNCHRONIZE,FALSE,argv[2]):nullptr);
+        if(arguments==3 && !stop_event.h) throw std::runtime_error("Launcher stop event unavailable");
         std::jthread stop_watch([&](std::stop_token stop){while(!stop.stop_requested()) {
             if(stop_event.h && WaitForSingleObject(stop_event.h,100)==WAIT_OBJECT_0) {stopped=true;break;}
             if(!stop_event.h) std::this_thread::sleep_for(100ms);
@@ -67,7 +69,7 @@ int main(int argc,char** argv) {
         const auto token=config.at("token").get<std::string>();if(token.size()<32) throw std::runtime_error("Missing pairing token");
         std::ifstream preset(path.parent_path()/config.at("rig").get<std::string>());json rig;preset>>rig;
         const auto truck=command({{"cmd","truck_config"}});
-        const auto vehicle=resolve_vehicle(rig,truck,config.value("slots",json::array({0})));
+        const auto vehicle=resolve_vehicle(rig,truck,input_only?json::array():config.value("slots",json::array({0})));
         rig=vehicle.rig;
         rig["ego_full_model"]=true;
         const auto base=rig.at("base_origin").get<std::array<double,3>>();

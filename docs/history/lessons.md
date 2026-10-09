@@ -76,3 +76,9 @@ Zsh에서 Bash용 ROS setup을 source하면 setup 경로가 잘못 계산됐습�
 조사한 ETS2LA/plugin `3b01d90b5be24`의 입력 README는 18바이트·float timestamp, 실제 InputMemData는 26바이트·double timestamp 두 개였습니다. 입력 만료도 예제의 1초와 구현의 0.2초가 달랐습니다. M8은 선택 revision의 구조체·생산자·소비자와 시계 기준을 함께 맞춰야 합니다.
 
 같은 revision의 경로 생산자는 점 개수로만 변경을 판단해 같은 길이의 경로 갱신을 놓칠 수 있고 고정 용량 복사도 확인이 필요했습니다. 경로 연결은 실제 좌표·경로 식별자·길이를 계약으로 사용합니다. 단순 shared-memory memcpy의 동시 읽기 문제는 현재 프로젝트의 원자적 슬롯 소유권으로 처리합니다.
+
+## 운전 입력의 소비 조건과 조향 모드
+
+0.27.0의 첫 속도 목표 실행은 native에서 명령을 승인했지만 게임이 비전경이라 SDK 입력 축과 속도가 0이었습니다. 게임 전경에서 같은 제품 노드로 가속·제동이 적용됐습니다. 승인 상태와 게임이 소비한 입력을 구분해야 합니다.
+
+현재 Xbox 프로필의 `c_relatsteer=1`은 조향 위치 변화 입력입니다. [SCS 설명](https://forum.scssoft.com/viewtopic.php?p=546813)의 absolute 모드와 달라 작은 raw 조향 명령을 위치 목표로 그대로 보낼 수 없었습니다. 사람 프로필을 바꾸지 않고 `drive_speed`에서 SDK applied steering feedback으로 정규화 위치 목표를 추적하도록 수정했습니다. 실제 주행의 목표 .02에 applied 약 .0180을 확인했습니다. 이는 바퀴 각도·토크 명령이 아닙니다.

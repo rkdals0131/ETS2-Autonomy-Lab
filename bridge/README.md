@@ -12,7 +12,9 @@
 
 화면은 SDK 연결, 프로세스 PID, ROS 상태 수신, 전송·수신 묶음 수, 큐 누락, Foxglove 주소를 표시합니다. 연결 상태는 실제 ROS 응답과 SDK 상태 메시지의 최근 수신으로 판정합니다. 센서 구독이 없으면 영상 수집을 기다립니다.
 
-`실행 시간(초)`, `카메라 Hz`, `라이다 Hz`, `미리보기 Hz`는 시작할 때 `config/bridge.local.json`에 저장됩니다. 기본 주기는 카메라 30 Hz·라이다 10 Hz·JPEG 미리보기 10 Hz입니다. 기존 설정에 미리보기 주기가 없어도 다음 시작부터 10 Hz를 사용합니다. Windows 릴레이는 BELOW_NORMAL 우선순위로 게임에 CPU를 양보합니다. 시간이 끝나면 중지합니다. F11·게임 오류·프로세스 종료 뒤에는 사용자가 시작을 눌러 새 실행을 엽니다. 게임 실행과 운전은 사용자가 맡습니다.
+`실행 시간(초)`, `카메라 Hz`, `라이다 Hz`, `미리보기 Hz`는 시작할 때 `config/bridge.local.json`에 저장됩니다. 기본 주기는 카메라 30 Hz·라이다 10 Hz·JPEG 미리보기 10 Hz입니다. 기존 설정에 미리보기 주기가 없어도 다음 시작부터 10 Hz를 사용합니다. Windows 릴레이는 BELOW_NORMAL 우선순위로 게임에 CPU를 양보합니다. 시간이 끝나면 중지합니다. F11·게임 오류·프로세스 종료 뒤에는 사용자가 시작을 눌러 새 실행을 엽니다. 게임 실행·기어·주차브레이크는 사용자가 설정합니다.
+
+**입력·상태만**을 체크하면 이번 실행만 센서 슬롯을 비워 FH4에서도 상태·운전 API를 연결합니다. 기존 센서 설정은 유지하며, 체크를 풀고 다시 시작하면 원래 슬롯을 사용합니다. 변경된 체크박스를 사용하려면 기존 런처를 정상적으로 닫고 다시 엽니다.
 
 기존 수동 브리지가 같은 포트를 사용하면 런처가 충돌을 표시합니다. 기존 실행을 종료한 뒤 시작합니다. 다른 WSL 작업과 게임 프로세스는 유지됩니다.
 
@@ -95,7 +97,7 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 
 ## 운전 명령 API
 
-0.27.0은 공식 SCS Input SDK에 `ot_drive` 가상 3축 장치를 등록합니다. 사람의 키보드/Xbox 바인딩을 유지하면서 컴퓨터가 횡방향 조향과 종방향 가속·제동을 보냅니다. 조향은 정규화 위치 입력이며 FFB나 조향 토크 제어는 구현하지 않았습니다. 설치와 장치 등록, disarmed Xbox 좌우·RT/LT 대조, 실제 ROS arm/disarm을 확인했습니다. 자동 명령 적용·만료의 게임 시험은 진행 중입니다.
+0.27.0은 공식 SCS Input SDK에 `ot_drive` 가상 3축 장치를 등록합니다. 사람의 키보드/Xbox 바인딩을 유지하면서 컴퓨터가 횡방향 조향과 종방향 가속·제동을 보냅니다. 장치 등록·disarmed Xbox 좌우/페달 대조·ROS arm/disarm과 FH4 실제 가속·조향·제동을 확인했습니다. FFB나 조향 토크 제어는 구현하지 않았습니다.
 
 최초 등록은 정상 게임 종료 → 새 loader/core 설치 → 게임 재시작 순서입니다. SDK는 input init 때만 장치를 등록하므로 기존 loader의 hot reload로 추가할 수 없습니다. 설치된 `ot_runtime/ot_config.json`에서 `allow_drive: true`, `singleplayer_research: true`, 활성 `controls.sii`의 절대 경로 `drive_controls_path`를 설정합니다. 저장소 기본 권한은 꺼져 있으며 센서 설정과 사용자 controls.sii는 바꾸지 않습니다.
 
@@ -105,7 +107,7 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 | `/ets2/drive/command` | `DriveCommand`: owner, epoch, 증가하는 sequence, command_window_ms, steering/throttle/brake |
 | `/ets2/drive/state` | `DriveState`: 활성/해제 이유, owner·epoch·마지막 승인 sequence, 유효창, 명령·물리입력·SDK 적용값 |
 
-steering은 **왼쪽 양수 [-1,1]**, throttle/brake는 **[0,1]**입니다. 현재 프로필의 steering mix가 semantical 값을 빼므로 SDK 장치에는 steering의 부호를 뒤집어 내보냅니다. 기존 `/ets2/vehicle/actuation`의 단위·부호는 유지합니다. applied 값은 게임의 effective 입력 관측이며 명령을 복사한 값이 아닙니다. 게임 입력 처리 순서에 따른 적용 지연은 게임 시험에서 확인합니다.
+DriveCommand.steering은 **왼쪽 양수 [-1,1]인 프로필 입력**, throttle/brake는 **[0,1]**입니다. 현재 Xbox 프로필의 `c_relatsteer=1`은 조향 위치를 변화시키는 상대 입력입니다. 따라서 이 하위 명령값을 바퀴 위치나 각도 목표로 해석하지 않습니다. 현재 프로필의 steering mix가 semantical 값을 빼므로 SDK 장치에는 steering의 부호를 뒤집어 내보냅니다. 기존 `/ets2/vehicle/actuation`의 단위·부호는 유지합니다. applied 값은 게임의 effective 입력 관측이며 명령을 복사한 값이 아닙니다. SDK 입력은 실제 게임 전경에서 소비됐습니다. 비전경 실행은 native 명령이 승인돼도 게임 입력 축과 속도가 0이었으며, 전경 실행에서 가속·제동이 적용됐습니다.
 
 arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기다립니다. Command의 `command_window_ms`는 **Windows monotonic clock의 절대 만료 시각(ms)**이며 duration·ROS stamp가 아닙니다. 최신 DriveState에서 받은 값을 그대로 복사합니다. DDS/TCP/pipe에서 지연된 명령에 새 수명을 붙이지 않으며, 이전 epoch·반복 sequence·만료된 명령은 거절합니다. owner는 식별자이며 기존 TCP pairing token과 로컬 pipe ACL을 대신하지 않습니다.
 
@@ -113,78 +115,34 @@ arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기
 
 수동 해제는 현재 프로필의 A/Left·D/Right·W/Up·S/Down 및 `joy.x/rt/lt`를 직접 읽습니다. controls.sii의 deadzone·축 변환을 적용하고, 반대 키나 키보드/패드가 서로 상쇄돼도 각 물리 source의 활동을 보고 해제합니다. pad 부재는 프로필의 `?0` fallback대로 중립이며 키보드 조작은 유지합니다. pad 연결 변화는 arm을 해제하고 읽기 오류·지원하지 않는 binding에서는 arm을 허용하지 않습니다. 프로필 변경은 권한 재읽기 또는 재시작으로 반영합니다. 현재 프로필의 `xinput_gamepad_1`과 Windows index 0은 disarmed 좌우 stick·RT/LT 대조에서 대응했습니다. deadzone 경계의 세밀한 대조와 armed 상태의 수동 해제·F11 시험은 남아 있습니다.
 
-2026-10-10 입력 시험 차량은 FH4였고 기존 카메라 보정은 FH5입니다. `slots: []`에서는 현재 SDK 바퀴로 base_link를 계산해 상태·입력을 연결합니다. 센서 슬롯을 선택하면 기존 차량·장착 검사로 잘못된 보정을 거절합니다. FH5 보정 파일은 변경하지 않았으며 이 시험은 IMU/GNSS 보정 검증이 아닙니다. 자동 시동 옵션이 켜져 있어 수동 RT 조작 때 엔진이 시작됐으므로, 현재 정차 자동 입력 시험의 throttle은 항상 0입니다.
+2026-10-10 입력 시험 차량은 FH4였고 기존 카메라 보정은 FH5입니다. `slots: []`에서는 현재 SDK 바퀴로 base_link를 계산해 상태·입력을 연결합니다. 센서 슬롯을 선택하면 기존 차량·장착 검사로 잘못된 보정을 거절합니다. FH5 보정 파일은 변경하지 않았으며 이 시험은 IMU/GNSS 보정 검증이 아닙니다. 자동 시동 옵션이 켜진 상태를 유지했습니다.
 
-### 속도 목표와 직접 조향
+### 속도 목표와 조향 위치 목표
 
-`drive_speed`는 GT 속도와 목표 속도의 차이로 throttle/brake를 계산하고, `steering`을 그대로 보냅니다. 첫 동작용 P 제어이며 ACC·차로 유지 제어기는 아닙니다. 실행 중 ROS parameter로 목표를 바꿀 수 있습니다. 속도 단위는 m/s, 조향은 양수 왼쪽 `[-1,1]`입니다. 엔진·D 기어·주차브레이크는 게임에서 설정합니다.
+`drive_speed`는 GT 속도로 throttle/brake를 계산하고 SDK applied steering으로 정규화 조향 위치를 추적합니다. `steering_target`은 **왼쪽 양수 [-1,1]인 applied steering 목표**이며 실제 바퀴 각도(rad)나 토크가 아닙니다. 현재 상대 입력 프로필에서는 PI feedback으로 하위 조향 입력을 계산하므로 사람의 Xbox 설정과 게임의 복귀·차량 물리를 유지합니다. ACC·차로 유지 제어기는 아직 없습니다.
 
-ROS 브리지가 실행 중인 WSL에서 같은 domain을 사용합니다:
-
-```bash
-source /path/to/ETS2-Autonomy-Lab/bridge/ros-env.sh
-ros2 run ets2_bridge drive_speed --ros-args -p arm:=true -p target_speed_mps:=2.0 -p steering:=0.0
-```
-
-다른 터미널에서 목표를 바꿉니다:
+1. 게임에서 엔진·D 기어·주차브레이크를 주행 가능한 상태로 설정합니다.
+2. `bridge/launch.cmd`에서 **입력·상태만**을 체크하고 **시작**합니다. 현재 FH4에 FH5 센서 보정을 적용하지 않으며 설정 파일의 slots를 편집할 필요가 없습니다.
+3. WSL에서 저장소 환경을 불러온 뒤 명시적으로 노드를 실행하고 게임 창으로 돌아갑니다. 런처와 같은 ROS domain 42를 사용합니다.
 
 ```bash
-ros2 param set /ets2_drive_speed target_speed_mps 3.0
-ros2 param set /ets2_drive_speed steering 0.1
+source /mnt/c/path/to/ETS2-Autonomy-Lab/bridge/ros-env.sh  # 실제 저장소 경로
+ros2 run ets2_bridge drive_speed --ros-args -p arm:=true -p target_speed_mps:=8.333333 -p steering_target:=0.0
 ```
 
-`arm` 기본값은 false이고, `arm:=true`를 명시한 실행만 시작합니다. Ctrl+C는 자신의 epoch를 해제합니다. 수동 조작·F11·만료·통신 단절 뒤 노드는 종료하며 자동으로 재arm하지 않습니다. `throttle_gain`·`brake_gain` 기본값 0.2는 속도 오차 1 m/s당 정규화 페달 0.2를 의미합니다. 두 페달은 동시에 적용하지 않으며 출력은 `[0,1]`입니다. gain은 차량 반응에 맞춰 조정할 수 있습니다.
+다른 WSL 터미널에서도 같은 환경을 불러온 뒤 실행 중 목표를 바꿉니다. 속도는 m/s이며 8.333333은 30 km/h입니다.
 
-CLI `topic pub --once`는 새 노드 발견 지연으로 200 ms 창을 놓칠 수 있습니다. 이미 연결된 노드에서 상태의 창을 받아 명령을 발행합니다. 다음 예는 **3초 동안 중립값만** 전송하며 실행 전에 새 장치 설치·권한·물리입력 대조가 필요합니다. 게임에 이 예를 실행한 검증은 아직 하지 않았습니다.
-
-```python
-import time
-import rclpy
-from ets2_msgs.msg import DriveCommand, DriveState
-from ets2_msgs.srv import DriveControl
-
-rclpy.init()
-node = rclpy.create_node('drive_neutral_example')
-latest = [None]
-sub = node.create_subscription(DriveState, '/ets2/drive/state',
-                               lambda state: latest.__setitem__(0, state), 1)
-pub = node.create_publisher(DriveCommand, '/ets2/drive/command', 1)
-service = node.create_client(DriveControl, '/ets2/drive/control')
-epoch = 0
-try:
-    if not service.wait_for_service(timeout_sec=5):
-        raise RuntimeError('Driving service unavailable')
-    ready_until = time.monotonic() + 5
-    while (latest[0] is None or pub.get_subscription_count() == 0) and time.monotonic() < ready_until:
-        rclpy.spin_once(node, timeout_sec=0.05)
-    if latest[0] is None or pub.get_subscription_count() == 0:
-        raise RuntimeError('Driving state/command connection unavailable')
-    future = service.call_async(DriveControl.Request(owner='neutral_example', arm=True))
-    rclpy.spin_until_future_complete(node, future, timeout_sec=1)
-    result = future.result()
-    if result is None or not result.success:
-        raise RuntimeError(result.message if result else 'Arm timed out')
-    epoch = result.epoch
-    sequence = 0
-    end = time.monotonic() + 3
-    while time.monotonic() < end:
-        rclpy.spin_once(node, timeout_sec=0.02)
-        state = latest[0]
-        if state.epoch != epoch:
-            continue  # Wait for the first state of this explicit arm.
-        if not state.armed:
-            break
-        sequence += 1
-        pub.publish(DriveCommand(owner='neutral_example', epoch=epoch,
-                    sequence=sequence, command_window_ms=state.command_window_ms,
-                    steering=0.0, throttle=0.0, brake=0.0))
-finally:
-    if epoch:
-        future = service.call_async(DriveControl.Request(owner='neutral_example', arm=False, epoch=epoch))
-        rclpy.spin_until_future_complete(node, future, timeout_sec=1)
-    node.destroy_node()
-    rclpy.shutdown()
+```bash
+ros2 param set /ets2_drive_speed steering_target 0.02
+ros2 param set /ets2_drive_speed steering_target 0.0
+ros2 param set /ets2_drive_speed target_speed_mps 0.0
 ```
+
+목표 속도 0은 제동으로 감속합니다. 멈춘 뒤 Ctrl+C로 자신의 epoch를 해제하고 런처의 **중지**로 브리지를 끝냅니다. `arm` 기본값은 false이며 수동 조작·F11·만료·통신 단절 뒤 자동 재arm하지 않습니다. `relative_steering` 기본 true는 현재 `c_relatsteer=1` 프로필에 대응합니다. absolute 프로필(`c_relatsteer=0`)에서는 시작할 때 `-p relative_steering:=false`를 지정합니다.
+
+속도 P gain인 `throttle_gain`·`brake_gain` 기본값은 0.2이며 두 페달을 동시에 보내지 않습니다. 상대 조향 PI gain은 `steering_gain=2.0`, `steering_integral_gain=1.0`입니다. 목표·gain은 실행 중 변경할 수 있고 arm·입력 모드는 시작 옵션입니다. 원시 API 소비자는 최신 DriveState의 유효창을 복사해 연결된 노드에서 반복 발행해야 합니다. 새 `topic pub --once` 노드의 discovery 지연은 200 ms 창을 놓칠 수 있습니다.
+
+2026-10-10 FH4 실제 제품 실행은 894/894 표본이 전경이었고, 목표 30 km/h에 최대 **28.62 km/h**였습니다. 조향 목표 .02에 applied는 약 **.0180**까지 따라갔으며, 0 복귀·제동 후 **.00228**이었습니다. 속도 목표 0으로 **.01253 m/s**까지 감속한 뒤 종료했고 최종 관측은 정지·disarmed·출력 3축 0이었습니다. 단순 속도 P 제어의 정상상태 오차와 조향 추종 오차는 남아 있습니다. armed 수동 해제·실제 F11·200 ms 만료의 게임 시험은 아직 수행하지 않았습니다.
 
 ## 기록과 재생
 

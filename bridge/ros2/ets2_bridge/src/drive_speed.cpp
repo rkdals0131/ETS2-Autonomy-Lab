@@ -22,17 +22,20 @@ int main(int argc,char** argv) {
     auto node=std::make_shared<rclcpp::Node>("ets2_drive_speed");
     const auto arm=node->declare_parameter("arm",false);
     node->declare_parameter("target_speed_mps",0.0);
-    node->declare_parameter("steering",0.0);
+    node->declare_parameter("steering_target",0.0);
+    node->declare_parameter("relative_steering",true);
+    node->declare_parameter("steering_gain",2.0);
+    node->declare_parameter("steering_integral_gain",1.0);
     node->declare_parameter("throttle_gain",0.2);
     node->declare_parameter("brake_gain",0.2);
     const auto owner="speed-"+std::to_string(getpid())+"-"+std::to_string(Clock::now().time_since_epoch().count());
     auto parameters=node->add_on_set_parameters_callback([](const auto& values) {
         rcl_interfaces::msg::SetParametersResult result;result.successful=true;
         for(const auto& p:values) {
-            if(p.get_name()=="arm") {result.successful=false;result.reason="arm is an explicit startup option; restart to arm again";break;}
-            if(p.get_name()=="target_speed_mps" || p.get_name()=="steering" || p.get_name()=="throttle_gain" || p.get_name()=="brake_gain") {
+            if(p.get_name()=="arm" || p.get_name()=="relative_steering") {result.successful=false;result.reason="Input mode and arm are startup options; restart explicitly";break;}
+            if(p.get_name()=="target_speed_mps" || p.get_name()=="steering_target" || p.get_name()=="throttle_gain" || p.get_name()=="brake_gain" || p.get_name()=="steering_gain" || p.get_name()=="steering_integral_gain") {
                 if(p.get_type()!=rclcpp::ParameterType::PARAMETER_DOUBLE || !std::isfinite(p.as_double()) ||
-                   (p.get_name()=="steering"?std::abs(p.as_double())>1:p.as_double()<0)) {
+                   (p.get_name()=="steering_target"?std::abs(p.as_double())>1:p.as_double()<0)) {
                     result.successful=false;result.reason="Speed/gains must be finite and nonnegative; steering must be in [-1,1]";break;
                 }
             }
@@ -40,9 +43,9 @@ int main(int argc,char** argv) {
         return result;
     });
     const auto settings_valid=[&] {
-        for(const auto* name:{"target_speed_mps","steering","throttle_gain","brake_gain"}) {
+        for(const auto* name:{"target_speed_mps","steering_target","throttle_gain","brake_gain","steering_gain","steering_integral_gain"}) {
             const auto value=node->get_parameter(name).as_double();
-            if(!std::isfinite(value) || (std::string_view(name)=="steering"?std::abs(value)>1:value<0)) return false;
+            if(!std::isfinite(value) || (std::string_view(name)=="steering_target"?std::abs(value)>1:value<0)) return false;
         }
         return true;
     };
@@ -87,7 +90,7 @@ int main(int argc,char** argv) {
             rclcpp::spin_some(node);std::this_thread::sleep_for(2ms);
         }
         std::cout<<"Driving armed; owner="<<owner<<", epoch="<<epoch<<". Ctrl+C releases control."<<std::endl;
-        auto report=Clock::now();
+        auto report=Clock::now(),previous=report;double steering_integral=0;
         while(!stopped && rclcpp::ok()) {
             rclcpp::spin_some(node);const auto now=Clock::now();
             if(!drive->armed || drive->owner!=owner || drive->epoch!=epoch) throw std::runtime_error("Driving released: "+drive->reason);
@@ -96,13 +99,24 @@ int main(int argc,char** argv) {
             const auto error=node->get_parameter("target_speed_mps").as_double()-vehicle->speed_mps;
             ets2_msgs::msg::DriveCommand command;
             command.owner=owner;command.epoch=epoch;command.sequence=++sequence;command.command_window_ms=drive->command_window_ms;
-            command.steering=node->get_parameter("steering").as_double();
+            const auto steering_target=node->get_parameter("steering_target").as_double();
+            command.steering=steering_target;
+            if(node->get_parameter("relative_steering").as_bool()) {
+                if(!std::isfinite(drive->steering_applied)) throw std::runtime_error("Applied steering feedback is unavailable");
+                const auto steering_error=steering_target-drive->steering_applied;
+                const auto proportional=steering_error*node->get_parameter("steering_gain").as_double();
+                const auto candidate=steering_integral+steering_error*node->get_parameter("steering_integral_gain").as_double()*std::chrono::duration<double>(now-previous).count();
+                // Do not accumulate error pushing further into a saturated input.
+                if(std::abs(proportional+candidate)<=1 || steering_error*(proportional+candidate)<0) steering_integral=candidate;
+                command.steering=std::clamp(proportional+steering_integral,-1.0,1.0);
+            }
+            previous=now;
             command.throttle=std::clamp(error*node->get_parameter("throttle_gain").as_double(),0.0,1.0);
             command.brake=std::clamp(-error*node->get_parameter("brake_gain").as_double(),0.0,1.0);
             publisher->publish(command);
             if(now>=report) {
                 std::cout<<"speed="<<vehicle->speed_mps<<" target="<<node->get_parameter("target_speed_mps").as_double()
-                    <<" steering="<<command.steering<<" throttle="<<command.throttle<<" brake="<<command.brake
+                    <<" steering_target="<<steering_target<<" steering_applied="<<drive->steering_applied<<" steering_input="<<command.steering<<" throttle="<<command.throttle<<" brake="<<command.brake
                     <<" accepted_sequence="<<drive->sequence<<std::endl;
                 report=now+1s;
             }

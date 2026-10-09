@@ -85,6 +85,7 @@ class Controller:
         self.relay = self.wsl = self.job = self.stop_event = None
         self.unit = None
         self.desired = False
+        self.input_only = False
         self.closed = threading.Event()
         self.worker = threading.Thread(target=self._loop, daemon=False)
         self.worker.start()
@@ -124,7 +125,7 @@ class Controller:
         threading.Thread(target=read, daemon=True).start()
         return process
 
-    def _start(self, duration, camera_hz=None, lidar_hz=None, preview_hz=None):
+    def _start(self, duration, camera_hz=None, lidar_hz=None, preview_hz=None, input_only=False):
         if self.desired or self.wsl or self.relay:
             return
         if self.unit:
@@ -162,6 +163,7 @@ class Controller:
         if not (ROOT / "dist" / "ets2_relay.exe").is_file():
             raise RuntimeError("bridge/build.cmd를 먼저 실행해 주세요.")
         self.desired = True
+        self.input_only = bool(input_only)
         self.started = time.monotonic()
         self.last_wsl = self.last_relay = self.last_heartbeat = 0.0
         self.job = Job()
@@ -195,7 +197,10 @@ class Controller:
         self.stop_event = K.CreateEventW(None, True, False, name)
         if not self.stop_event:
             raise C.WinError(C.get_last_error())
-        self.relay = self.spawn([str(ROOT / "dist" / "ets2_relay.exe"), str(self.config), name], "relay")
+        command = [str(ROOT / "dist" / "ets2_relay.exe"), str(self.config), name]
+        if self.input_only:
+            command.append("--input-only")
+        self.relay = self.spawn(command, "relay")
         self.last_relay = time.monotonic()
         self.update(phase="connecting", message="게임과 ROS 사이의 실제 응답을 기다립니다.", relay_pid=self.relay.pid)
 
@@ -333,9 +338,9 @@ class Controller:
                         self._stop()
                     elif action == "restart":
                         self._stop()
-                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"))
+                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False))
                     elif action == "start":
-                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"))
+                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False))
                     elif action in ("record_start", "record_stop"):
                         self._record(action, values.get("profile", "state"))
                 except queue.Empty:
@@ -385,6 +390,7 @@ def show_window(controller):
     duration = tk.StringVar(value="110")
     camera_hz, lidar_hz = tk.StringVar(value="30"), tk.StringVar(value="10")
     preview_hz = tk.StringVar(value="10")
+    input_only = tk.BooleanVar(value=False)
     try:
         settings = json.loads(controller.config.read_text(encoding="utf-8"))
         duration.set(str(settings["duration_s"]))
@@ -394,7 +400,7 @@ def show_window(controller):
     except (OSError, ValueError, KeyError):
         pass
     def request(action):
-        controller.request(action, duration=duration.get(), camera_hz=camera_hz.get(), lidar_hz=lidar_hz.get(), preview_hz=preview_hz.get())
+        controller.request(action, duration=duration.get(), camera_hz=camera_hz.get(), lidar_hz=lidar_hz.get(), preview_hz=preview_hz.get(), input_only=input_only.get())
     start = ttk.Button(actions, text="시작", command=lambda: request("start"))
     start.pack(side="left")
     stop = ttk.Button(actions, text="중지", command=lambda: request("stop"))
@@ -412,6 +418,7 @@ def show_window(controller):
         entry = ttk.Entry(rates, textvariable=variable, width=7)
         entry.pack(side="left", padx=(0, 18))
         rate_entries.append(entry)
+    ttk.Checkbutton(frame, text="입력·상태만 (다음 시작에 적용, 센서 설정 유지)", variable=input_only).pack(anchor="w", pady=(8, 0))
     recording_box = ttk.LabelFrame(frame, text="주행 기록", padding=8)
     recording_box.pack(fill="x", pady=(12, 0))
     recording_actions = ttk.Frame(recording_box)
