@@ -8,6 +8,8 @@ namespace ot {
 struct LidarPattern {
     json description;
     std::vector<std::array<float,4>> directions;
+    bool interpolate=false;
+    float depth_edge_ratio=1.04f;
 };
 std::shared_ptr<const LidarPattern> make_lidar_pattern(const json& config);
 struct ExposureState {

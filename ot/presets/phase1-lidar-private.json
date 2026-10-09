@@ -30,7 +30,9 @@
           11
         ]
       ],
-      "max_range": 250
+      "max_range": 250,
+      "sampling": "inverse_depth_bilinear",
+      "depth_edge_ratio": 1.04
     },
     {
       "name": "L_PL",
@@ -50,7 +52,9 @@
           64
         ]
       ],
-      "max_range": 150
+      "max_range": 150,
+      "sampling": "inverse_depth_bilinear",
+      "depth_edge_ratio": 1.04
     },
     {
       "name": "L_PR",
@@ -70,7 +74,9 @@
           64
         ]
       ],
-      "max_range": 150
+      "max_range": 150,
+      "sampling": "inverse_depth_bilinear",
+      "depth_edge_ratio": 1.04
     }
   ]
 }

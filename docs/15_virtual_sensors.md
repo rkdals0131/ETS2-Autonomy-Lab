@@ -14,10 +14,12 @@
 
 1. 빔을 실제 projection·viewport로 소스 픽셀에 투영합니다.
 2. 소스 순서에서 시야에 들어오는 첫 카메라를 선택합니다. 소스들은 같은 광학 원점을 사용합니다.
-3. nearest 픽셀의 DSV 깊이를 읽고 `range = optical_depth / -beam_eye_z`로 변환합니다.
+3. DSV에서 복원한 미터 깊이의 **역수(1/Z)**를 주변 네 픽셀로 보간하고 `range = optical_depth / -beam_eye_z`로 변환합니다. 평면의 역수 깊이는 화면 좌표에 선형입니다.
 4. Windows 릴레이가 빔 방향×range로 XYZ를 만들고 ROS 메시지에 직접 씁니다.
 
-라이다만 구독하면 전체 depth 영상의 CPU readback을 생략합니다. 물체 경계는 픽셀 단위 근사이며 `source_ray_error_deg`로 빔과 소스 픽셀 중심의 각도 차이를 제공합니다.
+현재 프리셋의 `sampling`은 `inverse_depth_bilinear`, `depth_edge_ratio`는 1.04입니다. 네 픽셀이 모두 유효하고 깊이 최댓값/최솟값이 이 비율 이내일 때 보간합니다. 시야 끝·결측·큰 깊이 차이에서는 nearest로 돌아갑니다. 경계 보호가 일부 급경사·먼 바닥의 보간도 막으므로 그 부분에는 계단이 남습니다. 4% 이내의 작은 물체 경계까지 완전히 구분하지는 못합니다. 비교용 `sampling: nearest`도 지원하며 빔 각도·링 배열은 두 방식에서 같습니다.
+
+라이다만 구독하면 전체 depth 영상의 CPU readback을 생략합니다. `source_pixel_x/y`와 `source_ray_error_deg`는 가장 가까운 기준 픽셀과 그 중심 광선을 가리킵니다. 보간 시 깊이에 기여하는 픽셀은 최대 네 개입니다.
 
 | 필드 | 의미 |
 | --- | --- |
@@ -25,7 +27,7 @@
 | beam_index | 빔 index |
 | status | 0 반환, 1 소스 시야 밖, 2 유효 깊이 없음, 3 거리 초과 |
 | source_camera | 원본 렌더 슬롯 |
-| source_pixel_x/y | 선택한 원본 픽셀 |
+| source_pixel_x/y | nearest 기준 픽셀 |
 | source_ray_error_deg | 빔과 픽셀 중심 광선의 차이 |
 
 결측 빔의 XYZ·range는 NaN입니다. 렌더 visibility·LOD·가림이 관측 범위를 결정합니다. 현재 센서는 노이즈 없는 순간 깊이 관측이며 intensity·다중 반사·회전 스캔 시간차·재질별 미검출은 후속 기능입니다.
@@ -38,7 +40,17 @@
 
 ## 정합과 오프라인 도구
 
-같은 DSV의 GPU 빔 106,799개를 Python 복원과 대조했습니다. 같은 픽셀 선택 시 최대 range 차이는 전방 0.0000763m, 측면 0.0000305m였습니다. FP32/FP64 투영의 경계 픽셀 선택 차이로 양쪽 유효 빔의 최대 차이는 0.046m였습니다.
+0.24.4의 실제 정차 프레임 106,799빔을 Python과 대조했습니다. 같은 기준 픽셀의 유효 빔 83,480개에서 최대 거리 차이는 0.145mm였습니다. 픽셀·시야 경계의 FP32/FP64 투영 차이로 311빔은 기준 픽셀 또는 소스가 달랐고, 이 중 물체 경계에서는 서로 다른 표면을 선택했습니다.
+
+같은 원시 DSV에서 높이 35m인 평평한 바닥을 골라 5–80m 빔을 비교했습니다. 바닥 선정은 기준 픽셀 주변 3×3 DSV 점의 높이로 수행했습니다.
+
+| 센서 | 바닥 빔 수 | nearest 높이 RMS | GPU 보간 높이 RMS |
+| --- | ---: | ---: | ---: |
+| L_F | 4,797 | 12.13mm | 0.042mm |
+| L_PL | 13,265 | 10.04mm | 3.53mm |
+| L_PR | 13,715 | 9.75mm | 1.95mm |
+
+측면의 보간 제외 지점에는 최대 약 81mm의 기존 오차가 남았습니다. 원본과 계산 결과는 로컬 `research/live/2026-10-09-lidar-interpolation/`에 있습니다. ROS에서도 4뷰·GT 각각 374회, 라이다 각각 125회 수신했습니다.
 
 ```powershell
 .\ot\ot.cmd lidar '<frame.tar.zst>' --config .\ot\presets\phase1-lidar-private.json --output lidar.npz

@@ -1,6 +1,7 @@
 """Instantaneous ideal LiDAR beams sampled from co-located rendered depth views.
 
-No ray casting, surface interpolation, intensity, noise or rolling scan model.
+Depth sampling supports nearest or edge-limited inverse-depth interpolation.
+No intensity, noise or rolling scan model.
 Missing depth is unknown, never evidence of an empty beam.
 """
 import io
@@ -18,6 +19,10 @@ def load_lidar_profile(path):
     config = json.loads(Path(path).read_text(encoding="utf-8"))
     sensors = []
     for item in config["sensors"]:
+        method = item.setdefault("sampling", "nearest")
+        edge_ratio = float(item.setdefault("depth_edge_ratio", 1.04))
+        if method not in ("nearest", "inverse_depth_bilinear") or not np.isfinite(edge_ratio) or edge_ratio < 1:
+            raise ValueError("Invalid LiDAR depth sampling method or edge ratio")
         start, end, step = np.asarray(item["azimuth_deg"], dtype=float)
         bands = np.asarray(item["elevation_bands_deg"], dtype=float).reshape(-1, 3)
         maximum = float(item["max_range"])
@@ -98,7 +103,10 @@ def sample_lidars(bundle, profile, *, include_points=True):
                 raise ValueError("LiDAR requires a perspective source camera")
             vp = meta["geometry_gpu"]["viewports"][0]
             width, height = meta["images"][0]["width"], meta["images"][0]["height"]
-            eye_direction = world_direction @ rotation.T
+            # The axis camera has the exact sensor basis. Avoid multiplying a
+            # rotation by its numerical inverse at pixel-boundary beam angles.
+            eye_direction = (direction @ camera_from_sensor.T if name == settings["axis_camera"]
+                             else world_direction @ rotation.T)
             clip = np.column_stack((eye_direction, np.zeros(count))) @ projection.T
             ndc = np.full((count, 2), np.nan)
             np.divide(clip[:, :2], clip[:, 3:4], out=ndc, where=clip[:, 3:4] > 0)
@@ -108,17 +116,38 @@ def sample_lidars(bundle, profile, *, include_points=True):
                        & np.isfinite(uv).all(axis=1) & (np.abs(ndc) <= 1).all(axis=1)
                        & (uv >= 0).all(axis=1) & (uv < [width, height]).all(axis=1))
             indices = np.flatnonzero(covered)
-            # Pixel coordinates above refer to boundaries; floor chooses the
-            # nearest center, with no interpolation across object boundaries.
+            # Keep the nearest center as the source reference and edge fallback.
             selected_pixels = np.floor(uv[indices]).astype(np.int32)
             arrays, _ = reconstruct_view(meta,
                 lambda filename, dtype: np.frombuffer(files[name, filename], dtype=dtype),
                 pixel_xy=selected_pixels)
             sample = arrays["xyz_camera"].astype(np.float64)
-            # Use the chosen pixel's Z on the requested beam (constant-Z pixel
-            # footprint approximation), rather than snapping the beam's angle.
+            sample_z = sample[:, 2].copy()
+            interpolated = 0
+            if settings["sampling"] == "inverse_depth_bilinear" and len(indices):
+                p = uv[indices] - .5
+                base = np.floor(p).astype(np.int32)
+                fraction = p - base
+                neighbors = base[:, None, :] + np.array([[0, 0], [1, 0], [0, 1], [1, 1]])
+                in_bounds = ((neighbors >= [0, 0]).all(axis=(1, 2))
+                             & (neighbors < [width, height]).all(axis=(1, 2))
+                             & (neighbors + .5 >= [vp["x"], vp["y"]]).all(axis=(1, 2))
+                             & (neighbors + .5 < [vp["x"]+vp["width"], vp["y"]+vp["height"]]).all(axis=(1, 2)))
+                bounded = np.clip(neighbors, [0, 0], [width-1, height-1])
+                adjacent, _ = reconstruct_view(meta,
+                    lambda filename, dtype: np.frombuffer(files[name, filename], dtype=dtype),
+                    pixel_xy=bounded.reshape(-1, 2))
+                zs = -adjacent["xyz_camera"][:, 2].reshape(-1, 4).astype(np.float64)
+                smooth = (in_bounds & adjacent["valid"].reshape(-1, 4).all(axis=1)
+                          & (zs.max(axis=1) <= zs.min(axis=1)*settings["depth_edge_ratio"]))
+                inv = 1 / zs[smooth]
+                fx, fy = fraction[smooth].T
+                upper = inv[:, 0]*(1-fx) + inv[:, 1]*fx
+                lower = inv[:, 2]*(1-fx) + inv[:, 3]*fx
+                sample_z[smooth] = -1 / (upper*(1-fy) + lower*fy)
+                interpolated = int(smooth.sum())
             eye_offset = (origin-source_origin) @ rotation.T
-            distance = (sample[:, 2]-eye_offset[2]) / eye_direction[indices, 2]
+            distance = (sample_z-eye_offset[2]) / eye_direction[indices, 2]
             source_index[indices] = names.index(name)
             pixels[indices] = selected_pixels
             status[indices] = 2  # covered, but missing/invalid depth
@@ -132,6 +161,7 @@ def sample_lidars(bundle, profile, *, include_points=True):
             dot = (actual_direction * world_direction[indices[has_depth]]).sum(axis=1)
             angular_error[indices[has_depth]] = np.rad2deg(np.arccos(np.clip(dot, -1, 1)))
             source_info.append({"camera": name, "selected_beams": len(indices),
+                                "interpolated_beams": interpolated,
                                 "origin_offset_world_xyz": delta.tolist(),
                                 "camera_qpc": camera["qpc"], "copy_qpc": meta["copy_submission_qpc"],
                                 "width": width, "height": height})
@@ -163,7 +193,7 @@ def sample_lidars(bundle, profile, *, include_points=True):
                 "world_units": next(iter(units)), "source_cameras": names, "sensors": descriptions,
                 "sensor_axes": "x forward, y left, z up; optical axis and origin of axis_camera",
                 "status_codes": {"0": "return", "1": "outside_source_views", "2": "invalid_depth", "3": "beyond_max_range"},
-                "depth_source": "geometry DSV; nearest pixel, constant-Z footprint on requested beam",
+                "depth_source": "geometry DSV; per-sensor sampling setting, nearest reference pixel and edge fallback",
                 "scope": "Ideal instantaneous rendered-depth samples; no noise, intensity, rolling scan or ray casting. Missing beams are unknown. Engine visibility omissions remain."}
     return arrays, metadata
 

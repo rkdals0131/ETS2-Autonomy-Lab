@@ -61,10 +61,10 @@ void ExposureState::update(ID3D11DeviceContext1* context,ID3D11ShaderResourceVie
     const auto now=qpc_now();const float dt=previous?static_cast<float>(std::min(1.0,double(now-previous)/qpc_frequency())):0;
     previous=now;std::array<float,4> parameters{dt,0,0,0};
     context->UpdateSubresource(constants.Get(),0,nullptr,parameters.data(),0,0);
-    ComputeState restore(context);
     ID3D11ShaderResourceView* inputs[]{source,nullptr,nullptr,nullptr};
     context->CSSetShaderResources(0,4,inputs);context->CSSetUnorderedAccessViews(0,1,output.GetAddressOf(),nullptr);
     context->CSSetConstantBuffers(0,1,constants.GetAddressOf());context->CSSetShader(shader.Get(),nullptr,0);context->Dispatch(1,1,1);
+    ID3D11UnorderedAccessView* unbound{};context->CSSetUnorderedAccessViews(0,1,&unbound,nullptr);
 }
 void GpuPack::release_gpu() {
     exposure_staging_.Reset();
@@ -76,6 +76,12 @@ void GpuPack::release_gpu() {
 }
 std::shared_ptr<const LidarPattern> make_lidar_pattern(const json& config) {
     auto result=std::make_shared<LidarPattern>();
+    const auto sampling=config.value("sampling",std::string("nearest"));
+    if(sampling!="nearest" && sampling!="inverse_depth_bilinear") throw std::runtime_error("Unknown LiDAR depth sampling method");
+    result->interpolate=sampling=="inverse_depth_bilinear";
+    result->depth_edge_ratio=config.value("depth_edge_ratio",1.04f);
+    if(!std::isfinite(result->depth_edge_ratio) || result->depth_edge_ratio<1)
+        throw std::runtime_error("LiDAR depth edge ratio must be finite and at least one");
     const auto az=config.at("azimuth_deg").get<std::array<double,3>>();
     const auto matrix=config.at("camera_from_sensor").get<std::array<double,9>>();
     const double maximum=config.at("max_range");
@@ -105,6 +111,8 @@ std::shared_ptr<const LidarPattern> make_lidar_pattern(const json& config) {
             static_cast<float>(source[2]/norm),static_cast<float>(maximum)});
     }
     result->description=config;result->description["elevations_deg"]=elevations;
+    result->description["sampling"]=sampling;
+    result->description["depth_edge_ratio"]=result->depth_edge_ratio;
     result->description["columns"]=columns;result->description["beam_count"]=result->directions.size();
     return result;
 }
@@ -123,7 +131,7 @@ void GpuPack::gather(ID3D11DeviceContext1* context,const std::shared_ptr<const L
         check(device_->CreateUnorderedAccessView(work.output.Get(),nullptr,&work.uav),"CreateUAV(lidar returns)");++allocations_;
         desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.MiscFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
         check(device_->CreateBuffer(&desc,nullptr,&work.staging),"CreateBuffer(lidar staging)");++allocations_;
-        desc={};desc.ByteWidth=96;desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
+        desc={};desc.ByteWidth=112;desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
         check(device_->CreateBuffer(&desc,nullptr,&work.constants),"CreateBuffer(lidar constants)");++allocations_;
         check(device_->CreateComputeShader(ot_gather_lidar,sizeof(ot_gather_lidar),nullptr,&work.shader),"CreateCS(lidar)");++allocations_;
     }
@@ -131,17 +139,18 @@ void GpuPack::gather(ID3D11DeviceContext1* context,const std::shared_ptr<const L
         work.depth.Reset();check(device_->CreateShaderResourceView(work_[0].output.Get(),nullptr,&work.depth),"CreateSRV(lidar depth)");++allocations_;
         work.depth_source=work_[0].output.Get();
     }
-    struct Parameters {std::array<float,16> projection;std::array<float,4> viewport;std::array<UINT,4> dimensions;};
+    struct Parameters {std::array<float,16> projection;std::array<float,4> viewport;std::array<UINT,4> dimensions;std::array<float,4> sampling;};
     Parameters values{projection.get<std::array<float,16>>(),{vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height},
-        {work_[0].output_desc.Width,work_[0].output_desc.Height,count,0}};
-    static_assert(sizeof(values)==96);
+        {work_[0].output_desc.Width,work_[0].output_desc.Height,count,pattern->interpolate?1u:0u},
+        {pattern->depth_edge_ratio,0,0,0}};
+    static_assert(sizeof(values)==112);
     context->UpdateSubresource(work.constants.Get(),0,nullptr,&values,0,0);
     {
-        ComputeState restore(context);
         ID3D11ShaderResourceView* resources[]{work.depth.Get(),work.directions.Get(),nullptr};
         context->CSSetShaderResources(0,3,resources);context->CSSetUnorderedAccessViews(0,1,work.uav.GetAddressOf(),nullptr);
         context->CSSetConstantBuffers(0,1,work.constants.GetAddressOf());context->CSSetShader(work.shader.Get(),nullptr,0);
         context->Dispatch((count+127)/128,1,1);
+        ID3D11UnorderedAccessView* unbound{};context->CSSetUnorderedAccessViews(0,1,&unbound,nullptr);
     }
     context->CopyResource(work.staging.Get(),work.output.Get());
     lidar_pixels.resize(static_cast<size_t>(count)*16);
@@ -152,6 +161,8 @@ void GpuPack::gather(ID3D11DeviceContext1* context,const std::shared_ptr<const L
 void GpuPack::depth(ID3D11DeviceContext1* context,ID3D11Texture2D* source,
                     ID3D11Texture2D* attributes,ID3D11Texture2D* material,
                     const D3D11_VIEWPORT& vp,const std::string& camera,const json* projection,bool readback,std::shared_ptr<const LidarPattern> lidar) {
+    // Conversion and gather share one save/restore of the game's compute state.
+    ComputeState restore(context);
     std::array<float,28> values{0,0,0,0,vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height,vp.MinDepth,vp.MaxDepth};
     if(projection) {
         const auto p=projection->get<std::array<float,16>>();
@@ -169,6 +180,7 @@ void GpuPack::depth(ID3D11DeviceContext1* context,ID3D11Texture2D* source,
     if(lidar) gather(context,lidar,*projection,vp,camera);
 }
 void GpuPack::color(ID3D11DeviceContext1* context,ID3D11Texture2D* source,float gain,const std::string& camera,bool preview) {
+    ComputeState restore(context); // Exposure update and color packing are one operation.
     dispatch(context,{source,nullptr,nullptr},{gain,0,preview?2.0f:1.0f,exposure_?1.f:0.f,0,0,0,0,0,0,0,0},preview?2:1,camera);
 }
 void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*,3> sources,
@@ -247,13 +259,14 @@ void GpuPack::dispatch(ID3D11DeviceContext1* context,std::array<ID3D11Texture2D*
     }
     context->UpdateSubresource(work.constants.Get(),0,nullptr,values.data(),0,0);
     {
-        ComputeState restore(context);
         ID3D11ShaderResourceView* inputs[]={views[0].Get(),views[1].Get(),views[2].Get(),!depth && exposure_?exposure_->view.Get():nullptr};
         context->CSSetShaderResources(0,4,inputs);
         context->CSSetUnorderedAccessViews(0,1,work.uav.GetAddressOf(),nullptr);
         context->CSSetConstantBuffers(0,1,work.constants.GetAddressOf());
         context->CSSetShader(work.shader.Get(),nullptr,0);
         context->Dispatch((desc.Width+7)/8,(desc.Height+7)/8,1);
+        // The next gather/exposure consumer may read this output as an SRV.
+        ID3D11UnorderedAccessView* unbound{};context->CSSetUnorderedAccessViews(0,1,&unbound,nullptr);
     }
     if(!readback) {image.description=nullptr;return;}
     if(!shared_ && !image.staging) {
