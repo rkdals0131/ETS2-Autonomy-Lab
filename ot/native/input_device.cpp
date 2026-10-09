@@ -16,10 +16,10 @@ public:
         permitted_=permitted;control_.configure(available_,permitted_,bool(profile_),error_.c_str());
         sample();
     }
-    bool request(const OtDriveRequest& request,OtDriveStatus& result) noexcept {
+    bool request(const OtDriveRequest& request,OtDriveStatus& result,uint32_t axes=ot_drive_all,uint32_t* actual_axes=nullptr) noexcept {
         std::lock_guard lock(mutex_);
         if(request.action==OtDriveAction::arm) sample();
-        return control_.request(request,GetTickCount64(),result);
+        return control_.request(request,GetTickCount64(),result,axes,actual_axes);
     }
     void release(OtDriveReason reason) {std::lock_guard lock(mutex_);control_.release(reason);}
     void pause(bool paused) {std::lock_guard lock(mutex_);control_.paused(paused);}
@@ -49,7 +49,7 @@ private:
         for(size_t i=0;i<8;++i) input.keys[i]=(GetAsyncKeyState(keys[i])&0x8000)!=0;
         const bool panic_down=in_game && (GetAsyncKeyState(VK_F11)&0x8000);
         std::array<float,3> result{};
-        try {const auto manual=profile_?profile_->evaluate(input):ManualInput::Sample{};result=control_.frame(GetTickCount64(),active_ && source_known && bool(profile_) && !panic_down,manual.values,manual.active);}
+        try {const auto manual=profile_?profile_->evaluate(input):ManualInput::Sample{};result=control_.frame(GetTickCount64(),active_ && source_known && bool(profile_) && !panic_down,manual.values,manual.active_axes);}
         catch(...) {control_.release(OtDriveReason::profile_unsupported);}
         if(panic_down) {result={};control_.release(OtDriveReason::panic);}
         return result;
@@ -66,7 +66,8 @@ InputDevice device;
 const OtDriveHost host{1,sizeof(OtDriveHost),&device,
     [](void* context,bool allowed,const char* path){static_cast<InputDevice*>(context)->configure(allowed,path);},
     [](void* context,const OtDriveRequest* request,OtDriveStatus* result){return static_cast<InputDevice*>(context)->request(*request,*result);},
-    [](void* context,OtDriveReason reason){static_cast<InputDevice*>(context)->release(reason);}};
+    [](void* context,OtDriveReason reason){static_cast<InputDevice*>(context)->release(reason);},
+    [](void* context,const OtDriveRequest* request,uint32_t axes,OtDriveStatus* result,uint32_t* actual){return static_cast<InputDevice*>(context)->request(*request,*result,axes,actual);}};
 }
 const OtDriveHost* drive_host() {return &host;}
 void input_release(OtDriveReason reason) {device.release(reason);}

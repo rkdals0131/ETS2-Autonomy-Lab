@@ -187,7 +187,7 @@ class Controller:
             self.wsl.stdin.write(json.dumps({"action": action, **values}) + "\n")
             self.wsl.stdin.flush()
 
-    def _drive(self, action, speed_kmh=30):
+    def _drive(self, action, speed_kmh=30, acc=True, lcc=True):
         if action == "drive_stop":
             if self.provider and self.provider.poll() is None:
                 self.provider.terminate()
@@ -197,11 +197,18 @@ class Controller:
             return
         if self.snapshot()["phase"] != "running" or not self.input_only:
             raise RuntimeError("입력·상태만으로 브리지를 시작한 뒤 GT 주행을 눌러 주세요.")
-        if self.provider or self.snapshot()["wsl"].get("drive_pid"):
-            return
         speed = float(speed_kmh) / 3.6
         if not math.isfinite(speed) or speed < 0:
             raise ValueError("목표 속도는 0 이상의 km/h 값입니다.")
+        if not acc and not lcc:
+            self._drive("drive_stop")
+            return
+        if self.provider:
+            self.drive_request.update(speed_mps=speed, acc=bool(acc), lcc=bool(lcc))
+            return
+        if self.snapshot()["wsl"].get("drive_pid"):
+            self._signal_wsl("drive_update", speed_mps=speed, acc=bool(acc), lcc=bool(lcc))
+            return
         dotnet = ROOT.parent / "research" / "tools" / "dotnet10" / "dotnet.exe"
         provider = ROOT / "build" / "map_lane_provider" / "Release" / "net10.0" / "map_lane_provider.dll"
         if not dotnet.is_file() or not provider.is_file():
@@ -210,7 +217,7 @@ class Controller:
         output.parent.mkdir(parents=True, exist_ok=True)
         game = Path(LoaderClient(timeout=2).status()["module_path"]).parents[4]
         path, = self.linux_paths(output)
-        self.drive_request = {"path": path, "speed_mps": speed}
+        self.drive_request = {"path": path, "speed_mps": speed, "acc": bool(acc), "lcc": bool(lcc)}
         self.provider = self.spawn([str(dotnet), str(provider), "--game", str(game), "--out", str(output), "--distance-m", "1000"], "lane")
         self.update(message="현재 도로의 실제 차로 기준선을 준비합니다.")
 
@@ -315,6 +322,8 @@ class Controller:
                 raise RuntimeError(data["error"])
             if source == "wsl" and data.get("type") == "recording_error":
                 self.update(recording_error=data["error"])
+            if source == "wsl" and data.get("type") == "drive_error":
+                self.update(message=data["error"])
             if source == "wsl" and data.get("type") == "recording_status":
                 self.update(recording=data["recording"])
             if source == "wsl" and data.get("type") == "wsl_status":
@@ -381,7 +390,7 @@ class Controller:
                     elif action == "start":
                         self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False))
                     elif action in ("drive_start", "drive_stop"):
-                        self._drive(action, values.get("speed_kmh", 30))
+                        self._drive(action, values.get("speed_kmh", 30), values.get("acc", True), values.get("lcc", True))
                     elif action in ("record_start", "record_stop"):
                         self._record(action, values.get("profile", "state"))
                 except queue.Empty:
@@ -460,19 +469,23 @@ def show_window(controller):
         entry.pack(side="left", padx=(0, 18))
         rate_entries.append(entry)
     ttk.Checkbutton(frame, text="입력·상태만 (다음 시작에 적용, 센서 설정 유지)", variable=input_only).pack(anchor="w", pady=(8, 0))
-    driving_box = ttk.LabelFrame(frame, text="GT 도로 주행", padding=8)
+    driving_box = ttk.LabelFrame(frame, text="GT 주행 보조", padding=8)
     driving_box.pack(fill="x", pady=(8, 0))
     driving_controls = ttk.Frame(driving_box)
     driving_controls.pack(fill="x")
     ttk.Label(driving_controls, text="목표 km/h").pack(side="left")
     drive_speed = tk.StringVar(value="30")
     ttk.Entry(driving_controls, textvariable=drive_speed, width=7).pack(side="left", padx=8)
-    drive_start = ttk.Button(driving_controls, text="GT 주행", command=lambda: controller.request("drive_start", speed_kmh=drive_speed.get()))
+    acc_enabled, lcc_enabled = tk.BooleanVar(value=True), tk.BooleanVar(value=True)
+    ttk.Checkbutton(driving_controls, text="ACC 속도", variable=acc_enabled).pack(side="left", padx=5)
+    ttk.Checkbutton(driving_controls, text="LCC 차로", variable=lcc_enabled).pack(side="left", padx=5)
+    drive_start = ttk.Button(driving_controls, text="선택 적용 / 켜기", command=lambda: controller.request("drive_start", speed_kmh=drive_speed.get(), acc=acc_enabled.get(), lcc=lcc_enabled.get()))
     drive_start.pack(side="left")
     drive_stop = ttk.Button(driving_controls, text="입력 해제", command=lambda: controller.request("drive_stop"))
     drive_stop.pack(side="left", padx=8)
     drive_status = ttk.Label(driving_box, text="입력·상태만 시작 → GT 주행 → 게임 전경", wraplength=730)
     drive_status.pack(anchor="w", pady=(5, 0))
+    ttk.Label(driving_box, text="ACC만: 직접 조향 · LCC만: 직접 가감속. 자동 축을 직접 조작하면 모든 보조가 해제됩니다.", wraplength=730).pack(anchor="w")
     recording_box = ttk.LabelFrame(frame, text="주행 기록", padding=8)
     recording_box.pack(fill="x", pady=(12, 0))
     recording_actions = ttk.Frame(recording_box)
@@ -540,10 +553,13 @@ def show_window(controller):
         summary.config(text=state["message"])
         relay, wsl = state["relay"], state["wsl"]
         driving = bool(wsl.get("drive_pid"))
-        drive_start.config(state="normal" if phase == "running" and not driving and not closing else "disabled")
+        drive_start.config(state="normal" if phase == "running" and not closing else "disabled")
         drive_stop.config(state="normal" if phase == "running" and not closing else "disabled")
-        drive_status.config(text=("GT 자동 주행 중 · 게임 전경 유지 · 입력 해제 후에는 직접 제동" if driving else
-                                  ("주행 종료 · 아래 로그에서 해제 이유 확인" if wsl.get("drive_exit") is not None else "입력·상태만 시작 → GT 주행 → 게임 전경")))
+        actual = wsl.get("drive_state") or {}
+        fresh = wsl.get("drive_state_age_s") is not None and wsl["drive_state_age_s"] < 2
+        mask = actual.get("axes", 0) if fresh and actual.get("armed") else 0
+        drive_status.config(text=(f"실제 상태: ACC {'켜짐' if mask & 2 else '꺼짐'} · LCC {'켜짐' if mask & 1 else '꺼짐'} · " +
+                                  (actual.get("reason", "") if fresh else "게임 상태 응답 대기")))
         recording = state["recording"]
         record_phase = recording.get("phase", "idle")
         writing = record_phase in ("starting", "recording", "stopping")

@@ -55,9 +55,9 @@ int main(int argc,char** argv) {
         auto drive_service=node->create_service<ets2_msgs::srv::DriveControl>("/ets2/drive/control",
             [&](const ets2_msgs::srv::DriveControl::Request::SharedPtr request,ets2_msgs::srv::DriveControl::Response::SharedPtr response) {
                 std::unique_lock lock(drive_mutex);
-                if(!valid_owner(request->owner) || !drive_connected) {response->message="Invalid owner or Windows relay disconnected";return;}
+                if(!valid_owner(request->owner) || request->axes>3 || !drive_connected) {response->message="Invalid owner/axes or Windows relay disconnected";return;}
                 pending_id=++request_id;control_reply=nullptr;command_request=nullptr;
-                control_request={{"id",pending_id},{"action",request->arm?"arm":"disarm"},{"drive_owner",request->owner},{"epoch",request->epoch}};
+                control_request={{"id",pending_id},{"action",request->arm?"arm":"disarm"},{"drive_owner",request->owner},{"epoch",request->epoch},{"axes",request->axes?request->axes:3}};
                 drive_reply.wait_for(lock,500ms,[&]{return !control_reply.is_null() || !drive_connected;});
                 if(control_reply.is_null()) response->message="Driving request timed out or disconnected";
                 else {response->success=control_reply.value("accepted",false);
@@ -70,10 +70,10 @@ int main(int argc,char** argv) {
         auto command_subscription=node->create_subscription<ets2_msgs::msg::DriveCommand>("/ets2/drive/command",rclcpp::QoS(1).best_effort(),
             [&](const ets2_msgs::msg::DriveCommand::SharedPtr command) {
                 if(!valid_owner(command->owner) || !std::isfinite(command->steering) || !std::isfinite(command->throttle) || !std::isfinite(command->brake) ||
-                   std::abs(command->steering)>1 || command->throttle<0 || command->throttle>1 || command->brake<0 || command->brake>1) return;
+                   std::abs(command->steering)>1 || command->throttle<0 || command->throttle>1 || command->brake<0 || command->brake>1 || command->axes>3) return;
                 std::lock_guard lock(drive_mutex);if(!drive_connected) return;
                 command_request={{"id",++request_id},{"action","command"},{"drive_owner",command->owner},{"epoch",command->epoch},{"sequence",command->sequence},
-                    {"deadline_ms",command->command_window_ms},{"steering",command->steering},{"throttle",command->throttle},{"brake",command->brake}};
+                    {"deadline_ms",command->command_window_ms},{"steering",command->steering},{"throttle",command->throttle},{"brake",command->brake},{"axes",command->axes?command->axes:3}};
             });
         std::atomic<bool> capture_enabled{true};
         auto capture_service=node->create_service<std_srvs::srv::SetBool>("/ets2/capture",

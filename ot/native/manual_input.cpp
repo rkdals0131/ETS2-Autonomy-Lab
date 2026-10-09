@@ -94,9 +94,9 @@ struct ManualInput::Impl {
         if(e.op=="memory" && count==2 && a!=0) return b;
         throw std::runtime_error("Unsupported control function: "+e.op);
     }
-    std::array<float,3> values(const PhysicalInput& input,const std::array<float,3>& semantic={},bool* active=nullptr) const {
+    std::array<float,3> values(const PhysicalInput& input,const std::array<float,3>& semantic={},uint32_t* active_axes=nullptr) const {
         std::array<float,3> result{};const char* names[]={"steering","forward","backward"};
-        for(size_t i=0;i<3;++i) {result[i]=eval(bindings.at(names[i]),input,semantic,0,active).value_or(0);if(!std::isfinite(result[i])) throw std::runtime_error("Invalid control formula");}
+        for(size_t i=0;i<3;++i) {bool active=false;result[i]=eval(bindings.at(names[i]),input,semantic,0,&active).value_or(0);if(active_axes && active) *active_axes|=i==0?1u:2u;if(!std::isfinite(result[i])) throw std::runtime_error("Invalid control formula");}
         return result;
     }
 };
@@ -137,5 +137,5 @@ ManualInput::ManualInput(const std::filesystem::path& path):impl_(std::make_uniq
     for(size_t i=0;i<3;++i) {std::array<float,3> axis{};axis[i]=1;const auto mixed=impl_->values(neutral,axis);std::array<float,3> expected{};expected[i]=i==0?-1.f:1.f;if(mixed!=expected) throw std::runtime_error("Unsupported semantic drive mix");}
 }
 ManualInput::~ManualInput()=default;
-ManualInput::Sample ManualInput::evaluate(const PhysicalInput& input) const {Sample result;result.values=impl_->values(input,{},&result.active);return result;}
+ManualInput::Sample ManualInput::evaluate(const PhysicalInput& input) const {Sample result;result.values=impl_->values(input,{},&result.active_axes);result.active=result.active_axes!=0;return result;}
 }

@@ -12,6 +12,7 @@
 
 namespace ot {
 static const OtDriveHost* input_host{};
+static bool split_axes() {return input_host && input_host->size>=sizeof(OtDriveHost) && input_host->request_axes;}
 static json drive_status(OtDriveStatus status) {
     const char* reasons[]={"disabled","disarmed","armed","command","expired","manual","paused","panic","disconnected","unloaded","input_unavailable","profile_unsupported"};
     return {{"available",bool(status.available)},{"permitted",bool(status.permitted)},{"profile_supported",bool(status.profile_supported)},
@@ -23,7 +24,9 @@ static json drive_status(OtDriveStatus status) {
 static json current_drive() {
     OtDriveStatus status;const OtDriveRequest request{};
     if(input_host) input_host->request(input_host->context,&request,&status);
-    return drive_status(status);
+    uint32_t axes=status.armed?ot_drive_all:0;
+    if(split_axes()) input_host->request_axes(input_host->context,&request,ot_drive_all,&status,&axes);
+    auto result=drive_status(status);result["axes"]=axes;result["independent_axes"]=split_axes();return result;
 }
 static void configure_drive(const json& settings) {
     if(!input_host) return;
@@ -351,8 +354,12 @@ json Runtime::command(const json& request) {
                std::abs(decoded.steering)>1 || decoded.throttle<0 || decoded.throttle>1 || decoded.brake<0 || decoded.brake>1)
                 throw std::runtime_error("Driving axes must be finite steering [-1,1], pedals [0,1]");
         }
-        OtDriveStatus status;const bool accepted=input_host->request(input_host->context,&decoded,&status);
-        auto result=drive_status(status);result["accepted"]=accepted;return result;
+        const auto axes=request.value("axes",ot_drive_all);
+        if(!axes || axes>ot_drive_all) throw std::runtime_error("Driving axes must be steering=1, pedals=2 or both=3");
+        if(!split_axes() && axes!=ot_drive_all) throw std::runtime_error("Independent ACC/LCC requires the updated resident loader; exit and restart the game");
+        OtDriveStatus status;uint32_t actual=0;
+        const bool accepted=split_axes()?input_host->request_axes(input_host->context,&decoded,axes,&status,&actual):input_host->request(input_host->context,&decoded,&status);
+        auto result=drive_status(status);result["axes"]=split_axes()?actual:(status.armed?ot_drive_all:0);result["independent_axes"]=split_axes();result["accepted"]=accepted;return result;
     }
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
@@ -525,6 +532,6 @@ SCSAPI_VOID scs_telemetry_shutdown() {
 }
 extern "C" __declspec(dllexport) const OtModuleApi* SCSAPIFUNC ot_get_module_api(uint32_t abi) {
     static const OtModuleApi api{1,sizeof(OtModuleApi),OT_VERSION,scs_telemetry_init,module_stop,
-        [](const OtDriveHost* host){ot::input_host=host && host->abi==1 && host->size>=sizeof(OtDriveHost) && host->configure && host->request && host->release?host:nullptr;}};
+        [](const OtDriveHost* host){ot::input_host=host && host->abi==1 && host->size>=offsetof(OtDriveHost,request_axes) && host->configure && host->request && host->release?host:nullptr;}};
     return abi==api.abi?&api:nullptr;
 }

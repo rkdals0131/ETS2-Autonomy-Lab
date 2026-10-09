@@ -24,4 +24,7 @@ struct OtDriveHost {
     void (*configure)(void*,bool,const char*);
     bool (*request)(void*,const OtDriveRequest*,OtDriveStatus*);
     void (*release)(void*,OtDriveReason);
+    // Optional ABI-1 tail. Prefix request retains all-axis ownership for old cores.
+    bool (*request_axes)(void*,const OtDriveRequest*,uint32_t,OtDriveStatus*,uint32_t*);
 };
+inline constexpr uint32_t ot_drive_steering=1,ot_drive_pedals=2,ot_drive_all=3;

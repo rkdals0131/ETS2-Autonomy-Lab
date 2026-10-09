@@ -91,6 +91,7 @@ Packet state_messages(const json& state,const std::string& session,const V& base
             for(const auto* key:{"steering","throttle","brake","manual_steering","manual_throttle","manual_brake"}) c<<drive.at(key).get<float>();
             for(const auto* key:{"truck.effective.steering","truck.effective.throttle","truck.effective.brake"}) c<<channel(state,key);
             c<<drive.at("error").get<std::string>();
+            c<<static_cast<uint8_t>(drive.value("axes",drive.at("armed").get<bool>()?3u:0u))<<drive.value("independent_axes",false);
         }));
     }
     if(state.contains("engine") && state["engine"].contains("vehicle") && state["engine"]["vehicle"].value("available",false)) {

@@ -99,7 +99,11 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 
 현재 위치의 실제 지도 차로 기준선을 생성하고 GT 위치로 추종합니다. 속도 PI, pure-pursuit 경로 추종, applied steering PI를 연결했습니다. 같은 차로 AI 차량의 GT 거리·속도로 목표 속도를 낮추며, 선택한 기준선 끝과 급한 곡선에서도 감속합니다. 차량·바퀴 pose나 사람 Xbox 설정은 쓰지 않습니다.
 
-기존 런처를 정상적으로 닫고 `launch.cmd`로 다시 엽니다. **입력·상태만** 체크 → **시작** → 목표 km/h 입력 → **GT 주행**을 누르고 게임 창으로 돌아갑니다. 현재 위치에서 지도 차로 생성과 제어기 실행까지 런처가 연결합니다. 엔진·D 기어·주차브레이크는 게임에서 주행 가능한 상태로 설정합니다. **입력 해제**는 자동 명령을 해제하며 차량을 계속 세워 두는 기능은 아닙니다. 브리지 중지·창 닫기도 주행 소유권과 프로세스를 정리합니다.
+기존 런처를 정상적으로 닫고 `launch.cmd`로 다시 엽니다. **입력·상태만** 체크 → **시작** → 목표 km/h와 **ACC 속도 / LCC 차로** 선택 → **선택 적용 / 켜기**를 누르고 게임 창으로 돌아갑니다. 현재 위치에서 지도 차로 생성과 단일 제어기 실행까지 연결합니다. 실행 중에도 선택·목표 속도를 바꾸고 같은 버튼으로 적용합니다. 체크박스는 요청값이고 아래 상태는 게임이 보고한 실제 ACC/LCC 켜짐·꺼짐과 해제 이유입니다. 엔진·D 기어·주차브레이크는 게임에서 주행 가능한 상태로 설정합니다. **입력 해제** 또는 두 선택을 모두 끄고 적용하면 모든 보조를 해제하며, 차량을 계속 세워 두는 기능은 아닙니다. 브리지 중지·창 닫기도 주행 소유권과 프로세스를 정리합니다.
+
+**ACC만** 켜면 가속·제동을 맡기고 사람이 조향합니다. **LCC만** 켜면 조향을 맡기고 사람이 가감속합니다. 소유하지 않은 축의 사람 입력은 유지하며, 자동으로 맡긴 축을 사람이 조작하면 **모든 보조가 해제**됩니다. F11·만료·통신 단절·pause도 전체 해제하며 실패 후 자동으로 다시 켜지지 않습니다. 독립 ACC는 매 GT 프레임의 현재 자차 위치·진행방향과 실제 차로폭으로 앞차를 선택하여,시작 LCC 경로의 이탈·거리 끝 때문에 제동하지 않습니다. 이 진행방향 corridor 방식은 굽은 도로에서 먼 앞차를 놓칠 수 있습니다. LCC 단독은 기준선 이탈·끝에서 페달을 조작하지 않고 해제합니다. 두 기능을 함께 켰을 때는 기존 지도 경로 끝 감속을 사용합니다.
+
+독립 축 지원은 **core/loader 0.29.0**에서 추가됐습니다. 상주 loader 교체는 정상 게임 종료 후 설치·재시작이 필요합니다. 새 ROS 메시지 타입을 쓰므로 relay와 ROS overlay도 함께 갱신하고 다른 ROS 소비자는 새 타입으로 다시 빌드합니다. 구 host ABI-1 prefix와 기존 JSON 클라이언트는 전체 축 계약을 유지하고, 새 core에 구 loader를 연결하면 독립 모드를 거절합니다.
 
 현재 provider는 설치된 지도 자산의 `ger16` 단방향 차로와 같은 지원 layout에서 현재 진행방향 차로를 고르고, 공유 Node로 연결되는 도로를 최대 1 km까지 잇습니다. 실제 모델 노면·shoulder로 차로 폭을 구합니다. prefab/갈림길·layout 변경·선택 거리 끝에서는 기준선이 끝나므로 감속합니다. 내비 목적지 선택·교차로/신호 통과·차로 변경은 아직 없습니다. [지도 provider 빌드·지원 범위](map_lane_provider/README.md).
 
@@ -107,21 +111,23 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 
 ## 운전 명령 API
 
-상주 loader 0.27.0은 공식 SCS Input SDK에 `ot_drive` 가상 3축 장치를 등록합니다. 사람의 키보드/Xbox 바인딩을 유지하면서 컴퓨터가 횡방향 조향과 종방향 가속·제동을 보냅니다. 장치 등록·disarmed Xbox 좌우/페달 대조·ROS arm/disarm과 FH4 실제 가속·조향·제동을 확인했습니다. FFB나 조향 토크 제어는 구현하지 않았습니다.
+상주 loader는 공식 SCS Input SDK에 `ot_drive` 가상 3축 장치를 등록합니다. 사람의 키보드/Xbox 바인딩을 유지하면서 컴퓨터가 횡방향 조향과 종방향 가속·제동을 보냅니다. 장치 등록·disarmed Xbox 좌우/페달 대조·ROS arm/disarm과 FH4 실제 가속·조향·제동을 확인했습니다. FFB나 조향 토크 제어는 구현하지 않았습니다.
 
 최초 등록은 정상 게임 종료 → 새 loader/core 설치 → 게임 재시작 순서입니다. SDK는 input init 때만 장치를 등록하므로 기존 loader의 hot reload로 추가할 수 없습니다. 설치된 `ot_runtime/ot_config.json`에서 `allow_drive: true`, `singleplayer_research: true`, 활성 `controls.sii`의 절대 경로 `drive_controls_path`를 설정합니다. 저장소 기본 권한은 꺼져 있으며 센서 설정과 사용자 controls.sii는 바꾸지 않습니다.
 
 | 창구 | 계약 |
 | --- | --- |
-| `/ets2/drive/control` | `DriveControl` 서비스: owner, arm, epoch → success, message, epoch |
-| `/ets2/drive/command` | `DriveCommand`: owner, epoch, 증가하는 sequence, command_window_ms, steering/throttle/brake |
-| `/ets2/drive/state` | `DriveState`: 활성/해제 이유, owner·epoch·마지막 승인 sequence, 유효창, 명령·물리입력·SDK 적용값 |
+| `/ets2/drive/control` | `DriveControl` 서비스: owner, arm, epoch, axes → success, message, epoch |
+| `/ets2/drive/command` | `DriveCommand`: owner, epoch, 증가하는 sequence, command_window_ms, steering/throttle/brake, axes |
+| `/ets2/drive/state` | `DriveState`: 활성/해제 이유, owner·epoch·마지막 승인 sequence, 유효창, 명령·물리입력·SDK 적용값, 실제 axes·independent_axes |
+
+요청 `axes`는 1=조향/LCC, 2=페달/ACC, 3=전체이며 0은 기존 전체 축 요청의 기본값입니다. 실제 상태 `axes=0`은 해제 상태입니다. 모두 끄기는 `arm=false`로 해제하며 `axes=0` arm을 보내지 않습니다. 한 owner/epoch 안의 새 명령으로 축을 전환하고 소유하지 않은 출력은 0으로 만듭니다. 새로 맡길 축을 사람이 조작 중이면 해제하므로 켜기 전에 그 축을 놓습니다.
 
 DriveCommand.steering은 **왼쪽 양수 [-1,1]인 프로필 입력**, throttle/brake는 **[0,1]**입니다. 현재 Xbox 프로필의 `c_relatsteer=1`은 조향 위치를 변화시키는 상대 입력입니다. 따라서 이 하위 명령값을 바퀴 위치나 각도 목표로 해석하지 않습니다. 현재 프로필의 steering mix가 semantical 값을 빼므로 SDK 장치에는 steering의 부호를 뒤집어 내보냅니다. 기존 `/ets2/vehicle/actuation`의 단위·부호는 유지합니다. applied 값은 게임의 effective 입력 관측이며 명령을 복사한 값이 아닙니다. SDK 입력은 실제 게임 전경에서 소비됐습니다. 비전경 실행은 native 명령이 승인돼도 게임 입력 축과 속도가 0이었으며, 전경 실행에서 가속·제동이 적용됐습니다.
 
 arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기다립니다. Command의 `command_window_ms`는 **Windows monotonic clock의 절대 만료 시각(ms)**이며 duration·ROS stamp가 아닙니다. 최신 DriveState에서 받은 값을 그대로 복사합니다. DDS/TCP/pipe에서 지연된 명령에 새 수명을 붙이지 않으며, 이전 epoch·반복 sequence·만료된 명령은 거절합니다. owner는 식별자이며 기존 TCP pairing token과 로컬 pipe ACL을 대신하지 않습니다.
 
-명령 만료·물리 조작·F11·pause·SDK 입력 비활성·core unload·통신 단절은 arm을 해제합니다. resume/reconnect는 다시 arm하지 않습니다. F11은 bridge lease도 취소하므로 런처를 명시적으로 재시작합니다. SDK 한 입력 프레임의 세 축은 같은 snapshot이며 해제는 다음 입력 프레임의 세 축 0으로 반영합니다. 렌더 수집 on/off와 운전 arm은 독립입니다.
+명령 만료·소유한 축의 물리 조작·F11·pause·SDK 입력 비활성·core unload·통신 단절은 arm을 해제합니다. resume/reconnect는 다시 arm하지 않습니다. F11은 bridge lease도 취소하므로 런처를 명시적으로 재시작합니다. SDK 한 입력 프레임의 세 축은 같은 snapshot이며 해제는 다음 입력 프레임의 세 축 0으로 반영합니다. 렌더 수집 on/off와 운전 arm은 독립입니다.
 
 수동 해제는 현재 프로필의 A/Left·D/Right·W/Up·S/Down 및 `joy.x/rt/lt`를 직접 읽습니다. controls.sii의 deadzone·축 변환을 적용하고, 반대 키나 키보드/패드가 서로 상쇄돼도 각 물리 source의 활동을 보고 해제합니다. pad 부재는 프로필의 `?0` fallback대로 중립이며 키보드 조작은 유지합니다. pad 연결 변화는 arm을 해제하고 읽기 오류·지원하지 않는 binding에서는 arm을 허용하지 않습니다. 프로필 변경은 권한 재읽기 또는 재시작으로 반영합니다. 현재 프로필의 `xinput_gamepad_1`과 Windows index 0은 disarmed 좌우 stick·RT/LT 대조에서 대응했습니다. deadzone 경계의 세밀한 대조와 armed 상태의 수동 해제·F11 시험은 남아 있습니다.
 
@@ -131,7 +137,7 @@ arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기
 
 core 0.28.0은 카메라와 독립된 `/ets2/ground_truth/traffic`을 SDK frame_end에서 요청 시 발행합니다. AI actor 위치·진행방향·속도·차체 크기이며 카메라 가시성 GT와 별개입니다.
 
-`drive_speed`는 GT 속도로 throttle/brake를 계산하고 SDK applied steering으로 정규화 조향 위치를 추적합니다. `steering_target`은 **왼쪽 양수 [-1,1]인 applied steering 목표**이며 실제 바퀴 각도(rad)나 토크가 아닙니다. 현재 상대 입력 프로필에서는 PI feedback으로 하위 조향 입력을 계산하므로 사람의 Xbox 설정과 게임의 복귀·차량 물리를 유지합니다. ACC·차로 유지 제어기는 아직 없습니다.
+`drive_speed`는 GT 속도로 throttle/brake를 계산하고 SDK applied steering으로 정규화 조향 위치를 추적합니다. `steering_target`은 **왼쪽 양수 [-1,1]인 applied steering 목표**이며 실제 바퀴 각도(rad)나 토크가 아닙니다. 현재 상대 입력 프로필에서는 PI feedback으로 하위 조향 입력을 계산하므로 사람의 Xbox 설정과 게임의 복귀·차량 물리를 유지합니다. 지도 경로 모드는 ACC·LCC를 연결하며 `acc_enabled`·`lcc_enabled`를 독립 bool 파라미터로 바꿀 수 있습니다.
 
 1. 게임에서 엔진·D 기어·주차브레이크를 주행 가능한 상태로 설정합니다.
 2. `bridge/launch.cmd`에서 **입력·상태만**을 체크하고 **시작**합니다. 현재 FH4에 FH5 센서 보정을 적용하지 않으며 설정 파일의 slots를 편집할 필요가 없습니다.
@@ -142,7 +148,7 @@ source /mnt/c/path/to/ETS2-Autonomy-Lab/bridge/ros-env.sh  # 실제 저장소 �
 ros2 run ets2_bridge drive_speed --ros-args -p arm:=true -p target_speed_mps:=8.333333 -p steering_target:=0.0
 ```
 
-런처 GT 주행 대신 직접 실행하려면 provider로 만든 파일을 위 노드에 `-p path_file:=<WSL의 current-lane.json 절대 경로>`로 추가합니다. 경로 모드의 조향은 경로 추종기가 계산합니다. 목표 위치 직접 지정은 path_file이 없는 실행에 사용합니다.
+런처의 주행 보조 대신 직접 실행하려면 provider로 만든 파일을 위 노드에 `-p path_file:=<WSL의 current-lane.json 절대 경로>`로 추가합니다. 경로 모드의 조향은 경로 추종기가 계산합니다. 목표 위치 직접 지정은 path_file이 없는 실행에 사용합니다.
 
 다른 WSL 터미널에서도 같은 환경을 불러온 뒤 실행 중 목표를 바꿉니다. 속도는 m/s이며 8.333333은 30 km/h입니다.
 

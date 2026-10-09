@@ -41,6 +41,23 @@ int main(int argc,char** argv) {
     control.paused(true);control.paused(false);check(!control.request(command,1205,state));check(!state.armed);
     check(control.request(arm,1206,state));control.frame(1207,false,{},false);check(!control.request(command,1207,state));
     check(state.reason==OtDriveReason::input_unavailable);
+    // ACC leaves human steering untouched; LCC leaves human pedals untouched.
+    control.frame(1300,true,{.5f,0,0},ot_drive_steering);
+    check(control.request(arm,1300,state,ot_drive_pedals));
+    command.epoch=state.epoch;command.sequence=1;command.deadline_ms=1490;
+    uint32_t owned=0;check(control.request(command,1310,state,ot_drive_pedals,&owned));check(owned==ot_drive_pedals);
+    check(control.frame(1311,true,{.5f,0,0},ot_drive_steering)==std::array<float,3>{0,.9f,.2f});
+    control.frame(1312,true,{},ot_drive_pedals);check(!control.request(command,1313,state));check(state.reason==OtDriveReason::manual);
+    control.frame(1400,true,{0,.5f,0},ot_drive_pedals);check(control.request(arm,1400,state,ot_drive_steering));
+    command.epoch=state.epoch;command.sequence=1;command.deadline_ms=1590;
+    check(control.request(command,1410,state,ot_drive_steering));
+    check(control.frame(1411,true,{0,.5f,0},ot_drive_pedals)==std::array<float,3>{-.4f,0,0});
+    // Enabling an axis under physical intervention releases; stale modes cannot renew.
+    command.sequence=2;check(!control.request(command,1412,state,ot_drive_all));check(state.reason==OtDriveReason::manual);
+    control.frame(1500,true,{},0);check(control.request(arm,1500,state,ot_drive_pedals));
+    command.epoch=state.epoch;command.sequence=1;command.deadline_ms=1690;
+    check(control.request(command,1510,state,ot_drive_all));check(control.request(OtDriveRequest{},1511,state,ot_drive_all,&owned));check(owned==ot_drive_all);
+    control.release(OtDriveReason::panic);check(control.request(OtDriveRequest{},1512,state,ot_drive_all,&owned));check(owned==0 && !state.armed);
     if(argc>1) {
         ManualInput profile{std::filesystem::path(argv[1])};PhysicalInput input{true};
         check(!profile.evaluate(input).active);

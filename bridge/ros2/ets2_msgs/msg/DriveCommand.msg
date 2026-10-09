@@ -11,3 +11,5 @@ uint64 command_window_ms
 float32 steering
 float32 throttle
 float32 brake
+# Ownership: 1 steering, 2 throttle+brake, 3 both. 0 retains legacy both-axis mode.
+uint8 axes

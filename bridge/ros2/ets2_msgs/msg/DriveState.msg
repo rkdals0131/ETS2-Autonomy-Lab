@@ -23,3 +23,6 @@ float64 steering_applied
 float64 throttle_applied
 float64 brake_applied
 string error
+# Actual owner axes; 0 when released. This is not the requested UI mode.
+uint8 axes
+bool independent_axes

@@ -11,7 +11,9 @@ import time
 
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray
-from ets2_msgs.msg import VehicleState
+from ets2_msgs.msg import VehicleState, DriveState
+from rcl_interfaces.srv import SetParametersAtomically
+from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from bag_recording import BagRecording
 
@@ -61,6 +63,17 @@ def main():
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
     node.create_subscription(VehicleState, "/ets2/vehicle/state", state, qos)
     node.create_subscription(DiagnosticArray, "/diagnostics", diagnostics, qos)
+    drive_state = None
+    drive_state_time = 0.0
+    def input_state(message):
+        nonlocal drive_state, drive_state_time
+        drive_state_time = time.monotonic()
+        drive_state = {"armed": message.armed, "axes": message.axes, "reason": message.reason,
+                       "independent_axes": message.independent_axes}
+    node.create_subscription(DriveState, "/ets2/drive/state", input_state, qos)
+    mode_client = node.create_client(SetParametersAtomically, "/ets2_drive_speed/set_parameters_atomically")
+    mode_future = None
+    mode_started = 0.0
     child = None
     drive = None
     drive_log = None
@@ -99,13 +112,32 @@ def main():
                     heartbeat = now
                 elif action == "stop":
                     running = False
-                elif action == "drive_start":
+                elif action in ("drive_start", "drive_update"):
+                    if action == "drive_update":
+                        if not drive or drive.poll() is not None:
+                            print(json.dumps({"type": "drive_error", "error": "보조가 해제됐습니다. 상태 확인 후 명시적으로 다시 켜 주세요."}), flush=True)
+                            continue
+                        if mode_future is not None:
+                            print(json.dumps({"type": "drive_error", "error": "모드 적용 응답을 기다리고 있습니다."}), flush=True)
+                            continue
+                        if not mode_client.service_is_ready():
+                            print(json.dumps({"type": "drive_error", "error": "주행 제어기가 응답하지 않습니다."}), flush=True)
+                            continue
+                        update = SetParametersAtomically.Request()
+                        update.parameters = [Parameter("acc_enabled", value=bool(request.get("acc", True))).to_parameter_msg(),
+                                             Parameter("lcc_enabled", value=bool(request.get("lcc", True))).to_parameter_msg(),
+                                             Parameter("target_speed_mps", value=float(request["speed_mps"])).to_parameter_msg()]
+                        mode_future = mode_client.call_async(update)
+                        mode_started = now
+                        continue  # Mode change keeps the current owner and epoch.
                     if drive and drive.poll() is None:
-                        continue  # A repeated start keeps the current owner.
+                        continue  # A duplicate start cannot create a second owner.
                     release_drive()
                     drive_log = (runtime_directory / "drive.log").open("w")
                     drive = subprocess.Popen(["ros2", "run", "ets2_bridge", "drive_speed", "--ros-args",
                         "-p", "arm:=true", "-p", "path_file:=" + request["path"],
+                        "-p", "acc_enabled:=" + str(bool(request.get("acc", True))).lower(),
+                        "-p", "lcc_enabled:=" + str(bool(request.get("lcc", True))).lower(),
                         "-p", "target_speed_mps:=" + str(float(request["speed_mps"]))],
                         stdout=drive_log, stderr=drive_log, stdin=subprocess.DEVNULL, start_new_session=True)
                     drive_exit = None
@@ -118,6 +150,16 @@ def main():
                         print(json.dumps({"type": "recording_error", "error": str(error)}), flush=True)
                 elif action == "record_stop":
                     recording.stop()
+            if mode_future is not None:
+                if mode_future.done():
+                    response = mode_future.result()
+                    if not response.result.successful:
+                        print(json.dumps({"type": "drive_error", "error": response.result.reason}), flush=True)
+                    mode_future = None
+                elif now - mode_started > 1:
+                    mode_client.remove_pending_request(mode_future)
+                    mode_future = None
+                    print(json.dumps({"type": "drive_error", "error": "모드 적용 응답 시간 초과"}), flush=True)
             if now - heartbeat > 8:
                 raise RuntimeError("Windows launcher heartbeat expired")
             if child.poll() is not None:
@@ -132,6 +174,7 @@ def main():
                                   "recording": recording.poll(),
                                   "drive_pid": drive.pid if drive and drive.poll() is None else None,
                                   "drive_exit": drive.poll() if drive else drive_exit,
+                                  "drive_state": drive_state, "drive_state_age_s": now - drive_state_time if drive_state_time else None,
                                   "drive_log": (runtime_directory / "drive.log").read_text(errors="replace")[-1500:] if (runtime_directory / "drive.log").exists() else ""}), flush=True)
                 last_report = now
         print(json.dumps({"type": "wsl_stopping"}), flush=True)

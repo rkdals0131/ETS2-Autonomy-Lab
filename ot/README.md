@@ -1,3 +1,5 @@
+core/loader 0.29.0 빌드는 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 구 host prefix는 유지하며, 독립 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
+
 # ot — 게임 DLL과 개발 도구
 
 core 0.28.0·상주 loader 0.27.0은 센서와 독립된 운전 명령·AI traffic GT를 연결합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 현재 core 0.28.0을 설치해 실제 지도 차로·GT 위치 기반 주행을 확인했습니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api).

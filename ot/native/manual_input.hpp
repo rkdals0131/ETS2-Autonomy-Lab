@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 
@@ -12,7 +13,7 @@ struct PhysicalInput {
 };
 class ManualInput {
 public:
-    struct Sample {std::array<float,3> values{};bool active{};};
+    struct Sample {std::array<float,3> values{};bool active{};uint32_t active_axes{};};
     explicit ManualInput(const std::filesystem::path& path);
     ~ManualInput();
     Sample evaluate(const PhysicalInput& input) const;

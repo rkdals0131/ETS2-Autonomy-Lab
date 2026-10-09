@@ -2,6 +2,8 @@ string owner
 bool arm
 # For disarm, use the epoch returned by arm or observed in DriveState.
 uint64 epoch
+# Arm ownership: 1 LCC, 2 ACC, 3 both; 0 is legacy both.
+uint8 axes
 ---
 bool success
 string message
