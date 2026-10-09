@@ -7,44 +7,56 @@
 #include <intrin.h>
 
 namespace bridge {
-static void pack_rgb(uint8_t* rgb,std::span<const uint8_t> rgba) {
+static void pack_rgb(uint8_t* rgb,std::span<const uint8_t> rgba,bool bgr=false) {
     static const bool ssse3=[] {int registers[4];__cpuid(registers,1);return (registers[2]&(1<<9))!=0;}();
     size_t i=0,j=0;
     if(ssse3) {
-        const auto mask=_mm_setr_epi8(0,1,2,4,5,6,8,9,10,12,13,14,-1,-1,-1,-1);
+        const auto mask=bgr?_mm_setr_epi8(2,1,0,6,5,4,10,9,8,14,13,12,-1,-1,-1,-1):
+            _mm_setr_epi8(0,1,2,4,5,6,8,9,10,12,13,14,-1,-1,-1,-1);
         for(;i+16<=rgba.size();i+=16,j+=12) {
             const auto packed=_mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(rgba.data()+i)),mask);
             _mm_storel_epi64(reinterpret_cast<__m128i*>(rgb+j),packed);
             const auto tail=_mm_cvtsi128_si32(_mm_srli_si128(packed,8));std::memcpy(rgb+j+8,&tail,4);
         }
     }
-    for(;i<rgba.size();i+=4,j+=3) std::memcpy(rgb+j,rgba.data()+i,3);
+    for(;i<rgba.size();i+=4,j+=3) {
+        rgb[j]=rgba[i+(bgr?2:0)];rgb[j+1]=rgba[i+1];rgb[j+2]=rgba[i+(bgr?0:2)];
+    }
 }
 static Bytes jpeg(IWICImagingFactory* factory,std::span<const uint8_t> rgba,uint32_t width,uint32_t height) {
     using Microsoft::WRL::ComPtr;
     auto check=[](HRESULT hr){if(FAILED(hr)) throw std::runtime_error("WIC JPEG encoding failed");};
-    ComPtr<IWICBitmap> bitmap;check(factory->CreateBitmapFromMemory(width,height,GUID_WICPixelFormat32bppRGBA,width*4,
-        static_cast<UINT>(rgba.size()),const_cast<BYTE*>(rgba.data()),&bitmap));
-    ComPtr<IWICFormatConverter> converter;check(factory->CreateFormatConverter(&converter));
-    check(converter->Initialize(bitmap.Get(),GUID_WICPixelFormat24bppBGR,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom));
+    thread_local Bytes bgr;
+    bgr.resize(size_t(width)*height*3);pack_rgb(bgr.data(),rgba,true);
     ComPtr<IStream> stream;check(CreateStreamOnHGlobal(nullptr,TRUE,&stream));
     ComPtr<IWICBitmapEncoder> encoder;check(factory->CreateEncoder(GUID_ContainerFormatJpeg,nullptr,&encoder));check(encoder->Initialize(stream.Get(),WICBitmapEncoderNoCache));
     ComPtr<IWICBitmapFrameEncode> frame;ComPtr<IPropertyBag2> properties;check(encoder->CreateNewFrame(&frame,&properties));
     PROPBAG2 option{};option.pstrName=const_cast<wchar_t*>(L"ImageQuality");VARIANT quality{};quality.vt=VT_R4;quality.fltVal=.8f;check(properties->Write(1,&option,&quality));
     check(frame->Initialize(properties.Get()));check(frame->SetSize(width,height));WICPixelFormatGUID format=GUID_WICPixelFormat24bppBGR;
-    check(frame->SetPixelFormat(&format));check(frame->WriteSource(converter.Get(),nullptr));check(frame->Commit());check(encoder->Commit());
+    check(frame->SetPixelFormat(&format));
+    if(format!=GUID_WICPixelFormat24bppBGR) throw std::runtime_error("JPEG encoder does not accept BGR pixels");
+    check(frame->WritePixels(height,width*3,static_cast<UINT>(bgr.size()),bgr.data()));check(frame->Commit());check(encoder->Commit());
     STATSTG stat{};check(stream->Stat(&stat,STATFLAG_NONAME));Bytes data(static_cast<size_t>(stat.cbSize.QuadPart));
     LARGE_INTEGER zero{};check(stream->Seek(zero,STREAM_SEEK_SET,nullptr));ULONG read{};check(stream->Read(data.data(),static_cast<ULONG>(data.size()),&read));
     if(read!=data.size()) throw std::runtime_error("Incomplete JPEG output");return data;
 }
 static Bytes camera_info(uint64_t us,const std::string& frame,uint32_t width,uint32_t height,const json& projection,const json& vp,double scale) {
     const auto p=projection.get<std::array<double,16>>();
+    const std::array<double,5> viewport{vp.at("width"),vp.at("height"),vp.at("x"),vp.at("y"),scale};
+    struct Calibration {std::array<double,16> projection{};std::array<double,5> viewport{};std::array<double,9> k{};std::array<double,12> project{};};
+    thread_local std::map<std::pair<std::string,double>,Calibration> calibrations;
+    auto& calibration=calibrations[{frame,scale}];
+    if(calibration.projection!=p || calibration.viewport!=viewport) {
     if(p[12]!=0 || p[13]!=0 || p[15]!=0 || p[14]==0 || p[1]!=0 || p[4]!=0) throw std::runtime_error("CameraInfo requires a pinhole projection without skew");
     const double w=vp.at("width"),h=vp.at("height"),x=vp.at("x"),y=vp.at("y");
     const double fx=-p[0]/p[14]*w*.5*scale,fy=-p[5]/p[14]*h*.5*scale;
     const double cx=(x+w*.5*(1+p[2]/p[14]))*scale,cy=(y+h*.5*(1-p[6]/p[14]))*scale;
-    const std::array<double,9> k{fx,0,cx,0,fy,cy,0,0,1},r{1,0,0,0,1,0,0,0,1};
-    const std::array<double,12> project{fx,0,cx,0,0,fy,cy,0,0,0,1,0};
+        calibration.k={fx,0,cx,0,fy,cy,0,0,1};
+        calibration.project={fx,0,cx,0,0,fy,cy,0,0,0,1,0};
+        calibration.projection=p;calibration.viewport=viewport;
+    }
+    const auto& k=calibration.k;const auto& project=calibration.project;
+    const std::array<double,9> r{1,0,0,0,1,0,0,0,1};
     return cdr(1024,[&](Cdr& c){header(c,us,frame);c<<height<<width<<std::string("plumb_bob")<<uint32_t{5};
         for(int i=0;i<5;++i) c<<double{0};c.serialize_array(k.data(),9);c.serialize_array(r.data(),9);c.serialize_array(project.data(),12);
         c<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<uint32_t{0}<<false;
@@ -61,7 +73,7 @@ SensorBundle decode_bundle(Bytes input) {
     }
     return {std::move(manifest),std::move(input),static_cast<size_t>(8+length)};
 }
-Packet sensor_messages(const SensorBundle& bundle,const std::string& session,const Demand& demand,uint64_t dropped,uint64_t stream_id,const json& rig,IWICImagingFactory* imaging) {
+Packet sensor_messages(const SensorBundle& bundle,const std::string& session,const Demand& demand,uint64_t dropped,uint64_t stream_id,const json& rig,IWICImagingFactory* imaging,uint32_t lidar_preview_stride) {
     const auto& manifest=bundle.manifest;const auto blobs=std::span(bundle.data).subspan(bundle.blob_offset);
     if(manifest.at("stream_id")!=stream_id) return {}; // Ready slots can survive an earlier stream.
     std::map<std::string,std::span<const uint8_t>> files;
@@ -177,7 +189,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
                     } else c.serialize_array(data.data(),data.size());
                 });
             }
-            if(preview && demand.contains(base+"/preview/image/compressed")) {
+            if(preview && meta.value("display_due",true) && demand.contains(base+"/preview/image/compressed")) {
                 auto bytes=jpeg(imaging,data,width,height);
                 append_cdr(packet,base+"/preview/image/compressed",bytes.size()+512,[&](Cdr& c){header(c,us,frame);c<<std::string("rgb8; jpeg compressed bgr8")<<uint32_t(bytes.size());c.serialize_array(bytes.data(),bytes.size());});
                 add_message(packet,base+"/preview/camera_info",camera_info(us,frame,width,height,camera.at("projection_row_major"),vp,.5));
@@ -191,7 +203,8 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
             add_message(packet,base+"/camera_info",camera_info(us,frame,width,height,camera.at("projection_row_major"),vp,1));
     }
     for(auto& [name,sources]:lidars) {
-        const auto topic="/ets2/lidar/"+name+"/points";if(!demand.contains(topic)) continue;
+        const auto topic="/ets2/lidar/"+name+"/points",preview_topic="/ets2/lidar/"+name+"/preview/points";
+        if(!demand.contains(topic) && !demand.contains(preview_topic)) continue;
         const auto& desc=sources.front().description;const auto order=desc.at("sources").get<std::vector<std::string>>();
         if(sources.size()!=order.size()) continue; // A source was not captured; never publish a partial LiDAR as complete.
         std::sort(sources.begin(),sources.end(),[&](const auto& a,const auto& b){return std::find(order.begin(),order.end(),a.camera)<std::find(order.begin(),order.end(),b.camera);});
@@ -214,7 +227,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
                 throw std::runtime_error("Captured LiDAR sources are not co-located/aligned");
         }
         const uint32_t columns=desc.at("columns");const auto elevations=desc.at("elevations_deg").get<std::vector<double>>();
-        const auto az=desc.at("azimuth_deg").get<std::array<double,3>>();const uint32_t count=desc.at("beam_count"),step=36;
+        const auto az=desc.at("azimuth_deg").get<std::array<double,3>>();const uint32_t count=desc.at("beam_count");
         if(size_t(columns)*elevations.size()!=count) throw std::runtime_error("LiDAR beam grid does not match returns");
         // Beam directions are sensor configuration, independent of the truck's
         // pose. Keep trigonometry out of the per-frame PointCloud2 loop.
@@ -228,22 +241,30 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
                 directions.beams[beam]={std::cos(elevation)*std::cos(angle),std::cos(elevation)*std::sin(angle),std::sin(elevation)};
             }
         }
-        append_cdr(packet,topic,size_t(count)*step+2048,[&](Cdr& c){
-        header(c,us,name);c<<uint32_t(elevations.size())<<columns<<uint32_t{10};
+        for(const bool preview:{false,true}) {
+        if(!demand.contains(preview?preview_topic:topic)) continue;
+        const uint32_t stride=preview?std::min(lidar_preview_stride,columns):1;
+        const uint32_t out_columns=1+(columns-1)/stride,out_count=out_columns*static_cast<uint32_t>(elevations.size()),step=preview?16:36;
+        append_cdr(packet,preview?preview_topic:topic,size_t(out_count)*step+2048,[&](Cdr& c){
+        header(c,us,name);c<<uint32_t(elevations.size())<<out_columns<<uint32_t(preview?4:10);
         auto field=[&](const char* label,uint32_t offset,uint8_t datatype){c<<std::string(label)<<offset<<datatype<<uint32_t{1};};
-        field("x",0,7);field("y",4,7);field("z",8,7);field("range",12,7);field("beam_index",16,6);field("status",20,2);
-        field("source_camera",21,2);field("source_pixel_x",24,6);field("source_pixel_y",28,6);field("source_ray_error_deg",32,7);
-        c<<false<<step<<uint32_t(columns*step)<<uint32_t(count*step);
+        field("x",0,7);field("y",4,7);field("z",8,7);field("range",12,7);
+        if(!preview) {field("beam_index",16,6);field("status",20,2);
+            field("source_camera",21,2);field("source_pixel_x",24,6);field("source_pixel_y",28,6);field("source_ray_error_deg",32,7);}
+        c<<false<<step<<uint32_t(out_columns*step)<<uint32_t(out_count*step);
         auto* cloud=reinterpret_cast<uint8_t*>(c.get_current_position());
-        if(!c.jump(size_t(count)*step)) throw std::runtime_error("PointCloud2 exceeds CDR buffer");
+        if(!c.jump(size_t(out_count)*step)) throw std::runtime_error("PointCloud2 exceeds CDR buffer");
         const float nan=std::numeric_limits<float>::quiet_NaN();
         struct Sample {float range;uint32_t status,pixel;float depth;};static_assert(sizeof(Sample)==16);
-        for(uint32_t beam=0;beam<count;++beam) {
+        for(uint32_t index=0;index<out_count;++index) {
+            const uint32_t beam=(index/out_columns)*columns+(index%out_columns)*stride;
             const LidarSource* source=nullptr;Sample sample{nan,1,UINT32_MAX,nan};
             for(const auto& candidate:sources) {std::memcpy(&sample,candidate.data.data()+beam*16,16);if(sample.status!=1) {source=&candidate;break;}}
             const auto& direction=directions.beams[beam];
             std::array<float,4> xyzr{float(direction[0]*sample.range),float(direction[1]*sample.range),float(direction[2]*sample.range),sample.range};
-            auto* point=cloud+size_t(beam)*step;std::memcpy(point,xyzr.data(),16);std::memcpy(point+16,&beam,4);
+            auto* point=cloud+size_t(index)*step;std::memcpy(point,xyzr.data(),16);
+            if(preview) continue;
+            std::memcpy(point+16,&beam,4);
             point[20]=static_cast<uint8_t>(sample.status);point[21]=source?static_cast<uint8_t>(source->camera.back()-'0'):255;
             uint32_t x=UINT32_MAX,y=UINT32_MAX;float error=nan;
             if(source) {
@@ -261,6 +282,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         }
         c<<false;
         });
+        }
     }
     add_message(packet,"/tf",cdr(512+transforms.size()*256,[&](Cdr& c){c<<uint32_t(transforms.size());for(const auto& t:transforms) {header(c,us,t.parent);c<<t.frame;pose(c,t.position,t.rotation);}}));
     add_message(packet,"/ets2/frame_info/exposure",cdr(1024,[&](Cdr& c){

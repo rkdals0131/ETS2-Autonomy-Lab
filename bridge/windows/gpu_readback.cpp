@@ -22,6 +22,10 @@ void GpuReadback::read(SensorBundle& bundle,DWORD producer_pid,bool map_to_cpu) 
     const uint64_t stream=bundle.manifest.at("stream_id");
     if(stream_!=stream) {slots_.clear();stream_=stream;}
     Handle process;
+    struct Pending {Texture* texture;size_t offset,row,height;};
+    std::vector<Pending> pending;
+    pending.reserve(bundle.manifest.at("views").size()*3);
+    bool submitted=false;
     for(auto& view:bundle.manifest.at("views")) {
         auto& metadata=view.at("metadata");
         if(!metadata.contains("shared_gpu") || metadata.at("shared_gpu").is_null()) continue;
@@ -29,6 +33,7 @@ void GpuReadback::read(SensorBundle& bundle,DWORD producer_pid,bool map_to_cpu) 
         if(gpu.at("pid").get<DWORD>()!=producer_pid) throw std::runtime_error("GPU producer differs from the IPC owner");
         const LUID luid{gpu.at("adapter_low").get<DWORD>(),gpu.at("adapter_high").get<LONG>()};
         if(!device_ || adapter_.LowPart!=luid.LowPart || adapter_.HighPart!=luid.HighPart) {
+            if(submitted) throw std::runtime_error("Shared cameras use different GPU adapters");
             slots_.clear();context_.Reset();device_.Reset();
             ComPtr<IDXGIFactory4> factory;ComPtr<IDXGIAdapter> adapter;
             check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)),"CreateDXGIFactory");
@@ -52,13 +57,11 @@ void GpuReadback::read(SensorBundle& bundle,DWORD producer_pid,bool map_to_cpu) 
         // Bound waits on this independent worker. A dead/paused game never blocks
         // state publication or the game's rendering thread.
         if(slot.fence->GetCompletedValue()<ready) {
-            Handle event{CreateEventW(nullptr,FALSE,FALSE,nullptr)};
-            if(!event.value) throw std::runtime_error("Cannot create GPU completion event");
-            check(slot.fence->SetEventOnCompletion(ready,event.value),"Wait shared pack fence");
-            if(WaitForSingleObject(event.value,2000)!=WAIT_OBJECT_0) throw std::runtime_error("Shared GPU pack timed out");
+            if(!completion_) completion_=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+            if(!completion_) throw std::runtime_error("Cannot create GPU completion event");
+            check(slot.fence->SetEventOnCompletion(ready,completion_),"Wait shared pack fence");
+            if(WaitForSingleObject(completion_,2000)!=WAIT_OBJECT_0) throw std::runtime_error("Shared GPU pack timed out");
         }
-        struct Pending {Texture* texture;size_t offset,row,height;};
-        std::vector<Pending> pending;
         for(auto& image:metadata.at("images")) {
             if(!image.contains("shared_texture")) continue;
             const auto& shared=image.at("shared_texture");const std::string file=image.at("file");
@@ -85,14 +88,17 @@ void GpuReadback::read(SensorBundle& bundle,DWORD producer_pid,bool map_to_cpu) 
         }
         // Copy commands precede release on this context. CPU mapping reads our
         // staging, so the producer can already reuse the shared output afterwards.
-        check(context_->Signal(slot.fence.Get(),released),"Release shared GPU sample");context_->Flush();
-        for(const auto& item:pending) {
+        check(context_->Signal(slot.fence.Get(),released),"Release shared GPU sample");submitted=true;
+    }
+    // Submit all cameras before any blocking Map. Per-camera release signals
+    // remain ordered after their copies; one flush submits the whole bundle.
+    if(submitted) context_->Flush();
+    for(const auto& item:pending) {
             D3D11_MAPPED_SUBRESOURCE mapped{};
             check(context_->Map(item.texture->staging.Get(),0,D3D11_MAP_READ,0,&mapped),"Map relay staging");
             for(size_t y=0;y<item.height;++y)
                 std::memcpy(bundle.data.data()+item.offset+y*item.row,static_cast<uint8_t*>(mapped.pData)+y*mapped.RowPitch,item.row);
             context_->Unmap(item.texture->staging.Get(),0);
-        }
     }
 }
 }

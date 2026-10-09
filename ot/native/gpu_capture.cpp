@@ -355,6 +355,7 @@ void GpuCapture::submit(ID3D11DeviceContext* context,uint64_t sequence,uint64_t 
     context->End(completion_.Get());
     ++sequence_;
     metadata_={{"capture_sequence",sequence_},{"camera",camera_},{"capture_format",options_.format},{"phase","leaving_camera_composition"},
+        {"display_due",(options_.products&64)!=0},
         {"geometry_gpu",std::move(geometry_gpu_)},{"sensor_dimensions",{images_[2].desc.Width,images_[2].desc.Height}},
         {"render_frame_id",render_frame},{"frame_id_source","Present return intervals"},
         {"observation_session_qpc",observation_session},{"qpc_frequency",qpc_frequency()},

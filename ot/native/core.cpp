@@ -339,6 +339,9 @@ json Runtime::command(const json& request) {
             options.shared_gpu=request.value("shared_gpu",false);
             options.auto_exposure=request.value("auto_exposure",false);
             options.lidar_hz=request.value("lidar_hz",0.0);
+            options.preview_hz=request.value("preview_hz",0.0);
+            if(!std::isfinite(options.preview_hz) || options.preview_hz<0)
+                throw std::runtime_error("preview_hz must be finite and nonnegative");
             if(!std::isfinite(options.lidar_hz) || options.lidar_hz<0)
                 throw std::runtime_error("lidar_hz must be finite and nonnegative");
             if(options.auto_exposure && cmd!="stream") throw std::runtime_error("Auto exposure requires a continuous stream");
@@ -358,7 +361,7 @@ json Runtime::command(const json& request) {
                     if(name.size()!=7 || !name.starts_with("mirror") || name.back()<'0' || name.back()>'8')
                         throw std::runtime_error("Invalid output camera");
                     for(const auto& output:entry.value()) {
-                        uint8_t flag=output=="color"?1:output=="depth"?2:output=="preview"?4:output=="lidar"?8:output=="metadata"?16:0;
+                        uint8_t flag=output=="color"?1:output=="depth"?2:output=="preview"?4:output=="lidar"?8:output=="metadata"?16:output=="pose"?32:output=="display"?64:0;
                         if(!flag) throw std::runtime_error("Unknown sensor output");
                         options.outputs[name.back()-'0']|=flag;
                     }

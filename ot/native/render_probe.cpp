@@ -506,6 +506,7 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     if(stream)
         stream->observe(reinterpret_cast<ID3D11DeviceContext*>(record.context),record.count,
             record.targets.data(),record.sequence,record.sdk_frame_hint,record.render_frame,record.pass);
+    if(stream && stream->running() && !stream->compiling_diagnostics()) return;
     if(!TryAcquireSRWLockExclusive(&records_lock_)) {missed_.fetch_add(1);return;}
     records_[records_written_%records_.size()]=record;
     ++records_written_;

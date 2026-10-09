@@ -16,7 +16,9 @@ class GpuReadback {
     std::map<uint64_t,Slot> slots_;
     uint64_t stream_=0;
     LUID adapter_{};
+    HANDLE completion_=nullptr;
 public:
+    ~GpuReadback() {if(completion_) CloseHandle(completion_);}
     // GPU-only profiling still copies and returns the ownership fence, while
     // omitting staging Map and CPU image storage.
     void read(SensorBundle& bundle,DWORD producer_pid,bool map_to_cpu=true);

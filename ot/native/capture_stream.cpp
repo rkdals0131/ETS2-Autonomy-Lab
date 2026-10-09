@@ -110,7 +110,7 @@ void CaptureStream::run() noexcept {
     std::string reason="duration",error;
     try {
         const auto begin=qpc_now();const double frequency=static_cast<double>(qpc_frequency());
-        double next=0,next_lidar=0;uint64_t previous_frame=0;size_t cursor=0;
+        double next=0,next_lidar=0,next_preview=0;uint64_t previous_frame=0;size_t cursor=0;
         for(;;) {
             if(WaitForSingleObject(stop_event_.h,0)==WAIT_OBJECT_0) {reason="stopped";break;}
             for(auto& slot:slots_) if(slot.active.load()) finish_slot(slot);
@@ -137,11 +137,13 @@ void CaptureStream::run() noexcept {
                     }
                     if(!available) ++ring_busy_;
                     else {
-                        uint32_t mask=0,vehicle_mask=0;bool armed_lidar=false;
+                        uint32_t mask=0,vehicle_mask=0;bool armed_lidar=false,armed_preview=false;
                         const bool lidar_due=options_.lidar_hz==0 || elapsed>=next_lidar;
+                        const bool preview_due=options_.preview_hz==0 || elapsed>=next_preview;
                         for(size_t i=0;i<available->cameras.size();++i) {
                             auto options=options_;options.products=options.outputs[camera_indices_[i]];
                             if(!lidar_due) options.products&=~uint8_t{8};
+                            if(!preview_due) options.products&=~uint8_t{64};
                             options.exposure=options.auto_exposure?exposure_[camera_indices_[i]]:nullptr;
                             options.lidar_pattern=options.lidar()?options.lidar_patterns[camera_indices_[i]]:nullptr;
                             if(options.selective && !options.products) continue;
@@ -150,9 +152,12 @@ void CaptureStream::run() noexcept {
                             available->cameras[i]->command("arm",0,false,options);mask|=1u<<camera_indices_[i];
                             if(!options.selective || (options.products&16)) vehicle_mask|=1u<<camera_indices_[i];
                             armed_lidar|=options.lidar();
+                            armed_preview|=(options.products&64)!=0;
                         }
                         if(armed_lidar && options_.lidar_hz>0)
                             next_lidar=(std::floor(elapsed*options_.lidar_hz)+1)/options_.lidar_hz;
+                        if(armed_preview && options_.preview_hz>0)
+                            next_preview=(std::floor(elapsed*options_.preview_hz)+1)/options_.preview_hz;
                         available->mask=mask;
                         available->vehicle_mask=vehicle_mask;
                         available->diagnostic=options_.format!="ros";

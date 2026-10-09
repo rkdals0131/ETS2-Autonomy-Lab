@@ -196,15 +196,21 @@ RenderCameraSample camera_at_compile(uintptr_t pass,uintptr_t base) {
 
 // Arrays belong to the engine. Bound observational work without treating a
 // budget cutoff as evidence that no more objects exist.
-std::vector<uintptr_t> pointers(uintptr_t address,size_t stride,size_t offset,
-                                size_t limit,bool& truncated) {
+std::span<const uintptr_t> pointers(uintptr_t address,size_t stride,size_t offset,
+                                size_t limit,bool& truncated,std::vector<uintptr_t>& result) {
     const auto a=array(address);
     const auto count=std::min<uint64_t>(a.size,limit);
     truncated=truncated || count<a.size;
-    std::vector<uint8_t> bytes(static_cast<size_t>(count)*stride);
+    result.resize(static_cast<size_t>(count));
+    if(stride==sizeof(uintptr_t) && offset==0) {
+        if(count && !copy_memory(a.data,result.data(),result.size()*sizeof(uintptr_t)))
+            throw std::runtime_error("Cannot read render vehicle array");
+        return result;
+    }
+    thread_local std::vector<uint8_t> bytes;
+    bytes.resize(static_cast<size_t>(count)*stride);
     if(count && !copy_memory(a.data,bytes.data(),bytes.size()))
         throw std::runtime_error("Cannot read render vehicle array");
-    std::vector<uintptr_t> result(static_cast<size_t>(count));
     for(size_t i=0;i<result.size();++i) std::memcpy(&result[i],bytes.data()+i*stride+offset,sizeof(uintptr_t));
     return result;
 }
@@ -217,6 +223,15 @@ RenderActorPlacement actor_placement(uintptr_t address) {
 }
 RenderVehiclesSample vehicles_at_compile(uintptr_t work,uintptr_t base) {
     RenderVehiclesSample result;result.qpc_begin=qpc_now();
+    // Reuse storage, not engine observations. Every pass still reads its own
+    // submitted geometry and current model transforms.
+    struct Scratch {
+        std::vector<uintptr_t> items,lods,geometry,components,submitted,matches;
+        std::vector<std::pair<uintptr_t,bool>> actors;
+    };
+    thread_local Scratch scratch;
+    auto& submitted=scratch.submitted;submitted.clear();
+    auto& actors=scratch.actors;actors.clear();
     bool truncated=false;
     try {
         const auto& layout=vehicle_layout();const auto& camera=camera_layout();
@@ -229,7 +244,6 @@ RenderVehiclesSample vehicles_at_compile(uintptr_t work,uintptr_t base) {
         const auto overrides=array(scene+layout.scene_overrides_offset);
         result.scene=scene;result.source_count=source.size;result.group_count=groups.size;
         result.override_count=overrides.size;result.scene_observed=true;
-        std::unordered_set<uintptr_t> submitted;
         if(source.size && !groups.size)
             throw std::runtime_error("Pass geometry has no prepared draw groups at this compilation boundary");
         const auto count=std::min<uint64_t>(groups.size,1024);
@@ -237,23 +251,26 @@ RenderVehiclesSample vehicles_at_compile(uintptr_t work,uintptr_t base) {
         for(uint64_t i=0;i<count;++i) {
             const auto group=groups.data+i*layout.group_stride;
             for(auto q:pointers(group+layout.group_items_offset,layout.draw_item_stride,
-                                 layout.draw_item_geometry_offset,8192,truncated)) if(q) submitted.insert(q);
+                                 layout.draw_item_geometry_offset,8192,truncated,scratch.items)) if(q) submitted.push_back(q);
         }
+        std::sort(submitted.begin(),submitted.end());
+        submitted.erase(std::unique(submitted.begin(),submitted.end()),submitted.end());
         result.unique_count=submitted.size();result.geometry_observed=true;
         const auto traffic=read<uintptr_t>(base+layout.traffic_pointer_rva);
         if(!traffic) throw std::runtime_error("Traffic manager is absent");
-        std::unordered_map<uintptr_t,bool> actors; // false=AI, true=parked
         for(const auto offset:{layout.spawned_array_1_offset,layout.spawned_array_2_offset})
-            for(auto a:pointers(traffic+offset,16,0,128,truncated)) if(a) actors.emplace(a,false);
-        for(auto a:pointers(traffic+layout.traffic_objects_offset,8,0,512,truncated)) {
+            for(auto a:pointers(traffic+offset,16,0,128,truncated,scratch.items)) if(a) actors.emplace_back(a,false);
+        for(auto a:pointers(traffic+layout.traffic_objects_offset,8,0,512,truncated,scratch.items)) {
             if(!a) continue;
             const auto vtable=read<uintptr_t>(a);
             const auto getter=read<uintptr_t>(vtable+8);
             const auto code=read<std::array<uint8_t,6>>(getter);
             if(code[0]!=0xB8 || code[5]!=0xC3) continue;
             uint32_t type{};std::memcpy(&type,code.data()+1,sizeof(type));
-            if(type==5 || type==6) actors.insert_or_assign(a,true);
+            if(type==5 || type==6) actors.emplace_back(a,true);
         }
+        std::sort(actors.begin(),actors.end(),[](const auto& a,const auto& b){return a.first!=b.first?a.first<b.first:a.second>b.second;});
+        actors.erase(std::unique(actors.begin(),actors.end(),[](const auto& a,const auto& b){return a.first==b.first;}),actors.end());
         result.actors_considered=actors.size();result.actors_observed=true;
         for(const auto& [actor,parked]:actors) {
             try {
@@ -263,12 +280,12 @@ RenderVehiclesSample vehicles_at_compile(uintptr_t work,uintptr_t base) {
                 if(!model) continue;
                 if(read<uintptr_t>(model)!=base+layout.model_vtable_rva)
                     throw std::runtime_error("Unsupported vehicle model layout");
-                const auto lods=pointers(model+layout.model_lod_array_offset,8,0,8,truncated);
+                const auto lods=pointers(model+layout.model_lod_array_offset,8,0,8,truncated,scratch.lods);
                 for(size_t lod=0;lod<lods.size();++lod) {
                     const auto object=lods[lod];if(!object) continue;
-                    std::vector<uintptr_t> matches;
-                    for(auto q:pointers(object+layout.model_object_geometry_array_offset,8,0,256,truncated))
-                        if(q && submitted.contains(q)) matches.push_back(q);
+                    auto& matches=scratch.matches;matches.clear();
+                    for(auto q:pointers(object+layout.model_object_geometry_array_offset,8,0,256,truncated,scratch.geometry))
+                        if(q && std::binary_search(submitted.begin(),submitted.end(),q)) matches.push_back(q);
                     if(matches.empty()) continue;
                     const auto component=read<uintptr_t>(object+layout.model_object_component_offset);
                     if(!component || read<uintptr_t>(component)!=base+layout.model_component_vtable_rva)
@@ -278,7 +295,7 @@ RenderVehiclesSample vehicles_at_compile(uintptr_t work,uintptr_t base) {
                     for(auto q:matches) {
                         const auto id=read<uint16_t>(q+layout.geometry_additional_batch_id_offset);
                         if(id>=pool.size) throw std::runtime_error("Vehicle geometry has no component batch");
-                        const auto components=pointers(pool.data+id*batch_stride,8,0,32,truncated);
+                        const auto components=pointers(pool.data+id*batch_stride,8,0,32,truncated,scratch.components);
                         if(std::find(components.begin(),components.end(),component)==components.end())
                             throw std::runtime_error("Vehicle geometry no longer references its model component");
                     }
@@ -286,7 +303,7 @@ RenderVehiclesSample vehicles_at_compile(uintptr_t work,uintptr_t base) {
                     const auto cells=read<std::array<int16_t,2>>(component+layout.model_component_cell_xz_offset);
                     RenderVehicleSample vehicle;
                     vehicle.actor=actor;vehicle.parked=parked;vehicle.model=model;vehicle.object=object;
-                    vehicle.lod=lod;vehicle.component=component;vehicle.geometry=std::move(matches);vehicle.qpc=qpc_now();
+                    vehicle.lod=lod;vehicle.component=component;vehicle.geometry=matches;vehicle.qpc=qpc_now();
                     vehicle.rotation=floats_at<16>(component+layout.model_component_rotation_offset);
                     vehicle.local=local;vehicle.cells=cells;
                     vehicle.reference=floats_at<3>(model+layout.model_reference_offset);

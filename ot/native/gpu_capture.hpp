@@ -14,14 +14,16 @@ struct CaptureOptions {
     bool shared_gpu=false;
     bool auto_exposure=false;
     double lidar_hz=0; // Zero follows the stream rate for existing capture clients.
+    double preview_hz=0;
     std::shared_ptr<ExposureState> exposure;
-    std::array<uint8_t,9> outputs{3,3,3,3,3,3,3,3,3}; // color=1, depth=2, preview=4, lidar=8, metadata=16
+    // metadata retains legacy vehicle GT semantics; pose needs no vehicle scan.
+    std::array<uint8_t,9> outputs{3,3,3,3,3,3,3,3,3}; // color=1, depth=2, preview=4, lidar=8, metadata=16, pose=32, display=64
     uint8_t products=3;
     std::array<std::shared_ptr<const LidarPattern>,9> lidar_patterns;
     std::shared_ptr<const LidarPattern> lidar_pattern;
     bool color() const {return products&1;}
     bool depth() const {return products&2;}
-    bool preview() const {return products&4;}
+    bool preview() const {return products&(4|64);}
     bool lidar() const {return products&8;}
     bool raw() const {return format=="raw" || format=="raw+rgbd8" || format=="raw+ros";}
     bool metric() const {return format=="ros" || format=="raw+ros";}

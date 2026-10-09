@@ -25,6 +25,7 @@ Windows와 WSL은 같은 `config/bridge.local.json`을 읽습니다. 현재 배�
 | rig / lidar / slots | 센서 프리셋과 슬롯. 현재 private 프리셋·[3,4,6,7]. []는 상태 센서만 실행 |
 | duration_s | 실행 제한 시간 |
 | camera_hz / lidar_hz | 기본 30 / 10. 라이다는 필요한 카메라 프레임에서만 gather·readback |
+| preview_hz / lidar_preview_stride | 표시용 JPEG 기본 10 Hz. 표시용 점군은 수평 빔 4개마다 1개, 모든 수직 링 유지 |
 | imu_mount_base_m / gnss_mount_base_m | 섀시 고정 장착점, base_link 기준 m. 기본 [0,0,1] |
 | gnss_reference_lla | 시작 위치의 가상 기준 위도·경도(deg)·타원체 고도(m), 기본 [0,0,0] |
 | recording_root | 차량 상태 기록 폴더. 생략하면 bridge/recordings |
@@ -78,7 +79,8 @@ ros2 topic list --no-daemon
 Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다.
 
 - 영상: `/ets2/camera/{C_FN,C_FW,C_RL,C_RR}/preview/image/compressed`
-- 점군: `/ets2/lidar/{L_F,L_PL,L_PR}/points`
+- 표시용 점군: `/ets2/lidar/{L_F,L_PL,L_PR}/preview/points`
+- 전체 점군: `/ets2/lidar/{L_F,L_PL,L_PR}/points`
 - 박스: `/ets2/ground_truth/{camera}/markers`
 - 상태: `/ets2/vehicle/state`, `/diagnostics`, `/tf`, `/clock`
 - 조작과 기어: `/ets2/vehicle/actuation`의 운전자 입력·실제 적용 입력·기어
@@ -87,6 +89,8 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 라이다는 Color map → range → Turbo로 설정하고 가까운 장면은 0–30m 또는 0–50m 범위를 사용합니다. 원본 RGB·depth와 `/perception/image_raw`는 ROS 소비자가 직접 구독합니다. [토픽·시각 계약](../docs/16_ros2_bridge.md).
 
 전방 원본은 1280×720, 측면 원본은 960×544입니다. JPEG·인지용 영상은 각각 640×360·480×272입니다. HD 원본을 구독하면 readback·직렬화·전송 비용이 증가합니다. 30 Hz 설정은 수집 요청 주기이며 실제 전달률은 게임과 소비자 처리량에 따라 달라집니다.
+
+인지용 영상은 카메라 주기를 따르고 JPEG 미리보기는 `preview_hz`를 따릅니다. 표시용 점군은 XYZ·range만 전달하며 전체 점군에서 선택한 빔의 값을 그대로 사용합니다. 기존 Foxglove 레이아웃의 점군 토픽을 `/preview/points`로 바꾸면 표시 비용이 줄어듭니다. 원본 점군의 필드·10 Hz 주기는 유지됩니다.
 
 ## 기록과 재생
 

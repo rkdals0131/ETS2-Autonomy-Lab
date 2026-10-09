@@ -76,6 +76,10 @@ int main(int argc,char** argv) {
         const auto duration=config.value("duration_s",60.0);
         if(!std::isfinite(duration) || duration<=0) throw std::runtime_error("duration_s must be positive");
         const auto camera_hz=config.value("camera_hz",30.0),lidar_hz=config.value("lidar_hz",10.0);
+        const auto preview_hz=config.value("preview_hz",10.0);
+        const auto preview_stride=config.value("lidar_preview_stride",4u);
+        if(!std::isfinite(preview_hz) || preview_hz<=0 || !preview_stride)
+            throw std::runtime_error("Preview rate and LiDAR preview stride must be positive");
         if(!std::isfinite(camera_hz) || camera_hz<=0 || !std::isfinite(lidar_hz) || lidar_hz<=0 || lidar_hz>camera_hz)
             throw std::runtime_error("Rates require 0 < lidar_hz <= camera_hz");
         const auto owner=uuid_string();
@@ -159,7 +163,7 @@ int main(int argc,char** argv) {
             Microsoft::WRL::ComPtr<IWICImagingFactory> imaging;
             if(FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging)))) throw std::runtime_error("WIC initialization failed");
             while(workers.alive) {SensorBundle bundle;if(read_queue.pop(bundle)) {
-                const auto begin=microseconds();auto packet=sensor_messages(bundle,session,*demand.load(),dropped,stream_id,rig,imaging.Get());
+                const auto begin=microseconds();auto packet=sensor_messages(bundle,session,*demand.load(),dropped,stream_id,rig,imaging.Get(),preview_stride);
                 encode_time.add(begin);read_buffers.put(std::move(bundle.data));
                 if(!packet.data.empty()) {++encoded;encoded_bytes+=packet.data.size();
                     if(publish_sensors && send_queue.push(std::move(packet))) ++dropped;}

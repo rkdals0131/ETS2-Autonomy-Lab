@@ -158,8 +158,10 @@ inline std::vector<Topic> topics() {
         result.push_back({std::string("/ets2/ground_truth/")+name+"/objects","vision_msgs/msg/Detection3DArray"});
         result.push_back({std::string("/ets2/ground_truth/")+name+"/markers","visualization_msgs/msg/MarkerArray"});
     }
-    for(const auto* name:{"L_F","L_PL","L_PR"})
+    for(const auto* name:{"L_F","L_PL","L_PR"}) {
         result.push_back({std::string("/ets2/lidar/")+name+"/points","sensor_msgs/msg/PointCloud2"});
+        result.push_back({std::string("/ets2/lidar/")+name+"/preview/points","sensor_msgs/msg/PointCloud2"});
+    }
     return result;
 }
 inline void add_message(Packet& packet,const std::string& topic,Bytes bytes) {
