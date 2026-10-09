@@ -29,9 +29,10 @@
 
 - 게임: `ot/native`, 주소·필드: `ot/schema`
 - Windows 릴레이: `bridge/windows`
-- ROS 수신기·메시지: `bridge/ros2`
-- 실행 관리: `bridge/launcher.py`, `bridge/wsl_session.py`
-- 현재 리그: `ot/presets/phase1-highway-private.json`
+- ROS 수신기·메시지: `ros2/src/ets2_bridge`, `ros2/src/ets2_msgs`
+- GT 자동주행: `ros2/src/ets2_autonomy`
+- 실행 관리: `apps/launcher`, 호환 진입점 `bridge/launch.cmd`
+- 현재 리그: `ot/presets/phase1-highway-fh4-private.json`
 - 라이다 패턴: `ot/presets/phase1-lidar-private.json`
 
 현재 사용법은 [브리지](../bridge/README.md)와 [DLL](../ot/README.md), 중요한 실패와 해결은 [시행착오](history/lessons.md)에 있습니다.

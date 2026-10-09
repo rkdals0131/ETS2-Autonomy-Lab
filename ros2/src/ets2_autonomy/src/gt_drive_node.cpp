@@ -5,7 +5,7 @@
 #include <ets2_msgs/msg/traffic_state.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/string.hpp>
-#include "path_following.hpp"
+#include "control/path_following.hpp"
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <algorithm>
 #include <atomic>

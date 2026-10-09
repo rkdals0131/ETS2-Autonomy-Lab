@@ -13,5 +13,5 @@ else
 fi
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 export ROS_DOMAIN_ID=42
-export FASTRTPS_DEFAULT_PROFILES_FILE="$(cd "$_ets2_ros_env_dir" && pwd)/config/fastdds.xml"
+export FASTRTPS_DEFAULT_PROFILES_FILE="$(ros2 pkg prefix ets2_bridge)/share/ets2_bridge/config/fastdds.xml"
 unset _ets2_ros_env_dir

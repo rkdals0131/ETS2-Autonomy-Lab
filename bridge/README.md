@@ -60,10 +60,12 @@ REPO=/mnt/c/path/to/ETS2-Autonomy-Lab  # 실제 저장소 경로
 source /opt/ros/jazzy/setup.bash
 mkdir -p ~/ets2-ros
 cd ~/ets2-ros
-colcon build --base-paths "$REPO/bridge/ros2" --executor sequential --cmake-args -DCMAKE_BUILD_TYPE=Release
+/usr/bin/python3 /usr/bin/colcon build --base-paths "$REPO/ros2/src" --cmake-clean-cache --executor sequential --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3 -DPYTHON_EXECUTABLE=/usr/bin/python3
 ```
 
 `bridge/ros-env.sh`는 Bash·Zsh에 맞는 ROS setup을 선택합니다. 다른 ROS 소비자도 이 환경을 불러 domain 42와 같은 DDS SHM 프로필을 사용합니다.
+
+ROS 소스는 [ros2/src](../ros2/README.md), 실행 관리 코드는 [apps/launcher](../apps/launcher/README.md)에 있습니다. 기존 `bridge/launch.cmd`와 Python 진입점은 호환 경로로 유지합니다. 폴더 정리 이전 overlay는 실행 중인 브리지를 정상 중지한 뒤 새 소스 경로로 다시 빌드합니다.
 
 ## WSL에서 토픽 확인
 
@@ -145,7 +147,7 @@ core 0.28.0은 카메라와 독립된 `/ets2/ground_truth/traffic`을 SDK frame_
 
 ```bash
 source /mnt/c/path/to/ETS2-Autonomy-Lab/bridge/ros-env.sh  # 실제 저장소 경로
-ros2 run ets2_bridge drive_speed --ros-args -p arm:=true -p target_speed_mps:=8.333333 -p steering_target:=0.0
+ros2 run ets2_autonomy drive_speed --ros-args -p arm:=true -p target_speed_mps:=8.333333 -p steering_target:=0.0
 ```
 
 런처의 주행 보조 대신 직접 실행하려면 provider로 만든 파일을 위 노드에 `-p path_file:=<WSL의 current-lane.json 절대 경로>`로 추가합니다. 경로 모드의 조향은 경로 추종기가 계산합니다. 목표 위치 직접 지정은 path_file이 없는 실행에 사용합니다.

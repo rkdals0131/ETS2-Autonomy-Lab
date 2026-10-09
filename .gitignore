@@ -30,6 +30,9 @@ venv/
 /bridge/build/
 /bridge/dist/
 /bridge/recordings/
+/ros2/build/
+/ros2/install/
+/ros2/log/
 *.dll
 *.exe
 *.pdb
