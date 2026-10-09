@@ -243,19 +243,19 @@ void CameraRig::dimensions(safetyhook::Context& context) noexcept {
     if(size[0]) {context.rdx=size[0];context.r8=size[1];}
 }
 void CameraRig::ego_parts(safetyhook::Context& context) noexcept {
+    uintptr_t caller{};
+    static const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    if(!read_memory(context.rsp+0x48,caller) || (caller!=base+0x646DC9 && caller!=base+0x646E57)) return;
     const auto config=configuration_.load();
     if(!config || !config->ego_full_model) return;
-    uintptr_t caller{},mask{},controller{},actor{},vehicle{};
-    const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    uintptr_t mask{},controller{},actor{},vehicle{};
     constexpr std::array<uint64_t,9> masks={0x400,0x800,0x1000,0x2000,0x4000,0x8000,0x10000,0x0800000000000000,0x1000000000000000};
     uint64_t sensor_mask=0;for(unsigned i=0;i<9;++i) if(config->mask&(1u<<i)) sensor_mask|=masks[i];
     // A3CADE follows the cached-model "all parts" test. Limit the override to
     // the two body model calls made by the player's 646C00 submission, and to
     // camera slots owned by this rig. Other models and normal mirrors keep
     // their native per-mirror subsets. No model/camera memory is changed.
-    if(!read_memory(context.rsp+0x48,caller) ||
-       (caller!=base+0x646DC9 && caller!=base+0x646E57) ||
-       !read_memory(context.r8+0x18,mask) || !(mask&sensor_mask) ||
+    if(!read_memory(context.r8+0x18,mask) || !(mask&sensor_mask) ||
        !read_memory(base+0x36AE6D8,controller) || !controller ||
        !read_memory(controller+0x31B0,actor) || !actor ||
        !read_memory(actor+0x18,vehicle) || context.rsi!=vehicle) return;

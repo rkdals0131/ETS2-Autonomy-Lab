@@ -1,4 +1,5 @@
 #include "capture_stream.hpp"
+#include <cmath>
 #include <algorithm>
 #include <stdexcept>
 
@@ -49,8 +50,9 @@ bool CaptureStream::pending() const noexcept {
 void CaptureStream::observe(ID3D11DeviceContext* context,uint32_t count,const uintptr_t* targets,
         uint64_t sequence,uint64_t sdk_frame,uint64_t render_frame,const json* pass) noexcept {
     for(auto& slot:slots_) if(slot.active.load() && slot.selected.load())
-        for(auto& camera:slot.cameras)
-            camera->observe(context,count,targets,sequence,sdk_frame,render_frame,session_,pass);
+        for(size_t i=0;i<slot.cameras.size();++i)
+            if(slot.mask.load()&(1u<<camera_indices_[i]))
+                slot.cameras[i]->observe(context,count,targets,sequence,sdk_frame,render_frame,session_,pass);
 }
 void CaptureStream::finish_slot(Slot& slot) {
     bool pending=false,failed=false;
@@ -99,7 +101,7 @@ void CaptureStream::run() noexcept {
     std::string reason="duration",error;
     try {
         const auto begin=qpc_now();const double frequency=static_cast<double>(qpc_frequency());
-        double next=0;uint64_t previous_frame=0;size_t cursor=0;
+        double next=0,next_lidar=0;uint64_t previous_frame=0;size_t cursor=0;
         for(;;) {
             if(WaitForSingleObject(stop_event_.h,0)==WAIT_OBJECT_0) {reason="stopped";break;}
             for(auto& slot:slots_) if(slot.active.load()) finish_slot(slot);
@@ -126,16 +128,21 @@ void CaptureStream::run() noexcept {
                     }
                     if(!available) ++ring_busy_;
                     else {
-                        uint32_t mask=0;
+                        uint32_t mask=0;bool armed_lidar=false;
+                        const bool lidar_due=options_.lidar_hz==0 || elapsed>=next_lidar;
                         for(size_t i=0;i<available->cameras.size();++i) {
                             auto options=options_;options.products=options.outputs[camera_indices_[i]];
+                            if(!lidar_due) options.products&=~uint8_t{8};
                             options.exposure=options.auto_exposure?exposure_[camera_indices_[i]]:nullptr;
                             options.lidar_pattern=options.lidar()?options.lidar_patterns[camera_indices_[i]]:nullptr;
                             if(options.selective && !options.products) continue;
                             // The next selection claims this request exactly
                             // once. Actual execution determines its Present ID.
                             available->cameras[i]->command("arm",0,false,options);mask|=1u<<camera_indices_[i];
+                            armed_lidar|=options.lidar();
                         }
+                        if(armed_lidar && options_.lidar_hz>0)
+                            next_lidar=(std::floor(elapsed*options_.lidar_hz)+1)/options_.lidar_hz;
                         available->mask=mask;
                         if(mask) {available->frame=0;available->selected=false;available->active=true;previous_frame=frame;++armed_;}
                     }
@@ -163,6 +170,7 @@ json CaptureStream::status() {
     std::lock_guard lock(result_mutex_);
     return {{"running",running_.load()},{"stream_id",id_},{"requested_hz",hz_},{"duration_s",duration_},
         {"format",options_.format},{"color_gain",options_.color_gain},{"requested_cameras",names_},
+        {"lidar_hz",options_.lidar_hz>0?std::min(options_.lidar_hz,hz_):hz_},
         {"armed",armed_.load()},{"selected",selected_.load()},{"completed",completed_.load()},{"published",published_.load()},
         {"failed",failed_.load()},{"canceled",canceled_.load()},{"gpu_ring_busy",ring_busy_.load()},
         {"same_frame_skipped",same_frame_.load()},{"queue_dropped",queue_dropped_.load()},

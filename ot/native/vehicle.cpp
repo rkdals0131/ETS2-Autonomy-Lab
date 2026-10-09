@@ -68,6 +68,7 @@ json read_vehicle_physics(uintptr_t actor,const json& schema) {
     position=add(position,{origin.x+512.0*origin.cx,origin.y,origin.z+512.0*origin.cz});
     position=add(position,rotate(rotation,{-shift[0],-shift[1],-shift[2]}));
     return {{"available",true},{"pose_physics",{{"position_m",position},{"quaternion_wxyz",rotation},{"coordinate_space","world"}}},
+        {"mass_center_local_m",add(p_local,{shift[0],shift[1],shift[2]})},
         {"origin_shift",shift},{"phase","sdk_frame_end"},{"source","physx_body_with_scs_origin_shift"}};
 }
 }

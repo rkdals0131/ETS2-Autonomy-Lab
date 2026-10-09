@@ -112,6 +112,11 @@
     "projection": {"offset": 96, "type": "mat4_row_major", "writable": false}
   },
   "evidence": "docs/12_dx11_mirror_render_path.md",
+  "sdk_wheel_fields": [
+    {"name": "truck.wheel.angular_velocity", "type": "float"},
+    {"name": "truck.wheel.steering", "type": "float"},
+    {"name": "truck.wheel.on_ground", "type": "bool"}
+  ],
   "sdk_fields": [
     {"name": "truck.world.placement", "type": "dplacement"},
     {"name": "truck.local.velocity.linear", "type": "fvector"},

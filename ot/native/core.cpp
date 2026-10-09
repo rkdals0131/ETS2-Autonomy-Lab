@@ -7,10 +7,16 @@
 #include <fstream>
 #include <stdexcept>
 #include <cstring>
+#include <deque>
+#include <cmath>
 
 namespace ot {
 class Runtime;
-struct Channel { Runtime* owner; std::string name; scs_value_type_t type; scs_result_t registration=SCS_RESULT_not_found; };
+struct Channel {
+    Runtime* owner; std::string name; scs_value_type_t type;
+    scs_u32_t index=SCS_U32_NIL; scs_result_t registration=SCS_RESULT_not_found;
+    std::string key() const {return index==SCS_U32_NIL?name:name+"["+std::to_string(index)+"]";}
+};
 struct Placement { float x,y,z; int16_t cx,cz; float w,qx,qy,qz; };
 static_assert(sizeof(Placement)==32);
 struct ArrayHeader { uintptr_t vtable,data; uint64_t size,capacity; };
@@ -42,6 +48,7 @@ private:
     scs_telemetry_init_params_v100_t api_;
     json schema_,config_=json::object(),values_=json::object(),registration_=json::object();
     std::atomic<std::shared_ptr<const json>> truck_config_;
+    std::atomic<std::shared_ptr<const json>> registered_;
     std::string executable_hash_,gate_error_;
     bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,allow_camera_rig_=false,paused_=true;
     std::mutex control_;
@@ -50,7 +57,7 @@ private:
     std::atomic<int> tier_{0};
     uint64_t frame_=0,generation_=0;
     scs_telemetry_frame_start_t clock_{};
-    std::vector<Channel> channels_;
+    std::deque<Channel> channels_;
     std::vector<scs_event_t> events_;
     std::atomic<std::shared_ptr<const json>> latest_;
     std::unique_ptr<Transport> transport_;
@@ -72,7 +79,6 @@ void Runtime::initialize() {
     if(!gate_ok_) log("Version gate closed; SDK-only. Observed hash="+executable_hash_+" "+gate_error_);
     tier_=(gate_ok_ && allow_tier1_)?initial:0;
     const auto& fields=schema_.at("sdk_fields");
-    channels_.reserve(fields.size());
     for(const auto& field:fields) {
         std::string type=field.at("type"),name=field.at("name");
         auto kind=type=="dplacement"?SCS_VALUE_TYPE_dplacement:type=="fvector"?SCS_VALUE_TYPE_fvector:SCS_VALUE_TYPE_float;
@@ -83,6 +89,7 @@ void Runtime::initialize() {
             SCS_TELEMETRY_CHANNEL_FLAG_each_frame|SCS_TELEMETRY_CHANNEL_FLAG_no_value,channel_callback,&channel);
         registration_[channel.name]=channel.registration;
     }
+    registered_.store(std::make_shared<const json>(registration_));
     for(auto id:{SCS_TELEMETRY_EVENT_frame_start,SCS_TELEMETRY_EVENT_frame_end,SCS_TELEMETRY_EVENT_started,
                 SCS_TELEMETRY_EVENT_paused,SCS_TELEMETRY_EVENT_configuration}) {
         if(api_.register_for_event(id,event_callback,this)!=SCS_RESULT_ok) throw std::runtime_error("SDK event registration failed");
@@ -98,7 +105,7 @@ bool Runtime::shutdown() noexcept {
     for(auto event:events_) api_.unregister_from_event(event);
     events_.clear();
     for(auto& channel:channels_) {
-        if(channel.registration==SCS_RESULT_ok) api_.unregister_from_channel(channel.name.c_str(),SCS_U32_NIL,channel.type);
+        if(channel.registration==SCS_RESULT_ok) api_.unregister_from_channel(channel.name.c_str(),channel.index,channel.type);
         channel.registration=SCS_RESULT_not_found;
     }
     if(transport_) transport_->stop();
@@ -134,6 +141,7 @@ void Runtime::value(const Channel& channel,const scs_value_t* value) {
     if(value) {
         if(value->type!=channel.type) throw std::runtime_error("SDK channel type mismatch");
         if(value->type==SCS_VALUE_TYPE_float) item["value"]=value->value_float.value;
+        else if(value->type==SCS_VALUE_TYPE_bool) item["value"]=value->value_bool.value!=0;
         else if(value->type==SCS_VALUE_TYPE_fvector) {
             const auto& v=value->value_fvector; item["value"]={v.x,v.y,v.z};
         } else if(value->type==SCS_VALUE_TYPE_dplacement) {
@@ -142,7 +150,7 @@ void Runtime::value(const Channel& channel,const scs_value_t* value) {
                 {"euler_rotations",{p.orientation.heading,p.orientation.pitch,p.orientation.roll}}};
         }
     }
-    values_[channel.name]=std::move(item);
+    values_[channel.key()]=std::move(item);
 }
 void Runtime::event(scs_event_t event,const void* data) {
     if(event==SCS_TELEMETRY_EVENT_started) paused_=false;
@@ -151,7 +159,7 @@ void Runtime::event(scs_event_t event,const void* data) {
         const auto& config=*static_cast<const scs_telemetry_configuration_t*>(data);
         if(config.id && std::strcmp(config.id,"truck")==0) {
             ++generation_;values_=json::object();
-            json attributes=json::array();
+            json attributes=json::array();uint32_t wheel_count=0;
             for(const auto* attribute=config.attributes;attribute->name;++attribute) {
                 const std::string_view name=attribute->name;
                 if(name!="id" && name!="brand" && name!="name" && name!="cabin.position" &&
@@ -168,9 +176,24 @@ void Runtime::event(scs_event_t event,const void* data) {
                     }
                     default:continue;
                 }
+                if(name=="wheels.count") wheel_count=decoded.get<uint32_t>();
                 attributes.push_back({{"name",name},{"index",attribute->index==SCS_U32_NIL?json(nullptr):json(attribute->index)},
                     {"value",std::move(decoded)}});
             }
+            // SDK event callbacks permit registration; deque keeps callback contexts stable.
+            while(!channels_.empty() && channels_.back().index!=SCS_U32_NIL) {
+                auto& c=channels_.back();
+                if(c.registration==SCS_RESULT_ok) api_.unregister_from_channel(c.name.c_str(),c.index,c.type);
+                registration_.erase(c.key());channels_.pop_back();
+            }
+            for(uint32_t i=0;i<wheel_count;++i) for(const auto& field:schema_.at("sdk_wheel_fields")) {
+                channels_.push_back({this,field.at("name"),field.at("type")=="bool"?SCS_VALUE_TYPE_bool:SCS_VALUE_TYPE_float,i});
+                auto& c=channels_.back();
+                c.registration=api_.register_for_channel(c.name.c_str(),c.index,c.type,
+                    SCS_TELEMETRY_CHANNEL_FLAG_each_frame|SCS_TELEMETRY_CHANNEL_FLAG_no_value,channel_callback,&c);
+                registration_[c.key()]=c.registration;
+            }
+            registered_.store(std::make_shared<const json>(registration_));
             truck_config_.store(std::make_shared<const json>(json{{"source","SDK truck configuration"},
                 {"truck_generation",generation_},{"attributes",std::move(attributes)}}));
         }
@@ -278,7 +301,7 @@ json Runtime::command(const json& request) {
         {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","capture_mirror5","capture_mirrors","stream","manual_dump","panic"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0},
-        {"field_writes",false},{"camera_rig",render_probe_->camera_rig(json::object())},{"channels",registration_}};
+        {"field_writes",false},{"camera_rig",render_probe_->camera_rig(json::object())},{"channels",*registered_.load()}};
     if(cmd=="schema") return schema_;
     if(cmd=="truck_config") {
         auto config=truck_config_.load();
@@ -313,6 +336,9 @@ json Runtime::command(const json& request) {
             options.color_gain=request.value("color_gain",1.0f);
             options.shared_gpu=request.value("shared_gpu",false);
             options.auto_exposure=request.value("auto_exposure",false);
+            options.lidar_hz=request.value("lidar_hz",0.0);
+            if(!std::isfinite(options.lidar_hz) || options.lidar_hz<0)
+                throw std::runtime_error("lidar_hz must be finite and nonnegative");
             if(options.auto_exposure && cmd!="stream") throw std::runtime_error("Auto exposure requires a continuous stream");
             if(options.shared_gpu && (cmd!="stream" || options.format!="ros"))
                 throw std::runtime_error("Shared GPU output requires a ROS stream relay");
@@ -406,7 +432,8 @@ json Runtime::command(const json& request) {
             if(index>=mirrors.size() || !mirrors[index].value("available",false)) throw std::runtime_error("Mirror not present");
             return {{"value",mirrors[index].at(member)},{"frame_id",state["frame_id"]},{"phase",state["engine"]["phase"]}};
         }
-        if(registration_.contains(field)) return {{"available",false},{"registration_result",registration_[field]}};
+        const auto registered=registered_.load();
+        if(registered->contains(field)) return {{"available",false},{"registration_result",registered->at(field)}};
         throw std::runtime_error("Field is not in the compiled read-only schema");
     }
     throw std::runtime_error("Command not implemented: "+cmd);

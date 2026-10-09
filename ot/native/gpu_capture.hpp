@@ -12,6 +12,7 @@ struct CaptureOptions {
     bool selective=false;
     bool shared_gpu=false;
     bool auto_exposure=false;
+    double lidar_hz=0; // Zero follows the stream rate for existing capture clients.
     std::shared_ptr<ExposureState> exposure;
     std::array<uint8_t,9> outputs{3,3,3,3,3,3,3,3,3}; // color=1, depth=2, preview=4, lidar=8, metadata=16
     uint8_t products=3;
