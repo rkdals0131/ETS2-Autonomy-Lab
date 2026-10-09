@@ -10,7 +10,10 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(fastcdr GIT_REPOSITORY https://github.com/eProsima/Fast-CDR.git GIT_TAG 9f4e60f7ac958e0fbbfe949102de3929cbbc226f)
 FetchContent_MakeAvailable(fastcdr)
-add_executable(ets2_relay windows/main.cpp windows/messages.cpp windows/gpu_readback.cpp)
+add_executable(ets2_relay
+  windows/main.cpp windows/game_ipc.cpp windows/vehicle_profile.cpp
+  windows/motion_sensors.cpp windows/state_source.cpp windows/render_capture.cpp
+  windows/state_messages.cpp windows/image_messages.cpp windows/gpu_readback.cpp)
 target_include_directories(ets2_relay PRIVATE common ../ot/vendor)
 target_compile_definitions(ets2_relay PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 target_compile_options(ets2_relay PRIVATE /W4 /EHsc /utf-8 /permissive-)
