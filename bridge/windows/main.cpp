@@ -39,6 +39,11 @@ static std::string wsl_address() {
     throw std::runtime_error("Ubuntu has no eth0 IPv4 address");
 }
 int main(int argc,char** argv) {
+    // The game renders synchronously; relay queues can discard old bundles.
+    // Yield CPU scheduling priority without pinning the user's WSL or desktop.
+    if(SetPriorityClass(GetCurrentProcess(),BELOW_NORMAL_PRIORITY_CLASS))
+        std::cout<<"Relay CPU priority: below normal"<<std::endl;
+    else std::cerr<<"Could not lower relay CPU priority: "<<GetLastError()<<std::endl;
     SetConsoleCtrlHandler(signal_handler,TRUE);WSADATA winsock{};
     if(WSAStartup(MAKEWORD(2,2),&winsock)) return 1;
     struct WinsockEnd {~WinsockEnd(){WSACleanup();}} end;

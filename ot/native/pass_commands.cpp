@@ -277,7 +277,19 @@ std::shared_ptr<const json> PassCommands::describe(uintptr_t input,bool vehicles
                 std::array<char,8> prefix{};
                 if(label && copy_memory(label,prefix.data(),prefix.size()) &&
                    std::memcmp(prefix.data(),"mirror",6)==0 && prefix[6]>='0' && prefix[6]<='8' &&
-                   prefix[7]=='\0' && (camera_mask&(1u<<(prefix[6]-'0')))) {mirror_output=true;break;}
+                   prefix[7]=='\0' && (camera_mask&(1u<<(prefix[6]-'0')))) {
+                    // Streaming consumes the geometry and final-color targets.
+                    // Lighting/blur intermediates need no JSON or command labels;
+                    // their binds still end the outgoing capture normally.
+                    if(camera_mask!=UINT32_MAX) {
+                        const auto address=read<uintptr_t>(images.data+id*0x7F0+8);
+                        std::array<char,16> name{};
+                        if(!address || !copy_memory(address,name.data(),name.size()) ||
+                           (std::memcmp(name.data(),"attributes_0",sizeof("attributes_0"))!=0 &&
+                            std::memcmp(name.data(),"composition_raw",sizeof("composition_raw"))!=0)) continue;
+                    }
+                    mirror_output=true;break;
+                }
             }
             // pass+0xC0 names the implementation (e.g. deferred or quad_drawer),
             // not the camera. Filter on output image namespaces before building
