@@ -62,6 +62,24 @@ def main():
     node.create_subscription(VehicleState, "/ets2/vehicle/state", state, qos)
     node.create_subscription(DiagnosticArray, "/diagnostics", diagnostics, qos)
     child = None
+    drive = None
+    drive_log = None
+    drive_exit = None
+    def release_drive():
+        nonlocal drive, drive_log, drive_exit
+        if drive and drive.poll() is None:
+            os.killpg(drive.pid, signal.SIGINT)
+            try:
+                drive.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                os.killpg(drive.pid, signal.SIGKILL)
+                drive.wait(timeout=2)
+        if drive:
+            drive_exit = drive.returncode
+        if drive_log:
+            drive_log.close()
+            drive_log = None
+        drive = None
     recording = BagRecording(config)
     try:
         # systemd removes this run's log even when the supervisor is killed.
@@ -81,6 +99,18 @@ def main():
                     heartbeat = now
                 elif action == "stop":
                     running = False
+                elif action == "drive_start":
+                    if drive and drive.poll() is None:
+                        continue  # A repeated start keeps the current owner.
+                    release_drive()
+                    drive_log = (runtime_directory / "drive.log").open("w")
+                    drive = subprocess.Popen(["ros2", "run", "ets2_bridge", "drive_speed", "--ros-args",
+                        "-p", "arm:=true", "-p", "path_file:=" + request["path"],
+                        "-p", "target_speed_mps:=" + str(float(request["speed_mps"]))],
+                        stdout=drive_log, stderr=drive_log, stdin=subprocess.DEVNULL, start_new_session=True)
+                    drive_exit = None
+                elif action == "drive_stop":
+                    release_drive()
                 elif action == "record_start":
                     try:
                         recording.start(request.get("profile", "state"))
@@ -99,11 +129,15 @@ def main():
                                   "ip": ip, "listeners_ready": ports <= listeners(), "paused": paused,
                                   "state_age_s": now - last_state if last_state else None,
                                   "diagnostics_age_s": now - last_diagnostics if last_diagnostics else None,
-                                  "recording": recording.poll()}), flush=True)
+                                  "recording": recording.poll(),
+                                  "drive_pid": drive.pid if drive and drive.poll() is None else None,
+                                  "drive_exit": drive.poll() if drive else drive_exit,
+                                  "drive_log": (runtime_directory / "drive.log").read_text(errors="replace")[-1500:] if (runtime_directory / "drive.log").exists() else ""}), flush=True)
                 last_report = now
         print(json.dumps({"type": "wsl_stopping"}), flush=True)
     finally:
         try:
+            release_drive()
             recording.close()
             print(json.dumps({"type": "recording_status", "recording": recording.poll()}), flush=True)
         finally:

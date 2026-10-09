@@ -187,7 +187,11 @@ int main(int argc,char** argv) {
         const auto start=ticks();uint64_t report=0;Demand previous_demand;json outputs=json::object();
         while(workers.alive && !stopped && lease_ok && ticks()-start<remaining*1000) {
             const auto requested=demand.load();
-            if(*requested!=previous_demand) {outputs=capture_outputs(rig,patterns,*requested);previous_demand=*requested;}
+            if(*requested!=previous_demand) {
+                outputs=capture_outputs(rig,patterns,*requested);
+                owned({{"cmd","traffic_observation"},{"enabled",requested->contains("/ets2/ground_truth/traffic")}});
+                previous_demand=*requested;
+            }
             {
                 std::lock_guard access(capture_access);
                 const auto next=capture.reconcile(capture_wanted,outputs,remaining-(ticks()-start)/1000.0);

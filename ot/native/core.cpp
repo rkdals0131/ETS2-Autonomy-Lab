@@ -74,6 +74,7 @@ private:
     std::string lease_;
     uint64_t lease_deadline_=0;
     std::atomic<int> tier_{0};
+    std::atomic<bool> observe_traffic_{false};
     uint64_t frame_=0,generation_=0;
     scs_telemetry_frame_start_t clock_{};
     std::deque<Channel> channels_;
@@ -149,7 +150,7 @@ void Runtime::panic() noexcept {
         std::lock_guard lock(control_);
         if(input_host) input_host->release(input_host->context,OtDriveReason::panic);
         lease_.clear();lease_deadline_=0;
-        tier_=0;
+        tier_=0;observe_traffic_=false;
         if(render_probe_) render_probe_->disable();
         log("Panic: Tier 0; SDK remains active; render hook disable requested");
     } catch(...) {tier_=0;}
@@ -264,6 +265,7 @@ json Runtime::engine_snapshot() {
         return {{"available",false},{"reason","player_unavailable"}};
     json engine={{"available",true},{"phase","sdk_frame_end_before_render_preparation"},
         {"vehicle",read_vehicle_physics(actor,schema_)},{"mirrors",json::array()}};
+    if(observe_traffic_) engine["traffic"]=read_world_traffic(schema_);
     ArrayHeader array{};
     if(!read_memory(actor+schema_.at("interior_offset").get<uintptr_t>(),interior) || !interior ||
        !read_memory(interior+schema_.at("mirror_array_offset").get<uintptr_t>(),array) ||
@@ -321,6 +323,12 @@ json Runtime::command(const json& request) {
         return {{"active",action!="release"},{"expires_in_ms",5000}};
     }
     if(cmd=="ping") return {{"plugin","ot_core"},{"pid",GetCurrentProcessId()}};
+    if(cmd=="traffic_observation") {
+        std::lock_guard lock(control_);require_owner();
+        const bool enabled=request.at("enabled").get<bool>();
+        if(enabled && (lease_.empty() || tier_<1)) throw std::runtime_error("Traffic observation requires a Tier 1 bridge lease");
+        observe_traffic_=enabled;return {{"enabled",enabled}};
+    }
     if(cmd=="drive") {
         const auto action=request.value("action",std::string("status"));
         if(action=="status") return current_drive();

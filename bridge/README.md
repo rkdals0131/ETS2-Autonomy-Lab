@@ -95,9 +95,19 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 
 인지용 영상은 카메라 주기를 따르고 JPEG 미리보기는 `preview_hz`를 따릅니다. 표시용 점군은 XYZ·range만 전달하며 전체 점군에서 선택한 빔의 값을 그대로 사용합니다. 기존 Foxglove 레이아웃의 점군 토픽을 `/preview/points`로 바꾸면 표시 비용이 줄어듭니다. 원본 점군의 필드·10 Hz 주기는 유지됩니다.
 
+## GT 도로 자동 주행
+
+현재 위치의 실제 지도 차로 기준선을 생성하고 GT 위치로 추종합니다. 속도 PI, pure-pursuit 경로 추종, applied steering PI를 연결했습니다. 같은 차로 AI 차량의 GT 거리·속도로 목표 속도를 낮추며, 선택한 기준선 끝과 급한 곡선에서도 감속합니다. 차량·바퀴 pose나 사람 Xbox 설정은 쓰지 않습니다.
+
+기존 런처를 정상적으로 닫고 `launch.cmd`로 다시 엽니다. **입력·상태만** 체크 → **시작** → 목표 km/h 입력 → **GT 주행**을 누르고 게임 창으로 돌아갑니다. 현재 위치에서 지도 차로 생성과 제어기 실행까지 런처가 연결합니다. 엔진·D 기어·주차브레이크는 게임에서 주행 가능한 상태로 설정합니다. **입력 해제**는 자동 명령을 해제하며 차량을 계속 세워 두는 기능은 아닙니다. 브리지 중지·창 닫기도 주행 소유권과 프로세스를 정리합니다.
+
+현재 provider는 설치된 지도 자산의 `ger16` 단방향 차로와 같은 지원 layout에서 현재 진행방향 차로를 고르고, 공유 Node로 연결되는 도로를 최대 1 km까지 잇습니다. 실제 모델 노면·shoulder로 차로 폭을 구합니다. prefab/갈림길·layout 변경·선택 거리 끝에서는 기준선이 끝나므로 감속합니다. 내비 목적지 선택·교차로/신호 통과·차로 변경은 아직 없습니다. [지도 provider 빌드·지원 범위](map_lane_provider/README.md).
+
+2026-10-10 FH4 전경 주행에서 기준선 약 **453 m**를 진행했습니다. 제품 로그의 중심선 횡오차는 최대 **1.35 m**, 후반 **0.03–0.57 m**, 후반 속도는 **29.84–29.97 km/h**였습니다. 목표 30 km/h의 초기 PI 전이에서 **35.86 km/h** overshoot가 있었으며 개선 대상입니다. 목표0 제동·명시적 해제 후 최종 상태는 정지·disarmed·자동 3축0이었습니다. 먼 AI 차량은 723–819 m에서 관측됐지만 근접 앞차 추종 제동은 이 실행에서 검증하지 않았습니다. 이는 현재 도로의 짧은 주행 결과이며 차체 전체의 차로 내 유지나 일반 도로 완주를 입증하지 않습니다.
+
 ## 운전 명령 API
 
-0.27.0은 공식 SCS Input SDK에 `ot_drive` 가상 3축 장치를 등록합니다. 사람의 키보드/Xbox 바인딩을 유지하면서 컴퓨터가 횡방향 조향과 종방향 가속·제동을 보냅니다. 장치 등록·disarmed Xbox 좌우/페달 대조·ROS arm/disarm과 FH4 실제 가속·조향·제동을 확인했습니다. FFB나 조향 토크 제어는 구현하지 않았습니다.
+상주 loader 0.27.0은 공식 SCS Input SDK에 `ot_drive` 가상 3축 장치를 등록합니다. 사람의 키보드/Xbox 바인딩을 유지하면서 컴퓨터가 횡방향 조향과 종방향 가속·제동을 보냅니다. 장치 등록·disarmed Xbox 좌우/페달 대조·ROS arm/disarm과 FH4 실제 가속·조향·제동을 확인했습니다. FFB나 조향 토크 제어는 구현하지 않았습니다.
 
 최초 등록은 정상 게임 종료 → 새 loader/core 설치 → 게임 재시작 순서입니다. SDK는 input init 때만 장치를 등록하므로 기존 loader의 hot reload로 추가할 수 없습니다. 설치된 `ot_runtime/ot_config.json`에서 `allow_drive: true`, `singleplayer_research: true`, 활성 `controls.sii`의 절대 경로 `drive_controls_path`를 설정합니다. 저장소 기본 권한은 꺼져 있으며 센서 설정과 사용자 controls.sii는 바꾸지 않습니다.
 
@@ -119,6 +129,8 @@ arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기
 
 ### 속도 목표와 조향 위치 목표
 
+core 0.28.0은 카메라와 독립된 `/ets2/ground_truth/traffic`을 SDK frame_end에서 요청 시 발행합니다. AI actor 위치·진행방향·속도·차체 크기이며 카메라 가시성 GT와 별개입니다.
+
 `drive_speed`는 GT 속도로 throttle/brake를 계산하고 SDK applied steering으로 정규화 조향 위치를 추적합니다. `steering_target`은 **왼쪽 양수 [-1,1]인 applied steering 목표**이며 실제 바퀴 각도(rad)나 토크가 아닙니다. 현재 상대 입력 프로필에서는 PI feedback으로 하위 조향 입력을 계산하므로 사람의 Xbox 설정과 게임의 복귀·차량 물리를 유지합니다. ACC·차로 유지 제어기는 아직 없습니다.
 
 1. 게임에서 엔진·D 기어·주차브레이크를 주행 가능한 상태로 설정합니다.
@@ -130,6 +142,8 @@ source /mnt/c/path/to/ETS2-Autonomy-Lab/bridge/ros-env.sh  # 실제 저장소 �
 ros2 run ets2_bridge drive_speed --ros-args -p arm:=true -p target_speed_mps:=8.333333 -p steering_target:=0.0
 ```
 
+런처 GT 주행 대신 직접 실행하려면 provider로 만든 파일을 위 노드에 `-p path_file:=<WSL의 current-lane.json 절대 경로>`로 추가합니다. 경로 모드의 조향은 경로 추종기가 계산합니다. 목표 위치 직접 지정은 path_file이 없는 실행에 사용합니다.
+
 다른 WSL 터미널에서도 같은 환경을 불러온 뒤 실행 중 목표를 바꿉니다. 속도는 m/s이며 8.333333은 30 km/h입니다.
 
 ```bash
@@ -140,9 +154,9 @@ ros2 param set /ets2_drive_speed target_speed_mps 0.0
 
 목표 속도 0은 제동으로 감속합니다. 멈춘 뒤 Ctrl+C로 자신의 epoch를 해제하고 런처의 **중지**로 브리지를 끝냅니다. `arm` 기본값은 false이며 수동 조작·F11·만료·통신 단절 뒤 자동 재arm하지 않습니다. `relative_steering` 기본 true는 현재 `c_relatsteer=1` 프로필에 대응합니다. absolute 프로필(`c_relatsteer=0`)에서는 시작할 때 `-p relative_steering:=false`를 지정합니다.
 
-속도 P gain인 `throttle_gain`·`brake_gain` 기본값은 0.2이며 두 페달을 동시에 보내지 않습니다. 상대 조향 PI gain은 `steering_gain=2.0`, `steering_integral_gain=1.0`입니다. 목표·gain은 실행 중 변경할 수 있고 arm·입력 모드는 시작 옵션입니다. 원시 API 소비자는 최신 DriveState의 유효창을 복사해 연결된 노드에서 반복 발행해야 합니다. 새 `topic pub --once` 노드의 discovery 지연은 200 ms 창을 놓칠 수 있습니다.
+속도 PI의 `throttle_gain`·`brake_gain` 기본값은 0.2, `speed_integral_gain`은 0.08입니다. 선택적 D gain `speed_derivative_gain`은 기본0입니다. 포화 같은 방향의 적분을 누적하지 않으며, 목표0은 적분기를 리셋합니다. 두 페달을 동시에 보내지 않습니다. 상대 조향 PI gain은 `steering_gain=2.0`, `steering_integral_gain=1.0`입니다. 목표·gain은 실행 중 변경할 수 있고 arm·입력 모드는 시작 옵션입니다. 원시 API 소비자는 최신 DriveState의 유효창을 복사해 연결된 노드에서 반복 발행해야 합니다. 새 `topic pub --once` 노드의 discovery 지연은 200 ms 창을 놓칠 수 있습니다.
 
-2026-10-10 FH4 실제 제품 실행은 894/894 표본이 전경이었고, 목표 30 km/h에 최대 **28.62 km/h**였습니다. 조향 목표 .02에 applied는 약 **.0180**까지 따라갔으며, 0 복귀·제동 후 **.00228**이었습니다. 속도 목표 0으로 **.01253 m/s**까지 감속한 뒤 종료했고 최종 관측은 정지·disarmed·출력 3축 0이었습니다. 단순 속도 P 제어의 정상상태 오차와 조향 추종 오차는 남아 있습니다. armed 수동 해제·실제 F11·200 ms 만료의 게임 시험은 아직 수행하지 않았습니다.
+2026-10-10 FH4 실제 제품 실행은 894/894 표본이 전경이었고, 목표 30 km/h에 최대 **28.62 km/h**였습니다. 조향 목표 .02에 applied는 약 **.0180**까지 따라갔으며, 0 복귀·제동 후 **.00228**이었습니다. 속도 목표 0으로 **.01253 m/s**까지 감속한 뒤 종료했고 최종 관측은 정지·disarmed·출력 3축 0이었습니다. 이 수치는 이전 P 속도·직접 위치 목표 실행이며, 현재 GT 도로 실행은 위 결과에 따릅니다. armed 수동 해제·실제 F11·200 ms 만료의 게임 시험은 아직 수행하지 않았습니다.
 
 ## 기록과 재생
 

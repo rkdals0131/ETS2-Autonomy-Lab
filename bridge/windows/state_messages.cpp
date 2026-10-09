@@ -100,6 +100,18 @@ Packet state_messages(const json& state,const std::string& session,const V& base
         const auto q=quaternion(mul(mul(enu,rotation),base_to_model));
         add_message(packet,"/ets2/ground_truth/ego/pose",cdr(256,[&](Cdr& c){header(c,us,"world");pose(c,world,q);}));
     }
+    if(state.contains("engine") && state["engine"].contains("traffic")) {
+        const auto& traffic=state["engine"]["traffic"];
+        std::vector<uint64_t> ids;std::array<std::vector<double>,6> values;
+        if(traffic.at("available").get<bool>()) for(const auto& actor:traffic.at("vehicles")) {
+            ids.push_back(actor.at("id").get<uint64_t>());int i=0;
+            for(const auto* key:{"x","y","yaw","speed_mps","length_m","width_m"}) values[i++].push_back(actor.at(key).get<double>());
+        }
+        add_message(packet,"/ets2/ground_truth/traffic",cdr(256+ids.size()*56,[&](Cdr& c){
+            header(c,us,"world");c<<state.at("frame_id").get<uint64_t>()<<traffic.at("available").get<bool>()<<traffic.value("error",std::string{});
+            c<<ids;for(const auto& axis:values) c<<axis;
+        }));
+    }
     return packet;
 }
 }

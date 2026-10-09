@@ -142,6 +142,7 @@ inline std::vector<Topic> topics() {
         {"/ets2/gnss/fix","sensor_msgs/msg/NavSatFix",true},
         {"/ets2/sensors/config","std_msgs/msg/String",true,true},
         {"/ets2/ground_truth/ego/pose","geometry_msgs/msg/PoseStamped",true},
+        {"/ets2/ground_truth/traffic","ets2_msgs/msg/TrafficState",true},
         {"/diagnostics","diagnostic_msgs/msg/DiagnosticArray",true},
         {"/tf_static","tf2_msgs/msg/TFMessage",true,true},
         {"/tf","tf2_msgs/msg/TFMessage"},

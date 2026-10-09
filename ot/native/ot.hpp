@@ -36,6 +36,7 @@ uint64_t qpc_now() noexcept;
 uint64_t qpc_frequency() noexcept;
 bool copy_memory(uintptr_t address, void* data, size_t size) noexcept;
 json read_vehicle_physics(uintptr_t actor, const json& schema);
+json read_world_traffic(const json& schema);
 template<class T> bool read_memory(uintptr_t address, T& value) noexcept {
     return address && copy_memory(address, &value, sizeof(value));
 }

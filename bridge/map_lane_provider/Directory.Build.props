@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../build/map_lane_provider/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)../build/map_lane_provider/obj/</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

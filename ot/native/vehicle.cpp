@@ -1,6 +1,7 @@
 #include "ot.hpp"
 #include <array>
 #include <cmath>
+#include <set>
 
 namespace ot {
 namespace {
@@ -32,6 +33,52 @@ bool decode(const PxPose& p,Quat& q,Vec& position) {
     for(auto& x:q) x/=std::sqrt(norm);
     return true;
 }
+}
+
+json read_world_traffic(const json& schema) {
+    struct Array {uintptr_t vtable,data;uint64_t size,capacity;};
+    struct Placement {float x,y,z;int16_t cx,cz;float w,qx,qy,qz;};
+    const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    const auto& layout=schema.at("render_vehicle");const auto& physics=schema.at("traffic_physics");
+    json result={{"available",false},{"phase","sdk_frame_end"},{"vehicles",json::array()}};
+    uintptr_t manager{};
+    if(!read_memory(base+layout.at("traffic_pointer_rva").get<uintptr_t>(),manager) || !manager) {
+        result["error"]="Traffic manager unavailable";return result;
+    }
+    std::set<uintptr_t> actors;
+    for(const auto* name:{"spawned_array_1_offset","spawned_array_2_offset"}) {
+        Array list{};
+        if(!read_memory(manager+layout.at(name).get<uintptr_t>(),list) || list.size>list.capacity || list.size>4096 || (list.size && !list.data)) {
+            result["error"]="Traffic actor array unavailable";return result;
+        }
+        for(uint64_t i=0;i<list.size;++i) {
+            uintptr_t actor{};
+            if(!read_memory(list.data+i*16,actor)) {result["error"]="Traffic actor entry unavailable";return result;}
+            if(actor) actors.insert(actor);
+        }
+    }
+    for(const auto actor:actors) {
+        Placement p{};std::array<float,6> bounds{};uintptr_t body{};float speed{};
+        if(!read_memory(actor+layout.at("actor_placement_offset").get<uintptr_t>(),p) ||
+           !read_memory(actor+layout.at("actor_aabb_offset").get<uintptr_t>(),bounds) ||
+           !read_memory(actor+physics.at("actor_physics_offset").get<uintptr_t>(),body) || !body ||
+           !read_memory(body+physics.at("speed_offset").get<uintptr_t>(),speed)) {
+            result["error"]="Traffic actor changed during observation";return result;
+        }
+        Quat q{p.w,p.qx,p.qy,p.qz};double norm=0;
+        for(auto v:q) {if(!std::isfinite(v)) {result["error"]="Invalid traffic pose";return result;}norm+=v*v;}
+        for(auto v:bounds) if(!std::isfinite(v)) {result["error"]="Invalid traffic bounds";return result;}
+        if(!norm || !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || !std::isfinite(speed)) {
+            result["error"]="Invalid traffic observation";return result;
+        }
+        for(auto& v:q) v/=std::sqrt(norm);
+        const auto center=rotate(q,{(bounds[0]+bounds[3])/2,(bounds[1]+bounds[4])/2,(bounds[2]+bounds[5])/2});
+        const auto forward=rotate(q,{0,0,-1});
+        result["vehicles"].push_back({{"id",actor},{"x",p.x+512.0*p.cx+center[0]},
+            {"y",-(p.z+512.0*p.cz+center[2])},{"yaw",std::atan2(-forward[2],forward[0])},
+            {"speed_mps",speed},{"length_m",bounds[5]-bounds[2]},{"width_m",bounds[3]-bounds[0]}});
+    }
+    result["available"]=true;return result;
 }
 
 json read_vehicle_physics(uintptr_t actor,const json& schema) {

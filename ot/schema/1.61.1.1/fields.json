@@ -132,5 +132,10 @@
     {"name": "truck.effective.brake", "type": "float"},
     {"name": "truck.engine.gear", "type": "s32"},
     {"name": "truck.displayed.gear", "type": "s32"}
-  ]
+  ],
+  "traffic_physics": {
+    "actor_physics_offset": 568,
+    "speed_offset": 112,
+    "evidence": "ETS2LA/plugin@3b01d90b5be24 traffic_ai_vehicle + traffic_vehicle_physics_object; research/read_live_memory.py traffic()"
+  }
 }
