@@ -124,7 +124,7 @@ class Controller:
         threading.Thread(target=read, daemon=True).start()
         return process
 
-    def _start(self, duration, camera_hz=None, lidar_hz=None):
+    def _start(self, duration, camera_hz=None, lidar_hz=None, preview_hz=None):
         if self.desired or self.wsl or self.relay:
             return
         if self.unit:
@@ -132,7 +132,7 @@ class Controller:
         if not self.config.is_file():
             raise RuntimeError("bridge/configure.py를 먼저 실행해 로컬 설정을 만들어 주세요.")
         settings = json.loads(self.config.read_text(encoding="utf-8"))
-        changed = any(value is not None for value in (duration, camera_hz, lidar_hz))
+        changed = any(value is not None for value in (duration, camera_hz, lidar_hz, preview_hz))
         if duration is not None:
             duration = float(duration)
             if not 1 <= duration <= 86400:
@@ -140,9 +140,12 @@ class Controller:
             settings["duration_s"] = duration
         camera_hz = float(camera_hz if camera_hz is not None else settings.get("camera_hz", 30))
         lidar_hz = float(lidar_hz if lidar_hz is not None else settings.get("lidar_hz", 10))
+        preview_hz = float(preview_hz if preview_hz is not None else settings.get("preview_hz", 10))
         if not math.isfinite(camera_hz) or not 0 < lidar_hz <= camera_hz <= 60:
             raise ValueError("주기는 0 < 라이다 ≤ 카메라 ≤ 60 Hz로 입력해 주세요.")
-        settings.update(camera_hz=camera_hz, lidar_hz=lidar_hz)
+        if not math.isfinite(preview_hz) or not 0 < preview_hz <= camera_hz:
+            raise ValueError("미리보기 주기는 0보다 크고 카메라 주기 이하여야 합니다.")
+        settings.update(camera_hz=camera_hz, lidar_hz=lidar_hz, preview_hz=preview_hz)
         if changed:
             temporary = self.config.with_name(self.config.name + ".tmp")
             try:
@@ -330,9 +333,9 @@ class Controller:
                         self._stop()
                     elif action == "restart":
                         self._stop()
-                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"))
+                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"))
                     elif action == "start":
-                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"))
+                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"))
                     elif action in ("record_start", "record_stop"):
                         self._record(action, values.get("profile", "state"))
                 except queue.Empty:
@@ -381,15 +384,17 @@ def show_window(controller):
     actions.pack(fill="x")
     duration = tk.StringVar(value="110")
     camera_hz, lidar_hz = tk.StringVar(value="30"), tk.StringVar(value="10")
+    preview_hz = tk.StringVar(value="10")
     try:
         settings = json.loads(controller.config.read_text(encoding="utf-8"))
         duration.set(str(settings["duration_s"]))
         camera_hz.set(str(settings.get("camera_hz", 30)))
         lidar_hz.set(str(settings.get("lidar_hz", 10)))
+        preview_hz.set(str(settings.get("preview_hz", 10)))
     except (OSError, ValueError, KeyError):
         pass
     def request(action):
-        controller.request(action, duration=duration.get(), camera_hz=camera_hz.get(), lidar_hz=lidar_hz.get())
+        controller.request(action, duration=duration.get(), camera_hz=camera_hz.get(), lidar_hz=lidar_hz.get(), preview_hz=preview_hz.get())
     start = ttk.Button(actions, text="시작", command=lambda: request("start"))
     start.pack(side="left")
     stop = ttk.Button(actions, text="중지", command=lambda: request("stop"))
@@ -402,7 +407,7 @@ def show_window(controller):
     rates = ttk.Frame(frame)
     rates.pack(fill="x", pady=(10, 0))
     rate_entries = []
-    for label, variable in (("카메라 Hz", camera_hz), ("라이다 Hz", lidar_hz)):
+    for label, variable in (("카메라 Hz", camera_hz), ("라이다 Hz", lidar_hz), ("미리보기 Hz", preview_hz)):
         ttk.Label(rates, text=label).pack(side="left", padx=(0, 5))
         entry = ttk.Entry(rates, textvariable=variable, width=7)
         entry.pack(side="left", padx=(0, 18))

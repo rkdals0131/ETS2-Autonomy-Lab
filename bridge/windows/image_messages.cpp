@@ -110,9 +110,14 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
     transforms.push_back({"world","base_link",base_world,quaternion(world_from_base)});
     transforms.push_back({"base_link","cabin",mul(transpose(world_from_base),sub(mul(enu,cabin_position),base_world)),
         quaternion(mul(mul(transpose(world_from_base),enu),mul(cabin_rotation,base_to_model)))});
+    struct RayErrors {
+        std::array<double,16> projection{};std::array<double,4> viewport{};M rotation{};
+        std::vector<uint32_t> pixels;std::vector<float> degrees;
+    };
     struct LidarSource {
         std::string camera;json description;const json* meta;std::span<const uint8_t> data;
         uint32_t width{};M eye_from_sensor{};std::array<double,16> projection{};std::array<double,4> viewport{};
+        RayErrors* ray_errors=nullptr;
     };
     std::map<std::string,std::vector<LidarSource>> lidars;
     for(const auto& view:manifest.at("views")) {
@@ -213,12 +218,11 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         if(a==sources.end()) throw std::runtime_error("LiDAR axis camera missing");
         const auto& axis_camera=a->meta->at("geometry_pass").at("camera_at_compile");
         const auto origin=axis_camera.at("camera_world_xyz").get<V>();
-        const M world_from_sensor=mul(transpose(matrix(axis_camera.at("camera_rotation_row_major"))),base_to_model);
         for(auto& source:sources) {
             const auto& camera=source.meta->at("geometry_pass").at("camera_at_compile");
             const auto p=camera.at("camera_world_xyz").get<V>();
             source.width=source.description.at("source_width");
-            source.eye_from_sensor=mul(matrix(camera.at("camera_rotation_row_major")),world_from_sensor);
+            source.eye_from_sensor=source.description.at("camera_from_sensor").get<M>();
             source.projection=camera.at("projection_row_major").get<std::array<double,16>>();
             const auto& vp=source.meta->at("geometry_gpu").at("viewports").at(0);
             source.viewport={vp.at("x"),vp.at("y"),vp.at("width"),vp.at("height")};
@@ -231,14 +235,22 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         if(size_t(columns)*elevations.size()!=count) throw std::runtime_error("LiDAR beam grid does not match returns");
         // Beam directions are sensor configuration, independent of the truck's
         // pose. Keep trigonometry out of the per-frame PointCloud2 loop.
-        struct Directions {std::array<double,3> az{};std::vector<double> elevations;std::vector<V> beams;};
+        struct Directions {std::array<double,3> az{};std::vector<double> elevations;std::vector<V> beams;std::map<std::string,RayErrors> errors;};
         thread_local std::map<std::string,Directions> beam_cache;
         auto& directions=beam_cache[name];
         if(directions.az!=az || directions.elevations!=elevations || directions.beams.size()!=count) {
             directions.az=az;directions.elevations=elevations;directions.beams.resize(count);
+            directions.errors.clear();
             for(uint32_t beam=0;beam<count;++beam) {
                 const double angle=(az[0]+(beam%columns)*az[2])*std::numbers::pi/180,elevation=elevations[beam/columns]*std::numbers::pi/180;
                 directions.beams[beam]={std::cos(elevation)*std::cos(angle),std::cos(elevation)*std::sin(angle),std::sin(elevation)};
+            }
+        }
+        if(demand.contains(topic)) for(auto& source:sources) {
+            auto& cache=directions.errors[source.camera];source.ray_errors=&cache;
+            if(cache.projection!=source.projection || cache.viewport!=source.viewport || cache.rotation!=source.eye_from_sensor || cache.pixels.size()!=count) {
+                cache.projection=source.projection;cache.viewport=source.viewport;cache.rotation=source.eye_from_sensor;
+                cache.pixels.assign(count,UINT32_MAX);cache.degrees.resize(count);
             }
         }
         for(const bool preview:{false,true}) {
@@ -270,12 +282,18 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
             if(source) {
                 const auto width=source->width;x=sample.pixel%width;y=sample.pixel/width;
                 if(std::isfinite(sample.depth)) {
+                    auto& cache=*source->ray_errors;
+                    if(cache.pixels[beam]==sample.pixel) error=cache.degrees[beam];
+                    else {
                     const auto& p=source->projection;const auto& vp=source->viewport;
                     const double nx=2*(x+.5-vp[0])/vp[2]-1,ny=1-2*(y+.5-vp[1])/vp[3];
                     const V actual{(p[2]-nx*p[14])/p[0],(p[6]-ny*p[14])/p[5],-1};
-                    const auto requested=mul(source->eye_from_sensor,direction);const auto norm=std::hypot(actual[0],actual[1],actual[2]);
+                    const auto requested=mul(source->eye_from_sensor,direction);
+                    const auto norm=std::hypot(actual[0],actual[1],actual[2])*std::hypot(requested[0],requested[1],requested[2]);
                     double dot=0;for(size_t i=0;i<3;++i) dot+=actual[i]*requested[i]/norm;
                     error=static_cast<float>(std::acos(std::clamp(dot,-1.0,1.0))*180/std::numbers::pi);
+                    cache.pixels[beam]=sample.pixel;cache.degrees[beam]=error;
+                    }
                 }
             }
             std::memcpy(point+24,&x,4);std::memcpy(point+28,&y,4);std::memcpy(point+32,&error,4);
