@@ -33,7 +33,7 @@ Windows 런처 → WSL ROS/Foxglove 소유 그룹 + Windows 릴레이
 - DLL의 lease는 한 클라이언트가 내부 읽기·리그·수집을 소유하게 합니다. 소유자가 사라지면 5초 뒤 Tier 0으로 복귀합니다.
 - F11은 lease를 취소합니다. 재시작은 사용자 조작으로 수행합니다.
 - 운전은 별도 단일 owner/arm epoch를 사용합니다. ROS → 기존 상태 TCP → core의 bridge lease → loader의 공식 SDK 가상 3축으로 전달합니다. owner 이름은 인증 토큰이 아니며 기존 TCP pairing과 로컬 pipe ACL을 유지합니다. 입력 콜백·상태는 상주 loader가 소유하고 core unload 시 해제합니다.
-- 운전 명령은 Windows monotonic clock의 200 ms 유효창을 그대로 전달합니다. ACC는 페달, LCC는 조향을 소유하며 소유하지 않는 축의 사람 입력은 유지합니다. 소유한 축의 수동 입력·pause·F11·연결 단절은 전체 owner를 해제하며 resume/reconnect가 다시 arm하지 않습니다. SDK 한 프레임은 불변 3축 snapshot을 사용하고, 해제는 다음 입력 프레임에 반영합니다.
+- 운전 명령은 발행 노드의 steady clock 시각을 싣고, ets2_bridge가 50 ms보다 오래된 명령을 버린 뒤 릴레이가 수신 시점부터 200 ms 유효창을 부여합니다. ACC는 페달, LCC는 조향을 소유하며 소유하지 않는 축의 사람 입력은 유지합니다. 소유한 축의 수동 입력·pause·F11·연결 단절은 전체 owner를 해제하며 resume/reconnect가 다시 arm하지 않습니다. SDK 한 프레임은 불변 3축 snapshot을 사용하고, 해제는 다음 입력 프레임에 반영합니다.
 - 런처는 Windows Job Object와 WSL systemd unit으로 자신의 프로세스를 관리합니다. 창 종료·오류·실행 시간 만료 시 해당 그룹을 정리합니다.
 - 설정은 로컬 JSON 한 곳에서 읽고 센서 프리셋을 상대 경로로 참조합니다. 프로세스·응답·수신 시각이 화면 상태의 기준입니다.
 

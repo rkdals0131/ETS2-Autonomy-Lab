@@ -122,14 +122,14 @@ Windows Foxglove에서 런처의 `ws://<Ubuntu-eth0-IP>:8765`에 연결합니다
 | 창구 | 계약 |
 | --- | --- |
 | `/ets2/drive/control` | `DriveControl` 서비스: owner, arm, epoch, axes → success, message, epoch |
-| `/ets2/drive/command` | `DriveCommand`: owner, epoch, 증가하는 sequence, command_window_ms, steering/throttle/brake, axes |
+| `/ets2/drive/command` | `DriveCommand`: owner, epoch, 증가하는 sequence, sent_steady_ns, steering/throttle/brake, axes |
 | `/ets2/drive/state` | `DriveState`: 활성/해제 이유, owner·epoch·마지막 승인 sequence, 유효창, 명령·물리입력·SDK 적용값, 실제 axes·independent_axes |
 
 요청 `axes`는 1=조향/LCC, 2=페달/ACC, 3=전체이며 0은 기존 전체 축 요청의 기본값입니다. 실제 상태 `axes=0`은 해제 상태입니다. 모두 끄기는 `arm=false`로 해제하며 `axes=0` arm을 보내지 않습니다. 한 owner/epoch 안의 새 명령으로 축을 전환하고 소유하지 않은 출력은 0으로 만듭니다. 새로 맡길 축을 사람이 조작 중이면 해제하므로 켜기 전에 그 축을 놓습니다.
 
 DriveCommand.steering은 **왼쪽 양수 [-1,1]인 프로필 입력**, throttle/brake는 **[0,1]**입니다. 현재 Xbox 프로필의 `c_relatsteer=1`은 조향 위치를 변화시키는 상대 입력입니다. 따라서 이 하위 명령값을 바퀴 위치나 각도 목표로 해석하지 않습니다. 현재 프로필의 steering mix가 semantical 값을 빼므로 SDK 장치에는 steering의 부호를 뒤집어 내보냅니다. 기존 `/ets2/vehicle/actuation`의 단위·부호는 유지합니다. applied 값은 게임의 effective 입력 관측이며 명령을 복사한 값이 아닙니다. SDK 입력은 실제 게임 전경에서 소비됐습니다. 비전경 실행은 native 명령이 승인돼도 게임 입력 축과 속도가 0이었으며, 전경 실행에서 가속·제동이 적용됐습니다.
 
-arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기다립니다. Command의 `command_window_ms`는 **Windows monotonic clock의 절대 만료 시각(ms)**이며 duration·ROS stamp가 아닙니다. 최신 DriveState에서 받은 값을 그대로 복사합니다. DDS/TCP/pipe에서 지연된 명령에 새 수명을 붙이지 않으며, 이전 epoch·반복 sequence·만료된 명령은 거절합니다. owner는 식별자이며 기존 TCP pairing token과 로컬 pipe ACL을 대신하지 않습니다.
+arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기다립니다. Command의 `sent_steady_ns`는 명령을 계산한 시점의 **발행 노드 `steady_clock`(CLOCK_MONOTONIC) ns**이며 ROS stamp가 아닙니다. 발행 노드는 ets2_bridge와 같은 Linux 호스트에서 실행합니다. ets2_bridge는 나이가 `max_command_age_ms`(기본 50)를 넘거나 음수·0인 명령을 버리고, Windows 릴레이가 수신 시점에 core 시계로 200 ms 유효창을 붙입니다(실차 DBW heartbeat와 같은 형태). 이전 epoch·반복 sequence·만료된 명령은 거절합니다. DriveState의 `command_window_ms`는 진단용 Windows 시계값이며 명령에 복사하지 않습니다. owner는 식별자이며 기존 TCP pairing token과 로컬 pipe ACL을 대신하지 않습니다.
 
 명령 만료·소유한 축의 물리 조작·F11·pause·SDK 입력 비활성·core unload·통신 단절은 arm을 해제합니다. resume/reconnect는 다시 arm하지 않습니다. F11은 bridge lease도 취소하므로 런처를 명시적으로 재시작합니다. SDK 한 입력 프레임의 세 축은 같은 snapshot이며 해제는 다음 입력 프레임의 세 축 0으로 반영합니다. 렌더 수집 on/off와 운전 arm은 독립입니다.
 
@@ -164,7 +164,7 @@ ros2 param set /ets2_drive_speed target_speed_mps 0.0
 
 목표 속도 0은 제동으로 감속합니다. 멈춘 뒤 Ctrl+C로 자신의 epoch를 해제하고 런처의 **중지**로 브리지를 끝냅니다. `arm` 기본값은 false이며 수동 조작·F11·만료·통신 단절 뒤 자동 재arm하지 않습니다. `relative_steering` 기본 true는 현재 `c_relatsteer=1` 프로필에 대응합니다. absolute 프로필(`c_relatsteer=0`)에서는 시작할 때 `-p relative_steering:=false`를 지정합니다.
 
-속도 PI의 `throttle_gain`·`brake_gain` 기본값은 0.2, `speed_integral_gain`은 0.08입니다. 선택적 D gain `speed_derivative_gain`은 기본0입니다. 포화 같은 방향의 적분을 누적하지 않으며, 목표0은 적분기를 리셋합니다. 두 페달을 동시에 보내지 않습니다. 상대 조향 PI gain은 `steering_gain=2.0`, `steering_integral_gain=1.0`입니다. 목표·gain은 실행 중 변경할 수 있고 arm·입력 모드는 시작 옵션입니다. 원시 API 소비자는 최신 DriveState의 유효창을 복사해 연결된 노드에서 반복 발행해야 합니다. 새 `topic pub --once` 노드의 discovery 지연은 200 ms 창을 놓칠 수 있습니다.
+속도 PI의 `throttle_gain`·`brake_gain` 기본값은 0.2, `speed_integral_gain`은 0.08입니다. 선택적 D gain `speed_derivative_gain`은 기본0입니다. 포화 같은 방향의 적분을 누적하지 않으며, 목표0은 적분기를 리셋합니다. 두 페달을 동시에 보내지 않습니다. 상대 조향 PI gain은 `steering_gain=2.0`, `steering_integral_gain=1.0`입니다. 목표·gain은 실행 중 변경할 수 있고 arm·입력 모드는 시작 옵션입니다. 원시 API 소비자는 명령마다 `sent_steady_ns`를 채워 연결된 노드에서 반복 발행해야 합니다(`ros2 topic pub`은 이 값을 채울 수 없음). 새 `topic pub --once` 노드의 discovery 지연은 200 ms 창을 놓칠 수 있습니다.
 
 2026-10-10 FH4 실제 제품 실행은 894/894 표본이 전경이었고, 목표 30 km/h에 최대 **28.62 km/h**였습니다. 조향 목표 .02에 applied는 약 **.0180**까지 따라갔으며, 0 복귀·제동 후 **.00228**이었습니다. 속도 목표 0으로 **.01253 m/s**까지 감속한 뒤 종료했고 최종 관측은 정지·disarmed·출력 3축 0이었습니다. 이 수치는 이전 P 속도·직접 위치 목표 실행이며, 현재 GT 도로 실행은 위 결과에 따릅니다. armed 수동 해제·실제 F11·200 ms 만료의 게임 시험은 아직 수행하지 않았습니다.
 

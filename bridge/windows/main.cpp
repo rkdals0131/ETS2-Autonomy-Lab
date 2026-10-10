@@ -142,7 +142,11 @@ int main(int argc,char** argv) {
             if(p.meta.contains("capture")) capture_wanted=p.meta.at("capture").get<bool>();
             if(p.meta.contains("drive_request")) {
                 const auto& incoming=p.meta.at("drive_request");json reply={{"id",incoming.at("id")},{"accepted",false}};
-                try {auto request=incoming;request.erase("id");request["cmd"]="drive";reply["state"]=owned(std::move(request));reply["accepted"]=reply["state"].value("accepted",false);}
+                try {auto request=incoming;request.erase("id");request["cmd"]="drive";
+                    // ets2_bridge already dropped stale commands; the window starts at receipt
+                    // on the core's clock (GetTickCount64), so it never exceeds now+200.
+                    if(request.value("action",std::string{})=="command") request["deadline_ms"]=ticks()+200;
+                    reply["state"]=owned(std::move(request));reply["accepted"]=reply["state"].value("accepted",false);}
                 catch(const std::exception& e) {reply["error"]=e.what();}
                 state_send({{"session",session},{"drive_reply",reply}});
             }

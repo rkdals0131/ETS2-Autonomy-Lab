@@ -67,13 +67,21 @@ int main(int argc,char** argv) {
                         if(response->message.empty()) response->message=state.at("reason").get<std::string>();}}
                 pending_id=0;control_request=nullptr;
             });
+        // The relay grants each forwarded command a fresh 200 ms window, so a command
+        // delayed on this host must not get one: drop it by its sender steady stamp.
+        const auto max_command_age=std::chrono::nanoseconds(static_cast<int64_t>(node->declare_parameter("max_command_age_ms",50.0)*1e6));
         auto command_subscription=node->create_subscription<ets2_msgs::msg::DriveCommand>("/ets2/drive/command",rclcpp::QoS(1).best_effort(),
             [&](const ets2_msgs::msg::DriveCommand::SharedPtr command) {
                 if(!valid_owner(command->owner) || !std::isfinite(command->steering) || !std::isfinite(command->throttle) || !std::isfinite(command->brake) ||
                    std::abs(command->steering)>1 || command->throttle<0 || command->throttle>1 || command->brake<0 || command->brake>1 || command->axes>3) return;
+                const auto age=std::chrono::steady_clock::now().time_since_epoch()-std::chrono::nanoseconds(command->sent_steady_ns);
+                if(!command->sent_steady_ns || age<0ns || age>max_command_age) {
+                    RCLCPP_WARN_THROTTLE(node->get_logger(),*node->get_clock(),1000,"Dropped stale drive command: age %.1f ms",age.count()*1e-6);
+                    return;
+                }
                 std::lock_guard lock(drive_mutex);if(!drive_connected) return;
                 command_request={{"id",++request_id},{"action","command"},{"drive_owner",command->owner},{"epoch",command->epoch},{"sequence",command->sequence},
-                    {"deadline_ms",command->command_window_ms},{"steering",command->steering},{"throttle",command->throttle},{"brake",command->brake},{"axes",command->axes?command->axes:3}};
+                    {"steering",command->steering},{"throttle",command->throttle},{"brake",command->brake},{"axes",command->axes?command->axes:3}};
             });
         std::atomic<bool> capture_enabled{true};
         auto capture_service=node->create_service<std_srvs::srv::SetBool>("/ets2/capture",

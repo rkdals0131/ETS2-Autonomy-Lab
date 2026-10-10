@@ -158,6 +158,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: drive_control_test 변경 없이 통과(코어 의미 불변). 게임에서 50 Hz DriveCommand(window 없음, `sent_steady_ns` 채움)로 arm→active 유지, 발행 중단 후 ≤ 250 ms에 `expired`. 같은 sequence 재전송은 거절(DriveState.sequence 불변). `sent_steady_ns`를 100 ms 과거로 넣은 명령은 ets2_bridge에서 버려지고 DriveState.sequence가 변하지 않음. `ros2 topic pub`은 `sent_steady_ns`를 채울 수 없으므로 시험용 발행 스크립트를 쓴다.
 - 게임 실행: 예(검증).
+- 진행(2026-10-10): 코드 완료, arm이 필요한 게임 검증은 W02 세션에서(사용자가 수동 주행 중이라 arm하지 않음). DriveCommand의 `command_window_ms`를 `sent_steady_ns`로 교체했고, DriveState의 `command_window_ms`는 진단용으로 유지했다(기존 상태 bag 호환). ets2_bridge는 `max_command_age_ms`(기본 50) 초과·음수·0인 명령을 버리고 유효창 없이 전달한다. 릴레이는 `action=="command"`에 `deadline_ms=ticks()+200`을 부여한다. gt_drive_node는 steady clock을 채운다. ✔ 빌드: colcon 4개 패키지, MSVC 릴레이. ✔ 오프라인 필터 검증(릴레이 없이 ets2_bridge 단독, domain 79): fresh 통과, −100 ms(나이 100.5 ms)·+100 ms(나이 −99.6 ms)·0 모두 "Dropped stale drive command"로 거절. 남은 게임 검증: 50 Hz 명령으로 arm 유지, 중단 후 ≤ 250 ms에 `expired`, 반복 sequence 거절, 오래된 명령의 sequence 미반영.
 
 **W05 릴레이의 core 버전 확인을 명시적 최소 버전 검사로** (S)
 - 목표: ✔ state_source.cpp:10이 StateSource 생성자에서 pipe `version` 왕복을 하므로, `version` 명령이 없는 구 core에서는 `game_ipc.cpp:32`가 `{"ok":false}` 응답을 예외로 바꿔 릴레이가 시작 즉시 종료되며 원인 메시지가 불명확하다. 또 pipe 타임아웃(game_ipc.cpp:6,20: 3 s)이 생성자 안에서 발생한다.

@@ -3,9 +3,11 @@ string owner
 uint64 epoch
 # Strictly increasing within the epoch. Start at 1 after successful arm.
 uint64 sequence
-# Copy from the latest DriveState. Windows monotonic clock, not ROS/sim time.
-# Forwarded unchanged; queued or delayed commands do not get a new lifetime.
-uint64 command_window_ms
+# Sender's std::chrono::steady_clock in ns (CLOCK_MONOTONIC), taken when the command
+# is computed. The sender runs on the same Linux host as ets2_bridge, which drops
+# commands older than max_command_age_ms; the Windows relay then grants a 200 ms
+# window from receipt, like a drive-by-wire heartbeat.
+uint64 sent_steady_ns
 # Positive-left normalized profile input [-1,1]; normalized pedals [0,1].
 # In c_relatsteer=1 profiles steering requests position change, not wheel position.
 float32 steering

@@ -168,7 +168,8 @@ int main(int argc,char** argv) {
             }
             const auto error=speed_target-vehicle->speed_mps;
             ets2_msgs::msg::DriveCommand command;
-            command.owner=owner;command.epoch=epoch;command.sequence=++sequence;command.command_window_ms=drive->command_window_ms;
+            command.owner=owner;command.epoch=epoch;command.sequence=++sequence;
+            command.sent_steady_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
             command.axes=enabled_axes;
             command.steering=lcc?steering_target:0;
             if(lcc && settings->relative_steering) {
