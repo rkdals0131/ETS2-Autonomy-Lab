@@ -129,6 +129,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 
 - 완료 기준: 8개 모두 기대 reason으로 전이하고 ActuationState의 applied 값이 다음 SDK 프레임부터 사람 입력을 따름. 각 시험의 bag 경로가 체크리스트에 기록됨. 실패 항목은 docs/08에 등록.
 - 게임 실행: 예.
+- 추가 확인(△, 2026-10-10): 현재 사용자 프로필은 `c_throt_dz 0`, `c_brake_dz 0`(controls.sii:27-28)이라 트리거 값이 0보다 조금만 커도 수동 개입으로 판정된다. armed 상태에서 패드를 만지지 않고 30초 이상 유지해 휴지 트리거 노이즈로 `manual` 해제가 나지 않는지 확인한다.
 
 ### P1. 계약 정리(Windows 빌드 필요, 검증은 게임)
 
@@ -163,6 +164,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: 현재 core 0.29.0에서 릴레이 정상 시작. 코드 리뷰로 구 core 경로의 메시지 확인(△ 구 core 실물 시험은 생략 가능). 런처 상태창에 그 메시지가 그대로 표시됨(✔ launcher.py:308-330 `_observe`가 릴레이 stdout을 읽음).
 - 게임 실행: 예(정상 경로 확인).
+- 진행(2026-10-10): 코드 완료, MSVC 빌드 통과(✔ VS 18 BuildTools, `bridge\build.cmd`). 게임 검증 남음. 구현: 첫 core 명령은 lease가 아니라 `truck_config`(main.cpp:75)였으므로 그보다 앞에서 `require_core_version()`을 호출한다. core가 `{"ok":false}`로 답한 경우만 `CoreError`(game_ipc.hpp)로 구분해, 파이프 장애·시간 초과와 "version 명령 미지원"을 다른 메시지로 보고한다. 최소 버전 `minimum_core_version="0.29.0"`(릴레이 pipe 프로토콜 기준이며 W07의 core 0.30.0을 요구하지 않음). 버전 문자열을 해석할 수 없으면 "unrecognized version"으로 따로 보고한다. StateSource는 생성자 인자로 버전을 받는다.
 
 **W06 `bind_address`를 릴레이에도 반영** (S)
 - 목표: D4. 설정 한 곳이 양쪽에 같은 의미로 적용되게 한다.
@@ -170,6 +172,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: `bind_address`를 WSL eth0 IP로 명시 → 연결됨. 존재하지 않는 IP로 설정 → 릴레이 "Cannot connect to WSL <ip>:<port>", ROS "Cannot listen on <ip>:<port>" 두 메시지 모두 설정값을 포함.
 - 게임 실행: 예(릴레이는 연결 전에 lease를 잡음, ✔ main.cpp:96-101).
+- 진행(2026-10-10): 코드 완료, MSVC 빌드 통과. 게임 검증 남음. `ros_address()`(main.cpp)는 `bind_address`가 비어 있으면 기존처럼 `wsl_distro`의 eth0를 조회하고, 값이 있으면 그 주소로 접속한다. ROS 쪽에서는 유효하지만 접속할 수 없는 `0.0.0.0`은 거절한다. 릴레이 로그는 "WSL direct IP"에서 "ROS host IP"로 바뀌었다(✔ 이 문구를 파싱하는 코드 없음). configure.py 기본값에 `"bind_address": ""` 추가(JSON이라 주석 대신 apps/README.md에 설명).
 
 **W07 lease 없는 mutating 명령 차단** (S)
 - 목표: 안전 모델을 문서(docs/03 "lease가 내부 읽기·리그·수집을 소유")와 일치시킨다. ✔ `require_owner`는 lease가 있거나 요청에 owner가 있을 때만 검사한다(ot/native/core.cpp:309-312). 따라서 lease 없이 `tier`, `render_probe`, `camera_rig`, `stream`을 바꿀 수 있다(△ stream은 require_owner만 거침).
@@ -177,6 +180,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: `ot.cmd tier 1`(lease 없음) → 거절 메시지. 런처 전체 모드와 `ot.cmd preview`는 기존처럼 동작. 패닉 뒤 재활성화 거절 동작 유지(✔ docs/18 확인 항목).
 - 게임 실행: 예.
+- 진행(2026-10-10): 코드 완료, core를 **0.30.0**으로 올림. MSVC 빌드 통과(✔ `ot\build.cmd`, ot_drive_test 포함). 게임 설치·검증 남음(설치본은 아직 0.29.0). ✔ lease 없이 mutating 명령을 보내는 클라이언트를 전수 확인한 결과, `ot.cmd camera_rig apply`(ot/README.md의 rig 확인 절차)만 해당했다(preview.py·릴레이·런처는 lease 사용 또는 조회만). 그래서 `camera_rig apply`가 lease를 잡고 1초마다 heartbeat를 보내며 Ctrl+C 또는 `--duration`까지 리그를 유지하고, 끝나면 lease 해제로 Tier 0에 돌아가도록 바꿨다(이전: 적용 후 종료, 리그는 `panic`까지 유지). `drive`·`traffic_observation`의 lease 검사는 `require_owner`에 흡수되어 중복을 제거했다. `panic`·`reload_permissions`와 조회 명령은 lease 없이 동작한다. 추가 완료 기준: `ot.cmd camera_rig apply --config ... --rig-only` 실행 중 리그가 보이고 Ctrl+C 뒤 Tier 0.
 
 **W08 버전 표식** (S)
 - 목표: 릴레이·ROS·메시지 불일치를 역직렬화 실패 전에 잡는다. ✔ 현재 wire 버전 표식은 `OTR1` 매직뿐(bridge/common/wire.hpp:107-121).
@@ -271,7 +275,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: `ctest`가 WSL과 Linux 러너에서 통과. drive_control_test도 같은 ctest에 포함(`-fsanitize=address,undefined`).
 - 게임 실행: 아니오.
-- 진행(2026-10-10): ✔ 완료(WSL). 위치는 `bridge/tests`가 아니라 저장소 루트 `tests/`입니다. drive_control_test가 ot 코드라 bridge 아래에 두지 않았습니다. `cmake -S tests -B /tmp/ets2-portable-tests && cmake --build /tmp/ets2-portable-tests && ctest --test-dir /tmp/ets2-portable-tests` → 3/3 통과(g++ 13.3, ASan/UBSan). `wire_test`: socketpair 왕복, 잘못된 매직·메타·blob 크기 거절, 끊긴 연결의 TransportError, 토픽 이름 중복 없음. `motion_sensors_test`: 직진·Ackermann 선회 오도메트리(정확한 호와 비교), 공중 바퀴 제외, pause 구간 미적분, 정지 IMU +g, 왼쪽 yaw 양수, GNSS 10 Hz 유지·model +x=동쪽, 차량 세대 변경 거절. 중력 부호·yaw 부호·회전→rad 변환·GNSS 주기·호 중간점 적분 5개 변이를 모두 잡는 것을 확인했습니다. drive_control_test는 controls.sii 경로 인자 없이 실행하므로 ManualInput 검사는 CI에서 빠집니다(사용자 프로필을 저장소에 넣지 않음).
+- 진행(2026-10-10): ✔ 완료(WSL). 위치는 `bridge/tests`가 아니라 저장소 루트 `tests/`입니다. drive_control_test가 ot 코드라 bridge 아래에 두지 않았습니다. `cmake -S tests -B /tmp/ets2-portable-tests && cmake --build /tmp/ets2-portable-tests && ctest --test-dir /tmp/ets2-portable-tests` → 3/3 통과(g++ 13.3, ASan/UBSan). `wire_test`: socketpair 왕복, 잘못된 매직·메타·blob 크기 거절, 끊긴 연결의 TransportError, 토픽 이름 중복 없음. `motion_sensors_test`: 직진·Ackermann 선회 오도메트리(정확한 호와 비교), 공중 바퀴 제외, pause 구간 미적분, 정지 IMU +g, 왼쪽 yaw 양수, GNSS 10 Hz 유지·model +x=동쪽, 차량 세대 변경 거절. 중력 부호·yaw 부호·회전→rad 변환·GNSS 주기·호 중간점 적분 5개 변이를 모두 잡는 것을 확인했습니다. drive_control_test는 `tests/fixtures/controls_xbox.sii`로 ManualInput 검사까지 실행합니다. 이 fixture는 Xbox 프로필에서 steering/forward/backward로 도달하는 줄만 추린 것(99줄)이며, 트리거 deadzone은 경계를 검사하도록 0.03/0.04로 둡니다. ✔ 기존 테스트는 실제 사용자 프로필을 인자로 받으면 `drive_control_test.cpp:64`에서 실패했습니다. 테스트가 deadzone 0.03/0.04를 가정하는데 현재 프로필은 0/0이기 때문입니다(코드 결함 아님, 75bdf40부터). fixture로 바꾸며 해소했고, MSVC `ot_drive_test.exe`도 같은 fixture로 통과합니다.
 
 **W18 GitHub Actions** (M)
 - 목표: D6.

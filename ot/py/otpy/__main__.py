@@ -4,6 +4,7 @@ import json
 import math
 import sys
 import time
+import uuid
 from . import Client, LoaderClient, StateReader
 
 
@@ -16,8 +17,11 @@ def main():
     for name in ("ping", "version", "hooks", "frames", "schema", "snapshot", "state", "panic", "dump", "reload_permissions", "truck_config"):
         sub.add_parser(name)
     sub.add_parser("read").add_argument("field")
-    sub.add_parser("tier").add_argument("value", type=int, choices=(0, 1), nargs="?")
-    probe = sub.add_parser("render_probe", help="Inspect or switch the Tier 1 render-call observer")
+    # Changing tier, render_probe, camera_rig or stream requires the bridge lease;
+    # from this CLI only their status forms, camera_rig apply and panic work alone.
+    sub.add_parser("tier", help="Show the tier; setting it requires the bridge lease").add_argument(
+        "value", type=int, choices=(0, 1), nargs="?")
+    probe = sub.add_parser("render_probe", help="Inspect the Tier 1 render-call observer; switching requires the bridge lease")
     probe.add_argument("mode", choices=("on", "off", "status"), default="status", nargs="?")
     probe.add_argument("--vehicles", action="store_true", help="With on: read vehicle model metadata at mirror pass compilation")
     probe.add_argument("--mode", dest="hook_mode", choices=("observe", "rig"), default="observe",
@@ -28,6 +32,7 @@ def main():
     rig.add_argument("--config", help="JSON containing views with slot, basis, position, quaternion_wxyz and FOVs")
     rig.add_argument("--rig-only", action="store_true", help="Apply without pass observation or GPU readback hooks")
     rig.add_argument("--frames", action="store_true", help="With --rig-only: also observe Present intervals")
+    rig.add_argument("--duration", type=float, help="With apply: release the rig after this many seconds; default holds until Ctrl+C")
     preview = sub.add_parser("preview", help="Live camera mosaic; closes with Tier 0 restored (NumPy, Pillow, Tk)")
     preview.add_argument("--config", required=True)
     preview.add_argument("--hz", type=float, default=5.0)
@@ -35,7 +40,7 @@ def main():
     preview.add_argument("--snapshot", help="Save the last displayed mosaic to a new PNG on exit")
     preview.add_argument("--format", choices=("raw", "rgbd8"), default="raw")
     preview.add_argument("--color-gain", type=float, help="Fixed GPU gain; omitted: calibrate once from a raw bundle")
-    stream = sub.add_parser("stream", help="Bounded native GPU ring; consumes via OT_Bundles")
+    stream = sub.add_parser("stream", help="Bounded native GPU ring status; start/stop require the bridge lease")
     stream.add_argument("action", choices=("start", "status", "stop"), default="status", nargs="?")
     stream.add_argument("--hz", type=float, default=10.0)
     stream.add_argument("--duration", type=float, help="Required for start; native stop deadline in seconds")
@@ -136,6 +141,8 @@ def main():
                 parser.error("--rig-only and --frames require camera_rig apply")
             if args.frames and not args.rig_only:
                 parser.error("--frames requires --rig-only; capture mode already observes frames")
+            if args.duration is not None and (args.mode != "apply" or not math.isfinite(args.duration) or args.duration <= 0):
+                parser.error("--duration requires camera_rig apply and must be finite and positive")
             if args.mode == "apply":
                 if not args.config:
                     parser.error("camera_rig apply requires --config")
@@ -143,13 +150,27 @@ def main():
                     settings = json.load(source)
                 from .rig_layout import resolve_layout
                 settings = resolve_layout(settings, client)
-                client.tier(1)
-                client.request("render_probe", enabled=True, mode="rig" if args.rig_only else "observe", frame_timing=args.frames)
+                # The core keeps capture state only while a lease holder sends
+                # heartbeats; releasing the lease panics back to Tier 0.
+                owner = uuid.uuid4().hex
+                def owned(command, **arguments):
+                    return client.request(command, owner=owner, **arguments)
+                owned("lease", action="claim")
                 try:
-                    result = client.request("camera_rig", **settings)
-                except Exception:
-                    client.panic()
-                    raise
+                    owned("tier", value=1)
+                    owned("render_probe", enabled=True, mode="rig" if args.rig_only else "observe", frame_timing=args.frames)
+                    print(json.dumps(owned("camera_rig", **settings), ensure_ascii=False, indent=2), flush=True)
+                    print("Rig held under a bridge lease; Ctrl+C releases it.", file=sys.stderr, flush=True)
+                    deadline = None if args.duration is None else time.monotonic() + args.duration
+                    while deadline is None or time.monotonic() < deadline:
+                        time.sleep(1)
+                        owned("lease", action="heartbeat")
+                finally:
+                    try:
+                        owned("lease", action="release")
+                    except Exception as error:
+                        print(f"Lease release: {error}", file=sys.stderr)
+                return 0
             else:
                 result = client.request("camera_rig", **({"enabled": False} if args.mode == "off" else {}))
         else:

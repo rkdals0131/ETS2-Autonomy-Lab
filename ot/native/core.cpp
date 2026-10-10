@@ -305,9 +305,12 @@ json Runtime::snapshot() const {
 json Runtime::command(const json& request) {
     const auto cmd=request.at("cmd").get<std::string>();
     // Call under control_ at each mutating boundary. A queued command from a
-    // canceled lease cannot race F11 and turn capture back on.
+    // canceled lease cannot race F11 and turn capture back on, and no capture
+    // state outlives a controller that stopped sending heartbeats.
     const auto require_owner=[&] {
-        if((!lease_.empty() || request.contains("owner")) && request.value("owner",std::string{})!=lease_)
+        if(lease_.empty())
+            throw std::runtime_error("This command requires an active bridge lease; use the launcher, ot.cmd preview or ot.cmd camera_rig apply");
+        if(request.value("owner",std::string{})!=lease_)
             throw std::runtime_error("Lease ended or belongs to another controller; explicit restart required");
     };
     if(cmd=="lease") {
@@ -331,14 +334,13 @@ json Runtime::command(const json& request) {
     if(cmd=="traffic_observation") {
         std::lock_guard lock(control_);require_owner();
         const bool enabled=request.at("enabled").get<bool>();
-        if(enabled && (lease_.empty() || tier_<1)) throw std::runtime_error("Traffic observation requires a Tier 1 bridge lease");
+        if(enabled && tier_<1) throw std::runtime_error("Traffic observation requires a Tier 1 bridge lease");
         observe_traffic_=enabled;return {{"enabled",enabled}};
     }
     if(cmd=="drive") {
         const auto action=request.value("action",std::string("status"));
         if(action=="status") return current_drive();
         std::lock_guard lock(control_);require_owner();
-        if(lease_.empty()) throw std::runtime_error("Driving requires an active bridge lease");
         if(!input_host) throw std::runtime_error("Restart the game with the input-capable resident loader");
         if(action=="disconnect") {input_host->release(input_host->context,OtDriveReason::disconnected);return current_drive();}
         const auto driver=request.at("drive_owner").get<std::string>();

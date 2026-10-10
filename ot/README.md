@@ -55,7 +55,9 @@ core 0.26.1의 브리지 private 리그는 `capture_warmup: true`를 사용합�
 .\ot\ot.cmd panic
 ```
 
-Python 미리보기는 장착 위치·회전·FOV를 편집하는 개발 UI입니다. 수집은 릴레이와 같은 native stream/IPC를 사용하고 종료 시 자기 lease만 해제합니다. `--duration`으로 실행 시간을 명시합니다. 장착 원점 계산은 DLL과 릴레이가 같은 SDK 기반 함수를 사용합니다. 일반 실시간 표시는 apps 런처와 Foxglove를 사용합니다.
+Python 미리보기는 장착 위치·회전·FOV를 편집하는 개발 UI입니다. 수집은 릴레이와 같은 native stream/IPC를 사용하고 종료 시 자기 lease만 해제합니다. `--duration`으로 실행 시간을 명시합니다.
+
+core는 Tier·render probe·camera rig·stream 변경과 운전 명령을 lease 소유자에게만 허용합니다. 따라서 `camera_rig apply`는 lease를 잡고 heartbeat를 보내며 Ctrl+C(또는 `--duration`)까지 리그를 유지하고, 끝나면 lease 해제로 Tier 0에 돌아갑니다. CLI 단독으로는 `tier`·`render_probe`·`stream`·`camera_rig`의 상태 조회와 `panic`만 동작합니다. 장착 원점 계산은 DLL과 릴레이가 같은 SDK 기반 함수를 사용합니다. 일반 실시간 표시는 apps 런처와 Foxglove를 사용합니다.
 
 ## 기록·오프라인 도구
 
