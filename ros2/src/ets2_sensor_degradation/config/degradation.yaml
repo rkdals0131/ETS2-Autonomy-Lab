@@ -1,0 +1,39 @@
+# Starting values for a production MEMS IMU, standalone GNSS, wheel speed
+# sensors and a mid-range LiDAR. They are not fitted to a specific vehicle yet.
+# Latency is measured from the sensor stamp on the node clock (use_sim_time).
+sensor_degradation:
+  ros__parameters:
+    seed: 1
+    imu:
+      gyro_noise_density: 8.7e-5     # rad/s/sqrt(Hz)
+      gyro_bias_initial: 1.0e-3      # rad/s
+      gyro_bias_walk: 1.0e-5         # rad/s^2/sqrt(Hz)
+      accel_noise_density: 1.0e-3    # m/s^2/sqrt(Hz)
+      accel_bias_initial: 2.0e-2     # m/s^2
+      accel_bias_walk: 1.0e-4        # m/s^3/sqrt(Hz)
+      misalignment_rad: 1.7e-3       # 0.1 deg per axis
+      latency_ms: 5.0
+      drop_probability: 0.0
+    gnss:
+      horizontal_sigma_m: 1.5
+      vertical_sigma_m: 3.0
+      correlation_time_s: 60.0
+      outage_rate_hz: 0.0
+      outage_duration_s: 10.0
+      latency_ms: 100.0
+      drop_probability: 0.0
+    wheels:
+      angular_noise_std: 0.05        # rad/s
+      angular_step: 0.01             # rad/s
+      steering_noise_std: 1.0e-3     # rad
+      radius_scale_std: 5.0e-3       # relative
+      latency_ms: 10.0
+      drop_probability: 0.0
+    lidar:
+      names: [L_F, L_PL, L_PR]
+      range_sigma_m: 0.02
+      range_sigma_relative: 0.0
+      miss_probability: 0.01
+      L_F: {latency_ms: 0.0, drop_probability: 0.0}
+      L_PL: {latency_ms: 0.0, drop_probability: 0.0}
+      L_PR: {latency_ms: 0.0, drop_probability: 0.0}

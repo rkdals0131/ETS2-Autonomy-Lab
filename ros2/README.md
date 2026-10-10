@@ -4,7 +4,8 @@
 | --- | --- |
 | src/ets2_msgs | 센서·차량 상태·운전 명령과 서비스 계약 |
 | src/ets2_bridge | Windows 릴레이의 CDR 수신·ROS 발행, 구독·제어 요구 전달 |
-| src/ets2_autonomy | GT baseline: 차로 pure-pursuit·속도 PI·앞차 속도 제한·ETS2 입력 adapter |
+| src/ets2_autonomy | GT baseline: 차로 pure-pursuit·속도 PI·앞차 속도 제한·ETS2 입력 adapter(연결 확인용, 동결) |
+| src/ets2_sensor_degradation | `/ets2/*` 이상 센서에 seed 고정 잡음·지연·드롭을 적용해 `/sensing/*`로 재발행 |
 
 ROS는 WSL Ubuntu의 Jazzy에서 실행합니다. 현재 저장소는 Windows에 있고 WSL은 같은 `/mnt/c` 소스를 읽습니다. `~/ets2-ros`(`ETS2_ROS_WS`로 변경 가능)에는 build/install/log를 보관하며 별도 src 복사본이 없습니다. Linux ext4 checkout은 향후 개발 배치 선택이며 이번 정리에서 복제하지 않았습니다.
 
@@ -33,5 +34,7 @@ Jazzy는 시스템 Python 3.12를 사용합니다. 이 머신의 기본 PATH에�
 source "$REPO/bridge/ros-env.sh"
 ros2 launch ets2_bridge bridge.launch.py config:="$REPO/bridge/config/bridge.local.json"
 ```
+
+스택이 보는 센서는 `ros2 launch ets2_sensor_degradation sensor_degradation.launch.py`가 만듭니다. IMU `/sensing/imu/imu_raw`, GNSS `/sensing/gnss/nav_sat_fix`, 바퀴 `/sensing/wheels/state`, 라이다 `/sensing/lidar/<L_F|L_PL|L_PR>/points`이며, 값은 [config/degradation.yaml](src/ets2_sensor_degradation/config/degradation.yaml)에서 바꿉니다. stamp는 측정 시각 그대로이고, 지연은 `use_sim_time`의 `/clock` 기준으로 늦게 발행해서 줍니다. 출력에 구독자가 있을 때만 해당 `/ets2` 입력을 구독하므로, 쓰지 않는 라이다의 렌더 수요를 만들지 않습니다. bag 재생에도 같은 노드를 사용합니다(bag의 `/clock`을 그대로 재생하고 `--clock`은 쓰지 않음).
 
 GT baseline은 `ros2 run ets2_autonomy drive_speed`로 실행합니다. 노드명은 `/ets2_drive_speed`입니다. 실제 운전은 [ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행)을 따릅니다. 인지·위치 추정·FSM·목적지 경로 계획은 아직 없으며 [다음 모듈 경계](../docs/03_system_design.md#ros-개발과-다음-스택)에 따라 이 패키지부터 확장합니다.

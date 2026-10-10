@@ -252,6 +252,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음(현 토픽으로 동작). W10 launch와 remap 정합.
 - 완료 기준: Linux 단위 테스트: 같은 seed → 같은 출력, 설정 분산 대비 표본 분산 ±10%, 지연 설정이 stamp 차이로 확인됨. bag 재생에서 동작.
 - 게임 실행: 아니오.
+- 진행(2026-10-10): ✔ 완료(WSL). 구성: `models.hpp`(ROS 없는 오차 모델) + `sensor_degradation` 노드 + `config/degradation.yaml` + launch. 난수는 splitmix64와 Box–Muller로 직접 구현해 `std::` 분포 구현 차이 없이 seed가 재현되며, 채널·용도별 독립 stream이라 토픽을 추가해도 다른 채널의 잡음열이 바뀌지 않는다. 모델: IMU는 백색잡음(밀도/√dt), bias 초기값과 random walk, 고정 축 오정렬, 공분산 채움. GNSS는 ENU 1차 Gauss–Markov(σ_h 1.5 m, σ_v 3 m, τ 60 s), 정전 구간에 `STATUS_NO_FIX`+NaN. 바퀴는 각속도 잡음·양자화, 조향 잡음, 바퀴 index별 고정 반지름 오차. 라이다는 `status==0` 반환에만 거리 잡음, 결측은 `status=2`+NaN. 채널마다 `latency_ms`·`drop_probability`. 시각: stamp는 측정 시각 그대로 두고 node clock(`use_sim_time`)에서 stamp+latency에 발행한다. 검증: `colcon test` gtest 9개 통과(seed 재현, 표본 분산 ±10%, 지연·드롭). bag `20261009-162356` 10 s 재생에서 IMU 310개 전부 대응, GNSS 지연 중앙값 0.117 s(설정 100 ms + `/clock` 간격), 바퀴 반지름 index별 상이. 추가로 **lazy 구독**: ✔ ets2_bridge는 구독 수로 렌더 수요를 만들기 때문에(ets2_bridge main.cpp:184), 출력에 구독자가 있을 때만 입력을 구독한다. `/sensing/lidar/L_F/points` 구독 중에만 `/ets2/lidar/L_F/points` 구독 1개, 해제 뒤 0을 확인했다. 범위 밖: `/ets2/wheels/odometry` 재계산(소비자가 열화된 WheelState나 VelocityReport에서 계산), 영상 잡음(비범위). 기본값은 차량에 맞춘 값이 아닌 출발점(△).
 
 ### P4. 테스트·CI·공개
 
