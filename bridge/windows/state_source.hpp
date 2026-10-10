@@ -13,7 +13,7 @@ struct StateSample {
 // Reads SDK/physics and advances sensor models independently of ROS sockets.
 class StateSource {
 public:
-    StateSource(const VehicleProfile& vehicle,const json& settings);
+    StateSource(const VehicleProfile& vehicle,const json& settings,const std::string& core_version);
     ~StateSource();
     std::shared_ptr<const StateSample> latest() const;
     const json& configuration() const {return configuration_;}

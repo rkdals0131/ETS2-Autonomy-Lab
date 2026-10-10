@@ -40,6 +40,15 @@ static std::string wsl_address(const std::string& distro) {
         if(address.at("family")=="inet") return address.at("local");
     throw std::runtime_error(distro+" has no eth0 IPv4 address");
 }
+// The ROS listener binds bind_address (empty: WSL eth0); the relay connects to the same address.
+static std::string ros_address(const json& config) {
+    const auto configured=config.value("bind_address",std::string{});
+    if(configured.empty()) return wsl_address(config.value("wsl_distro",std::string("Ubuntu")));
+    in_addr parsed{};
+    if(inet_pton(AF_INET,configured.c_str(),&parsed)!=1 || parsed.s_addr==INADDR_ANY)
+        throw std::runtime_error("bind_address must be the ROS host's reachable IPv4 address; leave it empty for WSL eth0");
+    return configured;
+}
 int main(int argc,char** argv) {
     // The game renders synchronously; relay queues can discard old bundles.
     // Yield CPU scheduling priority without pinning the user's WSL or desktop.
@@ -72,6 +81,7 @@ int main(int argc,char** argv) {
         std::ifstream preset(path.parent_path()/config.at("rig").get<std::string>());json rig;preset>>rig;
         const auto selected=input_only?json::array():config.value("slots",json::array({0}));
         if(!selected.empty()) (void)rig.at("truck_id").get<std::string>();
+        const auto core_version=require_core_version();
         const auto truck=command({{"cmd","truck_config"}});
         const auto vehicle=resolve_vehicle(rig,truck,selected);
         rig=vehicle.rig;
@@ -99,11 +109,11 @@ int main(int argc,char** argv) {
         }});
         const auto owned=[&](json request){request["owner"]=owner;return command(std::move(request));};
         owned({{"cmd","tier"},{"value",1}});
-        StateSource source(vehicle,config);
+        StateSource source(vehicle,config,core_version);
         const auto run=[&](double remaining) {
         struct DriveEnd {std::function<json(json)> control;~DriveEnd(){try{control({{"cmd","drive"},{"action","disconnect"}});}catch(...) {}}} drive_end{owned};
         const auto session=uuid_string();
-        const auto ip=wsl_address(config.value("wsl_distro",std::string("Ubuntu")));std::cout<<"WSL direct IP "<<ip<<"; session "<<session<<std::endl;
+        const auto ip=ros_address(config);std::cout<<"ROS host IP "<<ip<<"; session "<<session<<std::endl;
         auto state=connect_to(ip,config.value("state_port",17401),true),bulk=connect_to(ip,config.value("bulk_port",17400),false);
         send_packet(state,{{"token",token},{"session",session},{"channel","state"}});
         const auto welcome=receive_packet(state);if(!welcome.meta.value("ready",false) || welcome.meta.at("session")!=session) throw std::runtime_error("WSL pairing failed");
@@ -222,7 +232,7 @@ int main(int argc,char** argv) {
             try {if(!run((deadline-ticks())/1000.0)) break;}
             catch(const TransportError& e) {std::cerr<<e.what()<<std::endl;}
             if(stopped || !lease_ok || ticks()>=deadline) break;
-            std::cout<<"Network disconnected; render capture is off, motion sensors continue. Resolving WSL eth0 again."<<std::endl;
+            std::cout<<"Network disconnected; render capture is off, motion sensors continue. Resolving the ROS host again."<<std::endl;
             for(int i=0;i<20 && !stopped && lease_ok;++i) std::this_thread::sleep_for(50ms);
         }
         return lease_ok?0:1;

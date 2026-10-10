@@ -34,6 +34,6 @@ GT 차로 JSON은 [지도 provider](../bridge/map_lane_provider/README.md)로 �
 
 다른 Linux 터미널에서도 `./apps/launch.sh status`·`./apps/launch.sh stop`을 사용할 수 있습니다. 중지할 때는 Windows host-only 터미널에서 **Ctrl+C**, Linux에서 **stop** 또는 **Ctrl+C**를 사용합니다. 각 진입점은 자신이 소유한 프로세스만 종료합니다. 실행 시간은 기존 `duration_s`를 따릅니다.
 
-Linux 진입점은 Win32·게임 DLL·D3D 릴레이를 import하거나 실행하지 않습니다. 현재 실제 연결은 Windows 게임 + WSL Ubuntu이며, 별도 Linux PC에 대한 자동 host 연결 관리는 제공하지 않습니다. ROS listener의 `bind_address`를 명시하면 eth0 외의 IPv4 주소도 사용할 수 있고, 생략하면 기존 WSL eth0를 사용합니다.
+Linux 진입점은 Win32·게임 DLL·D3D 릴레이를 import하거나 실행하지 않습니다. 현재 실제 연결은 Windows 게임 + WSL Ubuntu이며, 별도 Linux PC에 대한 자동 host 연결 관리는 제공하지 않습니다. `bind_address`는 ROS listener가 바인드하는 IPv4이자 Windows 릴레이가 접속하는 주소입니다. 비워 두면 양쪽 모두 WSL eth0를 사용하고(릴레이는 `wsl_distro`의 eth0를 조회), 명시하면 양쪽이 같은 주소를 씁니다. 릴레이는 접속할 수 없는 `0.0.0.0`을 거절합니다.
 
 구현은 [launcher/](launcher/README.md), ROS 빌드는 [ros2/](../ros2/README.md)에 있습니다.

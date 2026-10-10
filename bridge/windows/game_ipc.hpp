@@ -4,7 +4,13 @@
 #include "../../ot/include/ipc_reader.hpp"
 
 namespace bridge {
+// The core answered {"ok":false}; pipe and timeout failures stay std::runtime_error.
+struct CoreError:std::runtime_error {using std::runtime_error::runtime_error;};
+// Oldest ot_core.dll whose pipe commands this relay speaks.
+inline constexpr std::string_view minimum_core_version="0.29.0";
 json command(json request);
+// Run before any other command so an outdated core fails with an install hint.
+std::string require_core_version();
 class Mapping {
     Handle file_;void* base_=nullptr;uint32_t capacity_=0,producer_=0;bool bundles_;uint64_t sequence_=0;
 public:
