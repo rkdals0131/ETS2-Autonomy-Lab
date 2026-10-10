@@ -43,11 +43,11 @@
 
 ### 3.2 adapter 토픽·서비스(W10)
 
-QoS 표기: R=reliable, BE=best-effort, TL=transient-local, Kn=KeepLast(n). Autoware 1.13 메시지 이름은 ✔ apt 후보에서 확인했고 필드 이름은 △ 설치 후 `ros2 interface show`로 대조합니다.
+QoS 표기: R=reliable, BE=best-effort, TL=transient-local, Kn=KeepLast(n). ✔ Autoware 1.13.0 메시지 필드는 2026-10-10 `apt-get download`로 받은 .deb의 .msg/.srv에서 직접 대조했습니다(설치 없이). 부호 규약: `Lateral`·`SteeringReport`는 왼쪽 +, SDK `truck.wheel.steering`도 반시계(왼쪽) +라 변환 없이 맞습니다. `Control`·`Lateral`·`Longitudinal`·`SteeringReport`·`ControlModeReport`·`GearReport`는 `builtin_interfaces/Time stamp`, `VelocityReport`·`Actuation*Stamped`만 `std_msgs/Header`를 씁니다.
 
 | 방향 | 토픽/서비스 | 타입 | QoS | 주기 | adapter 처리 |
 | --- | --- | --- | --- | --- | --- |
-| 스택→adapter | `/control/command/control_cmd` | `autoware_control_msgs/msg/Control` | BE K1 | 스택 주기(기본 50 Hz 가정) | `lateral.steering_tire_angle`[rad], `lateral.steering_tire_rotation_rate`[rad/s] → L2 EPS → 상대 조향 입력. `longitudinal.acceleration`[m/s²], `longitudinal.velocity`[m/s] → 종방향 맵 → throttle/brake |
+| 스택→adapter | `/control/command/control_cmd` | `autoware_control_msgs/msg/Control` | BE K1 | 스택 주기(기본 50 Hz 가정) | `lateral.steering_tire_angle`[rad], `lateral.steering_tire_rotation_rate`[rad/s](✔ `is_defined_steering_tire_rotation_rate`가 true일 때만 사용) → L2 EPS → 상대 조향 입력. `longitudinal.velocity`[m/s], `longitudinal.acceleration`[m/s²](✔ `is_defined_acceleration`이 true일 때만 feedforward) → 종방향 맵 → throttle/brake. `jerk`는 무시 |
 | 스택→adapter | `/control/command/gear_cmd` | `autoware_vehicle_msgs/msg/GearCommand` | R K1 TL | 이벤트 | Phase 1: DRIVE/NEUTRAL만 수용, 그 외 거절 로그. 게임 기어는 자동 변속 가정(△ 수동 변속 프로필은 비범위) |
 | 스택→adapter | `/control/control_mode_request` | `autoware_vehicle_msgs/srv/ControlModeCommand` | 서비스 | 이벤트 | 아래 3.3 매핑으로 `/ets2/drive/control` arm/disarm |
 | 스택→adapter | `/vehicle/emergency` (선택) | `std_msgs/msg/Bool` △(tier4 메시지 미사용) | R K1 | 이벤트 | true → 즉시 disarm + brake 1.0 한 프레임 전송 후 해제 |
@@ -55,7 +55,7 @@ QoS 표기: R=reliable, BE=best-effort, TL=transient-local, Kn=KeepLast(n). Auto
 | adapter→스택 | `/vehicle/status/steering_report` | `autoware_vehicle_msgs/msg/SteeringReport` | R K1 | WheelState마다 | `steering_tire_angle`=조향축 좌우 바퀴 `steering_angle_rad` 평균(✔ WheelState는 SDK `truck.wheel.steering`을 rad로 변환, motion_sensors.cpp:46-51). 모델 추정값이 아니라 실측 |
 | adapter→스택 | `/vehicle/status/control_mode` | `autoware_vehicle_msgs/msg/ControlModeReport` | R K1 | DriveState마다 | 3.3 매핑 |
 | adapter→스택 | `/vehicle/status/gear_status` | `autoware_vehicle_msgs/msg/GearReport` | R K1 | ActuationState마다 | `engine_gear>0`→DRIVE, `==0`→NEUTRAL, `<0`→REVERSE, `engine_gear_available=false`→NONE |
-| adapter→스택 | `/vehicle/status/actuation_status` | 자체 `ets2_msgs/ActuationState` 그대로 재발행하지 않음. 필요 시 `/ets2/vehicle/actuation`을 직접 구독 | | | tier4 메시지 미사용(D1) |
+| adapter→스택 | `/vehicle/status/actuation_status` | `autoware_vehicle_msgs/msg/ActuationReportStamped` | R K1 | ActuationState마다 | ✔ 1.13에 포함(tier4 불필요). `accel_report`=throttle applied, `brake_report`=brake applied, `steer_report`=applied 정규화 조향[-1,1]. 모두 게임이 실제 적용한 값이며 명령 복사가 아님 |
 | adapter 내부 | `/ets2/drive/control`, `/ets2/drive/command`, `/ets2/drive/state`, `/ets2/vehicle/state`, `/ets2/vehicle/actuation`, `/ets2/wheels/state` | 기존 | 기존(✔ wire.hpp:135-141, ets2_bridge main.cpp:102-105) | | 기존 운전 API를 감싼다 |
 
 ### 3.3 ControlMode·축 매핑과 watchdog
@@ -66,10 +66,11 @@ QoS 표기: R=reliable, BE=best-effort, TL=transient-local, Kn=KeepLast(n). Auto
 | AUTONOMOUS_STEER_ONLY | arm axes=1 | 1 | AUTONOMOUS_STEER_ONLY (axes==1) |
 | AUTONOMOUS_VELOCITY_ONLY | arm axes=2 | 2 | AUTONOMOUS_VELOCITY_ONLY (axes==2) |
 | MANUAL | disarm(epoch 명시) | 0 | MANUAL (armed==false) |
-| (해제 사유) | DriveState.reason ∈ {manual, expired, paused, panic, disconnected, input_unavailable, profile_unsupported, disabled} → MANUAL + `/diagnostics` ERROR에 reason 문자열 | | MANUAL |
-| NOT_READY △ | DriveState.available/permitted/profile_supported 중 false | | NOT_READY(필드 존재 여부는 설치 후 확인) |
+| (스택 요청 없는 강제 해제) | DriveState.reason ∈ {manual, expired, paused, panic, disconnected, input_unavailable} → `/diagnostics` ERROR에 reason 문자열 | 0 | **DISENGAGED** |
+| (스택의 MANUAL 요청 뒤 정상 해제) | reason = disarmed | 0 | MANUAL |
+| (준비 안 됨) | DriveState.available/permitted/profile_supported 중 false, 또는 reason ∈ {profile_unsupported, disabled} | | NOT_READY |
 
-△ Autoware `ControlModeReport`에는 `MANUAL` 외에 `DISENGAGED`도 있습니다. 스택 요청 없이 일어난 강제 해제(`manual`, `expired`, `panic`, `disconnected`, `input_unavailable`)는 `DISENGAGED`가 의미상 더 맞을 수 있습니다. W09에서 상수 목록을 확인한 뒤 이 표를 확정합니다.
+✔ 상수 값(ControlModeReport): NO_COMMAND=0, AUTONOMOUS=1, AUTONOMOUS_STEER_ONLY=2, AUTONOMOUS_VELOCITY_ONLY=3, MANUAL=4, DISENGAGED=5, NOT_READY=6. ControlModeCommand.srv는 0–4만 있고 응답은 `bool success`입니다. 강제 해제를 `DISENGAGED`로 보고하는 것은 이 문서의 선택입니다. 스택이 "운전자 개입·만료·패닉"과 "요청한 수동 전환"을 구분할 수 있게 하기 위함이며, 둘 다 AUTONOMOUS가 아니므로 Autoware의 자율 활성 판단에는 차이가 없습니다(△ Autoware 제어 쪽이 DISENGAGED를 특별 취급하는지는 W13에서 확인).
 
 ✔ 축 비트는 steering=1, pedals=2(DriveControl.srv, drive_api.hpp를 통해 core.cpp:359-361에서 검사). ✔ 사람이 소유 축을 건드리면 다음 입력 프레임에 해제(drive_control.hpp:39-40). ✔ 상태 `axes=0`은 해제(DriveState.msg 주석).
 
@@ -192,15 +193,19 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: `ros2 interface show autoware_control_msgs/msg/Control`, `autoware_vehicle_msgs/msg/ControlModeReport`, `SteeringReport`, `VelocityReport`, `GearReport`, `srv/ControlModeCommand`의 필드가 3.2·3.3 표와 맞음(불일치는 표를 갱신). colcon 빌드 통과.
 - 게임 실행: 아니오.
+- 진행(2026-10-10): 필드 대조와 4.1 의존 트리는 .deb 압축 해제로 완료(✔, 3.2·3.3·4.1 갱신). WSL 설치는 sudo 비밀번호가 필요해 사용자가 `sudo apt install ros-jazzy-autoware-control-msgs ros-jazzy-autoware-vehicle-msgs`를 실행해야 함. colcon 빌드 확인은 W10 패키지와 함께.
 
 4.1 의존성 결정표(W09에서 채움):
 
 | 패키지 | 용도 | 결정 | 의존 트리 확인 |
 | --- | --- | --- | --- |
-| autoware_control_msgs 1.13.0 | Control 명령 | 그대로 의존(apt) | △ |
-| autoware_vehicle_msgs 1.13.0 | 보고·모드 서비스 | 그대로 의존(apt) | △ |
-| autoware_common_msgs 1.13.0 | 위 둘의 의존일 수 있음 | 필요할 때만 | △ |
-| (후속) 횡·종 제어기 패키지 | W13 시험 | 패키지 단위로 판단, autoware_utils 의존이 크면 포크 | △ |
+| autoware_control_msgs 1.13.0 | Control 명령 | 그대로 의존(apt) | ✔ builtin_interfaces·rosidl 런타임뿐 |
+| autoware_vehicle_msgs 1.13.0 | 보고·모드 서비스·ActuationReport | 그대로 의존(apt) | ✔ std_msgs, autoware_planning_msgs(→ autoware_common_msgs, geometry_msgs, nav_msgs, unique_identifier_msgs). 패키지 수준 의존일 뿐 vehicle 메시지 필드는 planning 타입을 쓰지 않음. 모두 메시지 패키지라 가벼움 |
+| autoware_common_msgs 1.13.0 | 직접 쓰지 않음 | 간접 설치만 | ✔ 위 트리로 함께 설치 |
+| autoware_simple_pure_pursuit | W13 횡방향 소비자 후보 | W13에서 apt 그대로 시험, 의존이 과하면 자체 최소 구현 | ✔ Jazzy apt에 존재. 의존 트리 △ |
+| autoware_vehicle_velocity_converter, autoware_gyro_odometer, autoware_ekf_localizer | 스택 localization(VelocityReport+IMU → twist → EKF) | 비범위(스택 localization 연결 때 검토) | ✔ Jazzy apt에 존재 |
+| autoware_velocity_smoother | 종방향 목표 평활 | 필요할 때 검토 | ✔ Jazzy apt에 존재 |
+| raw_vehicle_cmd_converter(가속도→페달 맵) | 종방향 맵 | Jazzy apt에 없음(✔ `apt-cache search` 결과 부재) → W10 adapter 안에 자체 구현, CSV 맵 형식은 Autoware와 맞춰 나중에 교체 가능하게 | — |
 
 **W10 `ets2_vehicle_interface` adapter 노드** (M)
 - 목표: 3.2·3.3 계약 구현. 종방향 먼저, 횡방향은 W12 전까지 "interim" 모드.
