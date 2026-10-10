@@ -1,0 +1,32 @@
+cmake_minimum_required(VERSION 3.25)
+project(ets2_portable_tests LANGUAGES CXX)
+# Platform-independent pieces of the Windows relay and core, checked on Linux.
+# Windows builds ot_drive_test from ot/CMakeLists.txt instead.
+if(WIN32)
+  message(FATAL_ERROR "Configure these tests on Linux; Windows uses ot/ and bridge/ directly")
+endif()
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(ETS2_TEST_SANITIZE "Build tests with AddressSanitizer and UndefinedBehaviorSanitizer" ON)
+find_package(nlohmann_json 3 REQUIRED)
+set(ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+add_compile_options(-Wall -Wextra)
+if(ETS2_TEST_SANITIZE)
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+enable_testing()
+
+add_executable(drive_control_test "${ROOT}/ot/native/drive_control_test.cpp" "${ROOT}/ot/native/manual_input.cpp")
+target_include_directories(drive_control_test PRIVATE "${ROOT}/ot/native")
+add_test(NAME drive_control COMMAND drive_control_test)
+
+add_executable(wire_test wire_test.cpp)
+target_include_directories(wire_test PRIVATE "${ROOT}/bridge/common")
+target_link_libraries(wire_test PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME wire COMMAND wire_test)
+
+add_executable(motion_sensors_test motion_sensors_test.cpp "${ROOT}/bridge/windows/motion_sensors.cpp")
+target_include_directories(motion_sensors_test PRIVATE "${ROOT}/bridge/windows")
+target_link_libraries(motion_sensors_test PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME motion_sensors COMMAND motion_sensors_test)

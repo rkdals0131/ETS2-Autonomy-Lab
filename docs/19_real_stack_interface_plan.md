@@ -271,6 +271,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: `ctest`가 WSL과 Linux 러너에서 통과. drive_control_test도 같은 ctest에 포함(`-fsanitize=address,undefined`).
 - 게임 실행: 아니오.
+- 진행(2026-10-10): ✔ 완료(WSL). 위치는 `bridge/tests`가 아니라 저장소 루트 `tests/`입니다. drive_control_test가 ot 코드라 bridge 아래에 두지 않았습니다. `cmake -S tests -B /tmp/ets2-portable-tests && cmake --build /tmp/ets2-portable-tests && ctest --test-dir /tmp/ets2-portable-tests` → 3/3 통과(g++ 13.3, ASan/UBSan). `wire_test`: socketpair 왕복, 잘못된 매직·메타·blob 크기 거절, 끊긴 연결의 TransportError, 토픽 이름 중복 없음. `motion_sensors_test`: 직진·Ackermann 선회 오도메트리(정확한 호와 비교), 공중 바퀴 제외, pause 구간 미적분, 정지 IMU +g, 왼쪽 yaw 양수, GNSS 10 Hz 유지·model +x=동쪽, 차량 세대 변경 거절. 중력 부호·yaw 부호·회전→rad 변환·GNSS 주기·호 중간점 적분 5개 변이를 모두 잡는 것을 확인했습니다. drive_control_test는 controls.sii 경로 인자 없이 실행하므로 ManualInput 검사는 CI에서 빠집니다(사용자 프로필을 저장소에 넣지 않음).
 
 **W18 GitHub Actions** (M)
 - 목표: D6.
