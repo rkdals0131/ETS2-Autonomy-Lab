@@ -117,8 +117,12 @@ int main(int argc,char** argv) {
         const auto session=uuid_string();
         const auto ip=ros_address(config);std::cout<<"ROS host IP "<<ip<<"; session "<<session<<std::endl;
         auto state=connect_to(ip,config.value("state_port",17401),true),bulk=connect_to(ip,config.value("bulk_port",17400),false);
-        send_packet(state,{{"token",token},{"session",session},{"channel","state"}});
-        const auto welcome=receive_packet(state);if(!welcome.meta.value("ready",false) || welcome.meta.at("session")!=session) throw std::runtime_error("WSL pairing failed");
+        send_packet(state,{{"token",token},{"session",session},{"channel","state"},{"wire_version",wire_version}});
+        const auto welcome=receive_packet(state);
+        // Version mismatches are fatal rather than retried: both sides must be rebuilt together.
+        if(const auto ros=welcome.meta.value("wire_version",1);ros!=wire_version)
+            throw std::runtime_error("Wire version mismatch: relay "+std::to_string(wire_version)+", ROS "+std::to_string(ros)+"; rebuild bridge and ros2 from the same commit");
+        if(!welcome.meta.value("ready",false) || welcome.meta.at("session")!=session) throw std::runtime_error(welcome.meta.value("error",std::string("WSL pairing failed")));
         send_packet(bulk,{{"token",token},{"session",session},{"channel","bulk"}});
         Handle reader(CreateMutexW(nullptr,FALSE,L"Local\\OT_Bundles_Reader"));
         const auto acquired=reader.h?WaitForSingleObject(reader.h,0):WAIT_FAILED;

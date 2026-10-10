@@ -158,7 +158,12 @@ int main(int argc,char** argv) {
                 auto hello=receive_packet(state);
                 if(hello.meta.value("token","")!=token || hello.meta.value("channel","")!="state") throw std::runtime_error("Pairing rejected");
                 const auto session=hello.meta.at("session").get<std::string>();
-                send_packet(state,{{"session",session},{"ready",true},{"capture",capture_enabled.load()}});
+                if(const auto relay=hello.meta.value("wire_version",1);relay!=wire_version) {
+                    const auto error="Wire version mismatch: relay "+std::to_string(relay)+", ROS "+std::to_string(wire_version)+"; rebuild bridge and ros2 from the same commit";
+                    send_packet(state,{{"session",session},{"ready",false},{"error",error},{"wire_version",wire_version}});
+                    throw std::runtime_error(error);
+                }
+                send_packet(state,{{"session",session},{"ready",true},{"capture",capture_enabled.load()},{"wire_version",wire_version}});
                 auto bulk=accept_client(bulk_listener,false,true);
                 hello=receive_packet(bulk);
                 if(hello.meta.value("token","")!=token || hello.meta.value("session","")!=session || hello.meta.value("channel","")!="bulk")

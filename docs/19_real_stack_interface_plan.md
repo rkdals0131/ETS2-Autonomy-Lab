@@ -190,6 +190,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: W04(메시지 변경과 함께 버전 올림).
 - 완료 기준: 릴레이 `wire_version`을 일부러 바꾸면 pairing 거절 메시지에 두 버전이 찍힘. W16 골든 패킷 테스트가 hello 검증을 포함.
 - 게임 실행: 예(릴레이 실행). ROS 쪽 검사는 W16으로 Linux에서 재검증.
+- 진행(2026-10-10): ✔ 완료(git tag는 main 병합 뒤로 미룸). `wire.hpp`에 `wire_version=2`(1은 지금까지의 암묵 버전, 2는 W03 `/tf` 경로와 W04 DriveCommand)와 `msgs_version="0.2.0"`, ets2_msgs 0.2.0. 검사는 양방향이다: 릴레이 hello와 ets2_bridge welcome이 각자 버전을 싣고, 불일치는 재시도하지 않는 오류로 끝난다. 검증: 가짜 wire 1 릴레이 → ets2_bridge가 `ready:false`와 "Wire version mismatch: relay 1, ROS 2…"로 거절. 실제 릴레이 → 버전 없는 가짜 ROS(WSL) → "Wire version mismatch: relay 2, ROS 1…", exit 1, Tier 0 복귀. 정상 짝(게임) → `/ets2/sensors/config`에 `core_version 0.30.0`, `wire_version 2`, `msgs_version 0.2.0`. `tests/wire_test`가 `msgs_version`과 ets2_msgs/package.xml을 대조한다. 버전 규칙은 ros2/README.md에 기록.
 
 ### P2. 스택 인터페이스(adapter)
 

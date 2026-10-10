@@ -24,7 +24,7 @@ add_test(NAME drive_control COMMAND drive_control_test "${CMAKE_CURRENT_SOURCE_D
 add_executable(wire_test wire_test.cpp)
 target_include_directories(wire_test PRIVATE "${ROOT}/bridge/common")
 target_link_libraries(wire_test PRIVATE nlohmann_json::nlohmann_json)
-add_test(NAME wire COMMAND wire_test)
+add_test(NAME wire COMMAND wire_test "${ROOT}/ros2/src/ets2_msgs/package.xml")
 
 add_executable(motion_sensors_test motion_sensors_test.cpp "${ROOT}/bridge/windows/motion_sensors.cpp")
 target_include_directories(motion_sensors_test PRIVATE "${ROOT}/bridge/windows")

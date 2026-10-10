@@ -1,5 +1,6 @@
 #include "wire.hpp"
 #include <sys/socket.h>
+#include <fstream>
 #include <iostream>
 #include <set>
 
@@ -16,7 +17,12 @@ static void raw_header(const Socket& s,const char* magic,uint32_t meta_size,uint
     transfer(s,header.data(),header.size(),true);
 }
 
-int main() {
+int main(int argc,char** argv) {
+    if(argc>1) { // ets2_msgs/package.xml: the relay's serialized layouts must match its version.
+        std::ifstream file(argv[1]);const std::string text{std::istreambuf_iterator<char>(file),{}};
+        const auto begin=text.find("<version>"),end=text.find("</version>");
+        check(begin!=std::string::npos && end>begin && text.substr(begin+9,end-begin-9)==msgs_version,"msgs_version matches ets2_msgs/package.xml");
+    }
     {
         auto [a,b]=pair();Bytes blob(1000);for(size_t i=0;i<blob.size();++i) blob[i]=static_cast<uint8_t>(i*7);
         send_packet(a,{{"session","s"},{"n",1}},blob);send_packet(a,{{"empty",true}});

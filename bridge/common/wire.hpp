@@ -18,12 +18,19 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace bridge {
 using json=nlohmann::json;
 using Bytes=std::vector<uint8_t>;
+// Bump when topics, socket routing, packet metadata or relay-serialized ets2_msgs
+// layouts change; the relay and ets2_bridge refuse to pair across versions.
+// 1: implicit until 2026-10-10. 2: reliable /tf on both sockets, DriveCommand.sent_steady_ns.
+inline constexpr int wire_version=2;
+// ets2_msgs/package.xml version whose layouts the relay serializes (checked by tests/wire_test).
+inline constexpr std::string_view msgs_version="0.2.0";
 struct TransportError:std::runtime_error {using std::runtime_error::runtime_error;};
 #ifdef _WIN32
 using SocketId=SOCKET;

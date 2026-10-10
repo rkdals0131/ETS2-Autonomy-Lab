@@ -8,6 +8,8 @@ StateSource::StateSource(const VehicleProfile& vehicle,const json& settings,cons
     sensors_(vehicle,settings),configuration_(sensors_.configuration()) {
     configuration_["sensor_session"]=uuid_string();
     configuration_["core_version"]=core_version;
+    configuration_["wire_version"]=wire_version;
+    configuration_["msgs_version"]=msgs_version;
     configuration_["vehicle"]=vehicle.configuration;
     worker_=std::jthread([this](std::stop_token stop) {
         try {
