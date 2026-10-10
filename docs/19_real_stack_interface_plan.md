@@ -164,7 +164,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: 현재 core 0.29.0에서 릴레이 정상 시작. 코드 리뷰로 구 core 경로의 메시지 확인(△ 구 core 실물 시험은 생략 가능). 런처 상태창에 그 메시지가 그대로 표시됨(✔ launcher.py:308-330 `_observe`가 릴레이 stdout을 읽음).
 - 게임 실행: 예(정상 경로 확인).
-- 진행(2026-10-10): 코드 완료, MSVC 빌드 통과(✔ VS 18 BuildTools, `bridge\build.cmd`). 게임 검증 남음. 구현: 첫 core 명령은 lease가 아니라 `truck_config`(main.cpp:75)였으므로 그보다 앞에서 `require_core_version()`을 호출한다. core가 `{"ok":false}`로 답한 경우만 `CoreError`(game_ipc.hpp)로 구분해, 파이프 장애·시간 초과와 "version 명령 미지원"을 다른 메시지로 보고한다. 최소 버전 `minimum_core_version="0.29.0"`(릴레이 pipe 프로토콜 기준이며 W07의 core 0.30.0을 요구하지 않음). 버전 문자열을 해석할 수 없으면 "unrecognized version"으로 따로 보고한다. StateSource는 생성자 인자로 버전을 받는다.
+- 진행(2026-10-10): ✔ 완료(게임 검증). core 0.30.0 설치 상태에서 `--input-only` 릴레이가 정상 시작하고, `/ets2/sensors/config`에 `"core_version":"0.30.0"`이 실림. version 명령이 없는 구 core 실물 시험은 생략(플레이 중인 게임에 ABI가 다른 옛 DLL을 올리지 않음). 구현: 첫 core 명령은 lease가 아니라 `truck_config`(main.cpp:75)였으므로 그보다 앞에서 `require_core_version()`을 호출한다. core가 `{"ok":false}`로 답한 경우만 `CoreError`(game_ipc.hpp)로 구분해, 파이프 장애·시간 초과와 "version 명령 미지원"을 다른 메시지로 보고한다. 최소 버전 `minimum_core_version="0.29.0"`(릴레이 pipe 프로토콜 기준이며 W07의 core 0.30.0을 요구하지 않음). 버전 문자열을 해석할 수 없으면 "unrecognized version"으로 따로 보고한다. StateSource는 생성자 인자로 버전을 받는다.
 
 **W06 `bind_address`를 릴레이에도 반영** (S)
 - 목표: D4. 설정 한 곳이 양쪽에 같은 의미로 적용되게 한다.
@@ -172,7 +172,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: `bind_address`를 WSL eth0 IP로 명시 → 연결됨. 존재하지 않는 IP로 설정 → 릴레이 "Cannot connect to WSL <ip>:<port>", ROS "Cannot listen on <ip>:<port>" 두 메시지 모두 설정값을 포함.
 - 게임 실행: 예(릴레이는 연결 전에 lease를 잡음, ✔ main.cpp:96-101).
-- 진행(2026-10-10): 코드 완료, MSVC 빌드 통과. 게임 검증 남음. `ros_address()`(main.cpp)는 `bind_address`가 비어 있으면 기존처럼 `wsl_distro`의 eth0를 조회하고, 값이 있으면 그 주소로 접속한다. ROS 쪽에서는 유효하지만 접속할 수 없는 `0.0.0.0`은 거절한다. 릴레이 로그는 "WSL direct IP"에서 "ROS host IP"로 바뀌었다(✔ 이 문구를 파싱하는 코드 없음). configure.py 기본값에 `"bind_address": ""` 추가(JSON이라 주석 대신 apps/README.md에 설명).
+- 진행(2026-10-10): ✔ 완료(게임 검증, `--input-only`, 각 20–25 s). `bind_address=172.24.228.83`(WSL eth0) 명시 → "ROS host IP 172.24.228.83"로 첫 시도에 접속, `/ets2/vehicle/state` 51.6 Hz, 상태 왕복 p50 0.55 ms. 빈 값 → 기존 eth0 조회로 접속(54.5 Hz). `0.0.0.0` → 릴레이가 "bind_address must be the ROS host's reachable IPv4 address…"로 exit 1, lease 정리 뒤 Tier 0. 참고: WSL 쪽 ets2_bridge 기동에 약 10 s가 걸려 그 전의 접속 시도는 "Cannot connect"로 재시도되며, 이는 기존 재연결 동작이다. `ros_address()`(main.cpp)는 `bind_address`가 비어 있으면 기존처럼 `wsl_distro`의 eth0를 조회하고, 값이 있으면 그 주소로 접속한다. ROS 쪽에서는 유효하지만 접속할 수 없는 `0.0.0.0`은 거절한다. 릴레이 로그는 "WSL direct IP"에서 "ROS host IP"로 바뀌었다(✔ 이 문구를 파싱하는 코드 없음). configure.py 기본값에 `"bind_address": ""` 추가(JSON이라 주석 대신 apps/README.md에 설명).
 
 **W07 lease 없는 mutating 명령 차단** (S)
 - 목표: 안전 모델을 문서(docs/03 "lease가 내부 읽기·리그·수집을 소유")와 일치시킨다. ✔ `require_owner`는 lease가 있거나 요청에 owner가 있을 때만 검사한다(ot/native/core.cpp:309-312). 따라서 lease 없이 `tier`, `render_probe`, `camera_rig`, `stream`을 바꿀 수 있다(△ stream은 require_owner만 거침).
@@ -180,7 +180,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: `ot.cmd tier 1`(lease 없음) → 거절 메시지. 런처 전체 모드와 `ot.cmd preview`는 기존처럼 동작. 패닉 뒤 재활성화 거절 동작 유지(✔ docs/18 확인 항목).
 - 게임 실행: 예.
-- 진행(2026-10-10): 코드 완료, core를 **0.30.0**으로 올림. MSVC 빌드 통과(✔ `ot\build.cmd`, ot_drive_test 포함). 게임 설치·검증 남음(설치본은 아직 0.29.0). ✔ lease 없이 mutating 명령을 보내는 클라이언트를 전수 확인한 결과, `ot.cmd camera_rig apply`(ot/README.md의 rig 확인 절차)만 해당했다(preview.py·릴레이·런처는 lease 사용 또는 조회만). 그래서 `camera_rig apply`가 lease를 잡고 1초마다 heartbeat를 보내며 Ctrl+C 또는 `--duration`까지 리그를 유지하고, 끝나면 lease 해제로 Tier 0에 돌아가도록 바꿨다(이전: 적용 후 종료, 리그는 `panic`까지 유지). `drive`·`traffic_observation`의 lease 검사는 `require_owner`에 흡수되어 중복을 제거했다. `panic`·`reload_permissions`와 조회 명령은 lease 없이 동작한다. 추가 완료 기준: `ot.cmd camera_rig apply --config ... --rig-only` 실행 중 리그가 보이고 Ctrl+C 뒤 Tier 0.
+- 진행(2026-10-10): ✔ 완료(게임 검증). core를 **0.30.0**으로 올리고 MSVC 빌드(`ot\build.cmd`, ot_drive_test 포함) 뒤 설치했다(0.29.0 설치본은 `ot/dist/backups/ot_core-0.29.0.dll`, `loader unload` → 교체 → `loader load`, last_error 없음). 게임에서: lease 없는 `ot.cmd tier 1`·`render_probe on` → "This command requires an active bridge lease…" 거절, 상태 조회는 동작. `camera_rig apply --rig-only --duration 4` 동안 Tier 2·rig enabled, 그 사이 다른 클라이언트의 `tier 0`은 "Lease ended or belongs to another controller" 거절, 종료 뒤 Tier 0·rig 해제. 릴레이(W05·W06 시험)는 lease를 잡고 정상 동작. `ot.cmd preview`(Tk UI)는 lease 경로가 바뀌지 않아 별도 실행하지 않았다. ✔ lease 없이 mutating 명령을 보내는 클라이언트를 전수 확인한 결과, `ot.cmd camera_rig apply`(ot/README.md의 rig 확인 절차)만 해당했다(preview.py·릴레이·런처는 lease 사용 또는 조회만). 그래서 `camera_rig apply`가 lease를 잡고 1초마다 heartbeat를 보내며 Ctrl+C 또는 `--duration`까지 리그를 유지하고, 끝나면 lease 해제로 Tier 0에 돌아가도록 바꿨다(이전: 적용 후 종료, 리그는 `panic`까지 유지). `drive`·`traffic_observation`의 lease 검사는 `require_owner`에 흡수되어 중복을 제거했다. `panic`·`reload_permissions`와 조회 명령은 lease 없이 동작한다. 추가 완료 기준: `ot.cmd camera_rig apply --config ... --rig-only` 실행 중 리그가 보이고 Ctrl+C 뒤 Tier 0.
 
 **W08 버전 표식** (S)
 - 목표: 릴레이·ROS·메시지 불일치를 역직렬화 실패 전에 잡는다. ✔ 현재 wire 버전 표식은 `OTR1` 매직뿐(bridge/common/wire.hpp:107-121).
@@ -197,7 +197,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 - 선행: 없음.
 - 완료 기준: `ros2 interface show autoware_control_msgs/msg/Control`, `autoware_vehicle_msgs/msg/ControlModeReport`, `SteeringReport`, `VelocityReport`, `GearReport`, `srv/ControlModeCommand`의 필드가 3.2·3.3 표와 맞음(불일치는 표를 갱신). colcon 빌드 통과.
 - 게임 실행: 아니오.
-- 진행(2026-10-10): 필드 대조와 4.1 의존 트리는 .deb 압축 해제로 완료(✔, 3.2·3.3·4.1 갱신). WSL 설치는 sudo 비밀번호가 필요해 사용자가 `sudo apt install ros-jazzy-autoware-control-msgs ros-jazzy-autoware-vehicle-msgs`를 실행해야 함. colcon 빌드 확인은 W10 패키지와 함께.
+- 진행(2026-10-10): ✔ 완료. 필드 대조와 4.1 의존 트리는 .deb 압축 해제로 확인했고, WSL에 `ros-jazzy-autoware-control-msgs`·`ros-jazzy-autoware-vehicle-msgs` 1.13.0(+ planning·common msgs)을 설치한 뒤 `ros2 interface show`로 Lateral·Longitudinal·ControlModeReport·SteeringReport·VelocityReport·ActuationReport·ControlModeCommand가 3.2·3.3 표와 일치함을 확인했다. colcon 빌드 확인은 W10 패키지와 함께.
 
 4.1 의존성 결정표(W09에서 채움):
 
@@ -290,7 +290,7 @@ watchdog(모두 adapter 안, ROS steady clock):
 
 **W19 공개 준비(라이선스·서드파티·비밀값)** (M)
 - 목표: D5, D7.
-- 변경: 루트 `LICENSE`(Apache-2.0), `NOTICE`, ot/THIRD_PARTY.md에 SCS SDK vendoring 항목 추가. `third_party/TruckLib`, `third_party/TruckLib.HashFs` submodule(고정 commit `c42dbe4f…`, `5e33031d…`), bridge/map_lane_provider/map_lane_provider.csproj:9 경로 변경, bridge/map_lane_provider/README.md 빌드 절차 갱신, GPL-2.0 고지 유지. `research/fetch_sources.py`(SOURCES.md 표의 revision을 내려받는 스크립트). `.gitignore`에 `bridge/config/bridge.local.json`을 명시(✔ 현재 미추적이지만 명시 규칙이 없음), pre-commit 또는 CI에 토큰 패턴 검사. `ot/vendor/scs_sdk/`로 헤더 이동 후 ot/CMakeLists.txt:34 기본 `SCS_SDK` 경로 변경.
+- 변경: 루트 `LICENSE`(Apache-2.0), `NOTICE`, ot/THIRD_PARTY.md에 SCS SDK vendoring 항목 추가. `third_party/TruckLib`, `third_party/TruckLib.HashFs` submodule(고정 commit `c42dbe4f…`, `5e33031d…`), bridge/map_lane_provider/map_lane_provider.csproj:9 경로 변경, bridge/map_lane_provider/README.md 빌드 절차 갱신, GPL-2.0 고지 유지. `research/fetch_sources.py`(SOURCES.md 표의 revision을 내려받는 스크립트). pre-commit 또는 CI에 토큰 패턴 검사(✔ 정정: `bridge.local.json`은 이미 `.gitignore:59`의 `*.local.json` 규칙으로 무시되므로 별도 규칙은 필요 없다). `ot/vendor/scs_sdk/`로 헤더 이동 후 ot/CMakeLists.txt:34 기본 `SCS_SDK` 경로 변경.
 - 선행: 없음.
 - 완료 기준: 새 clone + submodule init만으로 Linux CI 통과, Windows CI는 W18 옵션으로 통과. 작업 트리와 W19 이후 커밋에 토큰·절대경로 없음(✔ 75bdf40에서 작업 트리의 절대경로 제거). 기존 히스토리의 사용자 경로 14줄은 D5에 따라 수용한다. 공개 직전 `git log -p --all`에 토큰 패턴 검사를 한 번 더 실행한다.
 - 게임 실행: 아니오.
