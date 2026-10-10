@@ -94,6 +94,8 @@ int main(int argc,char** argv) {
         const auto camera_hz=config.value("camera_hz",30.0),lidar_hz=config.value("lidar_hz",10.0);
         const auto preview_hz=config.value("preview_hz",10.0);
         const auto preview_stride=config.value("lidar_preview_stride",4u);
+        // true until a stack localization publishes odom->base_link (docs/19 D3).
+        const bool gt_localization_tf=config.value("gt_localization_tf",true);
         if(!std::isfinite(preview_hz) || preview_hz<=0 || !preview_stride)
             throw std::runtime_error("Preview rate and LiDAR preview stride must be positive");
         if(!std::isfinite(camera_hz) || camera_hz<=0 || !std::isfinite(lidar_hz) || lidar_hz<=0 || lidar_hz>camera_hz)
@@ -156,7 +158,7 @@ int main(int argc,char** argv) {
                     const auto frame=telemetry.at("frame_id").get<uint64_t>();
                     if(frame!=last_frame) {
                         last_frame=frame;last_stamp=telemetry.at("paused_simulation_time_us").get<uint64_t>();
-                        packet=state_messages(telemetry,session,base);append_motion_messages(packet,sample->motion,*demand.load(),last_gnss_us);
+                        packet=state_messages(telemetry,session,base,gt_localization_tf);append_motion_messages(packet,sample->motion,*demand.load(),last_gnss_us);
                     }
                 }
                 if(ticks()-diagnostic_time>=1000) {add_diagnostics(packet,{{"stamp_us",last_stamp},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},

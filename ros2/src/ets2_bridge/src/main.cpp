@@ -114,7 +114,7 @@ int main(int argc,char** argv) {
             std::vector<Part> parts;
             for(const auto& message:meta.value("messages",json::array())) {
                 const auto found=pubs.find(message.at("topic").get<std::string>());
-                if(found==pubs.end() || found->second.topic.state!=state) throw std::runtime_error("Unknown topic or wrong connection");
+                if(found==pubs.end() || (found->second.topic.state!=state && !found->second.topic.both)) throw std::runtime_error("Unknown topic or wrong connection");
                 const auto offset=message.at("offset").get<size_t>(),length=message.at("length").get<size_t>();
                 if(length<4 || length>8*1024*1024 || offset>size || length>size-offset)
                     throw std::runtime_error("Invalid XCDRv1 message bounds");

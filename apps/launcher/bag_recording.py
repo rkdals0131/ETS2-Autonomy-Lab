@@ -14,7 +14,7 @@ from processes import signal_group
 
 
 STATE_TOPICS = [
-    "/clock", "/tf_static", "/ets2/vehicle/state", "/ets2/vehicle/actuation", "/ets2/drive/state", "/ets2/drive/command",
+    "/clock", "/tf", "/tf_static", "/ets2/vehicle/state", "/ets2/vehicle/actuation", "/ets2/drive/state", "/ets2/drive/command",
     "/ets2/ground_truth/ego/pose", "/ets2/imu/data_raw", "/ets2/wheels/state",
     "/ets2/wheels/odometry", "/ets2/gnss/fix", "/ets2/sensors/config", "/diagnostics",
 ]
@@ -52,7 +52,7 @@ class BagRecording:
             raise OSError("기록 저장 공간이 1 GiB 미만입니다: " + str(root))
         topics = list(STATE_TOPICS)
         if profile == "sensors":
-            topics += ["/tf", "/ets2/frame_info", "/ets2/frame_info/exposure"]
+            topics += ["/ets2/frame_info", "/ets2/frame_info/exposure"]
             for camera in ("C_FN", "C_FW", "C_RL", "C_RR"):
                 topics += [f"/ets2/camera/{camera}/preview/image/compressed",
                            f"/ets2/camera/{camera}/preview/camera_info",

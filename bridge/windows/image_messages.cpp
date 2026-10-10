@@ -108,7 +108,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
     const auto ego=world_base_pose(body.at("position_m").get<V>(),body_rotation,rig.at("base_origin").get<V>());
     const V base_world=ego.position;
     const M world_from_base=ego.rotation;
-    transforms.push_back({"world","base_link",base_world,quaternion(world_from_base)});
+    // world->base_link comes from the state path (SDK rate, gt_localization_tf).
     transforms.push_back({"base_link","cabin",mul(transpose(world_from_base),sub(mul(enu,cabin_position),base_world)),
         quaternion(mul(mul(transpose(world_from_base),enu),mul(cabin_rotation,base_to_model)))});
     struct RayErrors {

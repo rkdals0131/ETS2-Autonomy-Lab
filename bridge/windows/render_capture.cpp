@@ -11,13 +11,16 @@ json capture_outputs(const json& rig,const json& patterns,const Demand& demand) 
         if(demand.contains(topic+"/perception/image_raw")) selected.push_back("preview");
         if(demand.contains(topic+"/preview/image/compressed")) selected.push_back("display");
         if(demand.contains("/ets2/ground_truth/"+name+"/objects") || demand.contains("/ets2/ground_truth/"+name+"/markers")) selected.push_back("metadata");
-        if(demand.contains(topic+"/camera_info") || demand.contains(topic+"/preview/camera_info") || demand.contains(topic+"/perception/camera_info") ||
-           demand.contains("/tf") || demand.contains("/ets2/frame_info") || demand.contains("/ets2/frame_info/exposure")) selected.push_back("pose");
+        const bool pose=demand.contains(topic+"/camera_info") || demand.contains(topic+"/preview/camera_info") || demand.contains(topic+"/perception/camera_info") ||
+           demand.contains("/ets2/frame_info") || demand.contains("/ets2/frame_info/exposure");
         const auto mirror="mirror"+std::to_string(slot);
         if(patterns.contains(mirror)) {
             const auto lidar="/ets2/lidar/"+patterns.at(mirror).at("name").get<std::string>();
             if(demand.contains(lidar+"/points") || demand.contains(lidar+"/preview/points")) selected.push_back("lidar");
         }
+        // A /tf listener alone never starts rendering; the cabin frame rides along
+        // with views captured for another output.
+        if(pose || (!selected.empty() && demand.contains("/tf"))) selected.push_back("pose");
         if(!selected.empty()) outputs[mirror]=std::move(selected);
     }
     return outputs;

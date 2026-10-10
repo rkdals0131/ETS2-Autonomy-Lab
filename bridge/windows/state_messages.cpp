@@ -58,7 +58,7 @@ void add_diagnostics(Packet& packet,const json& values) {
         for(const auto& item:values.items()) c<<item.key()<<item.value().dump();
     });
 }
-Packet state_messages(const json& state,const std::string& session,const V& base) {
+Packet state_messages(const json& state,const std::string& session,const V& base,bool gt_localization_tf) {
     const auto us=state.at("paused_simulation_time_us").get<uint64_t>();
     Packet packet{{{"session",session}}, {}};
     append_cdr(packet,"/clock",32,[&](Cdr& c){stamp(c,us);});
@@ -96,8 +96,14 @@ Packet state_messages(const json& state,const std::string& session,const V& base
     if(state.contains("engine") && state["engine"].contains("vehicle") && state["engine"]["vehicle"].value("available",false)) {
         const auto& p=state["engine"]["vehicle"]["pose_physics"];
         const M rotation=from_quat(p.at("quaternion_wxyz").get<Q>());
-        const auto ego=world_base_pose(p.at("position_m").get<V>(),rotation,base);
-        append_cdr(packet,"/ets2/ground_truth/ego/pose",256,[&](Cdr& c){header(c,us,"world");pose(c,ego.position,quaternion(ego.rotation));});
+        const auto ego=world_base_pose(p.at("position_m").get<V>(),rotation,base);const auto q=quaternion(ego.rotation);
+        append_cdr(packet,"/ets2/ground_truth/ego/pose",256,[&](Cdr& c){header(c,us,"world");pose(c,ego.position,q);});
+        // Ground truth stays visible for evaluation; base_link gets this parent only
+        // when no stack localization publishes odom->base_link.
+        append_cdr(packet,"/tf",512,[&](Cdr& c){
+            c<<uint32_t(gt_localization_tf?2:1);header(c,us,"world");c<<std::string("gt/base_link");pose(c,ego.position,q);
+            if(gt_localization_tf) {header(c,us,"world");c<<std::string("base_link");pose(c,ego.position,q);}
+        });
     }
     if(state.contains("engine") && state["engine"].contains("traffic")) {
         const auto& traffic=state["engine"]["traffic"];

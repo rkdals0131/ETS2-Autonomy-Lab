@@ -5,8 +5,8 @@ Windows C++ 릴레이가 메시지를 생성하고, WSL Jazzy의 GenericPublishe
 ## 전송
 
 - Ubuntu eth0 NAT IPv4로 직접 연결합니다. 연결 때 주소를 다시 조회합니다.
-- 대용량 TCP: 영상·깊이·라이다·차량 GT·렌더 TF·frame_info.
-- 상태 TCP: `/clock`, SDK 상태·IMU·휠·GNSS·자차 물리 pose·운전 상태·진단·정적 TF. 역방향은 구독 요구·수집 제어·운전 명령·응답입니다.
+- 대용량 TCP: 영상·깊이·라이다·차량 GT·cabin TF·frame_info.
+- 상태 TCP: `/clock`, SDK 상태·IMU·휠·GNSS·자차 물리 pose와 GT TF·운전 상태·진단·정적 TF. 역방향은 구독 요구·수집 제어·운전 명령·응답입니다.
 - 두 연결의 worker·큐는 분리하고 상태 TCP에 NODELAY를 적용합니다.
 - Fast-CDR는 XCDRv1·little endian·PLAIN_CDR·serialize_encapsulation을 사용합니다. 헤더는 `00 01 00 00`입니다.
 - Fast DDS SHM은 participant당 128 MiB, 최대 메시지 8 MiB입니다. 브리지·Foxglove·rosbag2에 같은 XML을 적용합니다.
@@ -42,7 +42,7 @@ Windows C++ 릴레이가 메시지를 생성하고, WSL Jazzy의 GenericPublishe
 | /ets2/frame_info/exposure | 같은 프레임의 gain·자동 노출 여부 FrameExposure |
 | /clock, /tf, /tf_static, /diagnostics | 시뮬레이션 시각·좌표·성능 |
 
-Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다. 현재 발행 목록은 고정돼 있어 미선택 카메라의 토픽도 보입니다. 카메라·라이다 TF는 `world → base_link → cabin → sensors`, IMU·GNSS 장착 TF는 `base_link → imu_link / gnss_link`입니다. 기본 미러 0·1·2·5와 센서 출력 3·4·6·7은 분리돼 있습니다.
+Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다. 현재 발행 목록은 고정돼 있어 미선택 카메라의 토픽도 보입니다. 카메라·라이다 TF는 `base_link → cabin → sensors`, IMU·GNSS 장착 TF는 `base_link → imu_link / gnss_link`입니다. `world → gt/base_link`는 항상, `world → base_link`는 `gt_localization_tf`(기본 true)일 때 상태 경로에서 SDK 프레임마다 나옵니다. `/tf`는 reliable로 발행하므로 tf2 listener(reliable)가 받을 수 있고, 같은 토픽의 cabin TF는 대용량 연결에서도 받습니다. 기본 미러 0·1·2·5와 센서 출력 3·4·6·7은 분리돼 있습니다.
 
 0.23.0부터 VehicleState 각속도는 SDK 회전/초에 2π를 곱한 rad/s입니다. 0.22.0까지 저장한 bag의 `angular_velocity_base_radps`에는 회전/초 값이 들어 있으므로 읽을 때 2π를 곱합니다. 새 bag에 이 보정을 중복 적용하지 않습니다. 센서 계산과 장착 기준은 [추가 센서](17_sensor_expansion.md)에 있습니다.
 
@@ -52,7 +52,7 @@ Camera ID는 C_FN/C_FW/C_RL/C_RR이며 슬롯과 독립적으로 지정합니다
 
 ## 수집과 노출
 
-실제 구독 요구를 합쳐 color·depth·preview·display·pose·metadata·lidar를 선택합니다. pose는 촬영 자세·시각이며 metadata는 기존 차량 GT 요구입니다. TF·CameraInfo 요청은 pose만 켜고, objects·markers 요청은 해당 카메라의 차량 목록을 읽습니다. 변경은 묶음 경계에서 반영합니다. 처리 중인 GPU 자원은 소비 완료까지 유지합니다. display와 perception은 같은 축소 출력을 공유하며, display는 preview_hz 기회에만 pack·JPEG를 요청합니다. perception 동시 구독은 카메라 주기의 축소 출력을 유지합니다.
+실제 구독 요구를 합쳐 color·depth·preview·display·pose·metadata·lidar를 선택합니다. pose는 촬영 자세·시각이며 metadata는 기존 차량 GT 요구입니다. CameraInfo 요청은 pose만 켭니다. `/tf` 구독만으로는 렌더 수집을 시작하지 않고, 다른 출력으로 수집 중인 뷰에 pose를 더합니다. objects·markers 요청은 해당 카메라의 차량 목록을 읽습니다. 변경은 묶음 경계에서 반영합니다. 처리 중인 GPU 자원은 소비 완료까지 유지합니다. display와 perception은 같은 축소 출력을 공유하며, display는 preview_hz 기회에만 pack·JPEG를 요청합니다. perception 동시 구독은 카메라 주기의 축소 출력을 유지합니다.
 
 평상시에는 perception·JPEG·라이다를 사용합니다. 원본 RGB·depth는 구독할 때만 pack·readback·전송합니다. 라이다 구독은 GPU 깊이를 사용하고 전체 depth 영상 readback을 요구하지 않습니다. 렌더 출력 요구가 모두 사라지면 hook·stream을 해제합니다. 상태 토픽만의 구독 변경은 GPU stream을 재설정하지 않습니다.
 

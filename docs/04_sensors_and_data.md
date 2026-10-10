@@ -6,8 +6,11 @@
 
 ```text
 p_model = base_origin + (-base_y, base_z, -base_x)
-world → base_link → cabin → camera / lidar
+world → gt/base_link                      (GT, 항상)
+world → base_link → cabin → camera / lidar  (world → base_link는 gt_localization_tf일 때)
 ```
+
+`world → gt/base_link`와 `world → base_link`는 상태 경로에서 SDK 프레임마다 발행합니다. 스택 localization이 `odom → base_link`를 내면 릴레이 설정 `gt_localization_tf: false`로 `world → base_link`를 끕니다(기본 true). `base_link → cabin`은 렌더된 카메라 자세에서 역산하므로 센서 묶음과 함께만 나옵니다.
 
 카메라 장착값은 neutral chassis 기준이며, 렌더 때 head 회전 전의 cabin parent로 변환합니다. 캐빈 서스펜션과 렌더 보간이 TF에 반영됩니다. 카메라 optical 축은 +x 오른쪽·+y 아래·+z 전방이고, 라이다는 +x 전방·+y 좌측·+z 위입니다.
 

@@ -129,7 +129,9 @@ inline Packet receive_packet(const Socket& s) {
     if(n) transfer(s,p.data.data(),p.data.size(),false);
     return p;
 }
-struct Topic {std::string name,type;bool state=false,latched=false;};
+// state: reliable and carried on the state socket. both: also accepted from the
+// bulk socket (the moving cabin frame is derived from the rendered view).
+struct Topic {std::string name,type;bool state=false,latched=false,both=false;};
 inline std::vector<Topic> topics() {
     std::vector<Topic> result{
         {"/clock","rosgraph_msgs/msg/Clock",true},
@@ -145,7 +147,7 @@ inline std::vector<Topic> topics() {
         {"/ets2/ground_truth/traffic","ets2_msgs/msg/TrafficState",true},
         {"/diagnostics","diagnostic_msgs/msg/DiagnosticArray",true},
         {"/tf_static","tf2_msgs/msg/TFMessage",true,true},
-        {"/tf","tf2_msgs/msg/TFMessage"},
+        {"/tf","tf2_msgs/msg/TFMessage",true,false,true},
         {"/ets2/frame_info","ets2_msgs/msg/FrameInfo"},
         {"/ets2/frame_info/exposure","ets2_msgs/msg/FrameExposure"}};
     for(const auto* name:{"C_FN","C_FW","C_RL","C_RR"}) {
