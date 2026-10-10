@@ -6,16 +6,17 @@
 | src/ets2_bridge | Windows 릴레이의 CDR 수신·ROS 발행, 구독·제어 요구 전달 |
 | src/ets2_autonomy | GT baseline: 차로 pure-pursuit·속도 PI·앞차 속도 제한·ETS2 입력 adapter |
 
-ROS는 WSL Ubuntu의 Jazzy에서 실행합니다. 현재 저장소는 Windows에 있고 WSL은 같은 `/mnt/c` 소스를 읽습니다. `~/ets2-ros`에는 build/install/log를 보관하며 별도 src 복사본이 없습니다. Linux ext4 checkout은 향후 개발 배치 선택이며 이번 정리에서 복제하지 않았습니다.
+ROS는 WSL Ubuntu의 Jazzy에서 실행합니다. 현재 저장소는 Windows에 있고 WSL은 같은 `/mnt/c` 소스를 읽습니다. `~/ets2-ros`(`ETS2_ROS_WS`로 변경 가능)에는 build/install/log를 보관하며 별도 src 복사본이 없습니다. Linux ext4 checkout은 향후 개발 배치 선택이며 이번 정리에서 복제하지 않았습니다.
 
 ## 빌드
 
 실행 중인 기존 브리지를 런처에서 정상 중지한 뒤 빌드합니다. 기존 소스 경로로 만든 build cache는 새 경로를 사용하도록 정리하고 재구성해야 합니다.
 
 ```bash
-REPO=/mnt/c/path/to/ETS2-Autonomy-Lab
+REPO="$(git rev-parse --show-toplevel)"  # 저장소 안에서 실행
+WS="${ETS2_ROS_WS:-$HOME/ets2-ros}"
 source /opt/ros/jazzy/setup.bash  # Zsh에서는 setup.zsh
-cd ~/ets2-ros
+mkdir -p "$WS" && cd "$WS"
 /usr/bin/python3 /usr/bin/colcon build --base-paths "$REPO/ros2/src" --cmake-clean-cache --executor sequential --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3 -DPYTHON_EXECUTABLE=/usr/bin/python3
 source "$REPO/bridge/ros-env.sh"
 ```

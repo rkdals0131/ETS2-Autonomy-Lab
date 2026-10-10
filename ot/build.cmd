@@ -2,9 +2,11 @@
 setlocal
 chcp 65001 >nul
 set "OT_ROOT=%~dp0"
-set "OT_VS=C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools"
+rem OT_VS may be preset; otherwise use the newest Visual Studio install with x64 C++ tools.
+set "OT_VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not defined OT_VS if exist "%OT_VSWHERE%" for /f "usebackq delims=" %%i in (`"%OT_VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "OT_VS=%%i"
 if not exist "%OT_VS%\VC\Auxiliary\Build\vcvars64.bat" (
-  echo MSVC x64 Build Tools not found at "%OT_VS%"
+  echo MSVC x64 Build Tools not found. Install them or set OT_VS to the Visual Studio directory.
   exit /b 1
 )
 call "%OT_VS%\VC\Auxiliary\Build\vcvars64.bat" >nul

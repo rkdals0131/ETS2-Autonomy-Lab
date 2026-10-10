@@ -14,10 +14,11 @@
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 research/tools/dotnet10/dotnet.exe build bridge/map_lane_provider/map_lane_provider.csproj -c Release --disable-build-servers
-research/tools/dotnet10/dotnet.exe bridge/build/map_lane_provider/Release/net10.0/map_lane_provider.dll --game 'D:/SteamLibrary/steamapps/common/Euro Truck Simulator 2' --out 'bridge/recordings/gt-path/current-lane.json' --distance-m 1000
+$env:ETS2_DIR = '<게임 설치 폴더>'  # 또는 --game '<게임 설치 폴더>'
+research/tools/dotnet10/dotnet.exe bridge/build/map_lane_provider/Release/net10.0/map_lane_provider.dll --out 'bridge/recordings/gt-path/current-lane.json' --distance-m 1000
 ```
 
-`--snapshot`으로 기존 raw snapshot JSON 또는 `{"snapshot": ...}` 형식의 저장 표본도 읽을 수 있습니다. 기본값은 현재 SDK 위치, 기본 게임 설치 경로, 최대 1000m입니다. 현재 위치 주변 9개 sector만 직접 읽으며 전체 지도나 게임 메시를 추출하지 않습니다.
+`--snapshot`으로 기존 raw snapshot JSON 또는 `{"snapshot": ...}` 형식의 저장 표본도 읽을 수 있습니다. 게임 폴더는 `--game`, 없으면 `ETS2_DIR`을 사용합니다. 런처는 설치된 loader 위치에서 게임 폴더를 찾아 `--game`으로 전달합니다. 기본값은 현재 SDK 위치, 최대 1000m입니다. 현재 위치 주변 9개 sector만 직접 읽으며 전체 지도나 게임 메시를 추출하지 않습니다.
 
 생성 JSON은 `frame_id: "world"`, `lane_width_m`, `points`, `end_reason`입니다. 점 좌표는 기존 ROS world와 같은 `[SCS X, -SCS Z]` 미터입니다. 약 1.5m 간격으로 실제 차로 곡선을 샘플링하고, 현재 위치의 차로 투영점에서 진행 방향으로 시작합니다.
 

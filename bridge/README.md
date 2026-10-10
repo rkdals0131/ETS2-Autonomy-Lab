@@ -20,7 +20,7 @@
 
 ## 설정
 
-Windows와 WSL은 같은 `config/bridge.local.json`을 읽습니다. 현재 배포판은 Ubuntu, ROS domain은 42입니다. 연결 때 Ubuntu eth0 주소를 조회합니다.
+Windows와 WSL은 같은 `config/bridge.local.json`을 읽습니다. WSL 배포판은 `wsl_distro`(기본 Ubuntu), ROS domain은 42입니다. 연결 때 해당 배포판의 eth0 주소를 조회합니다.
 
 | 설정 | 용도 |
 | --- | --- |
@@ -34,6 +34,7 @@ Windows와 WSL은 같은 `config/bridge.local.json`을 읽습니다. 현재 배�
 | recording_root | 차량 상태 기록 폴더. 생략하면 bridge/recordings |
 | sensor_recording_root | 영상·라이다 기록 폴더. 사용할 때 명시적으로 지정 |
 | token / state_port / bulk_port | 양쪽 연결 설정 |
+| wsl_distro | 런처·릴레이가 사용할 WSL 배포판 이름. 생략하면 Ubuntu |
 | auto_exposure / color_gain | 자동 노출 또는 수동 gain |
 | shared_gpu | 기본 true, 공유 GPU 텍스처 전달 |
 
@@ -55,11 +56,12 @@ py -3.13 bridge/configure.py
 WSL Ubuntu 24.04에는 ROS 2 Jazzy ros-base, vision-msgs, foxglove-bridge, rosbag2-storage-mcap, rmw-fastrtps-cpp, colcon, CMake, nlohmann-json3-dev를 설치합니다. 런처는 WSL의 systemd user manager를 사용합니다.
 
 ```bash
-REPO=/mnt/c/path/to/ETS2-Autonomy-Lab  # 실제 저장소 경로
+REPO="$(git rev-parse --show-toplevel)"  # 저장소 안에서 실행
+WS="${ETS2_ROS_WS:-$HOME/ets2-ros}"      # build/install 위치. ros-env.sh도 같은 변수를 사용
 # Bash에서 실행. Zsh에서는 setup.zsh를 사용합니다.
 source /opt/ros/jazzy/setup.bash
-mkdir -p ~/ets2-ros
-cd ~/ets2-ros
+mkdir -p "$WS"
+cd "$WS"
 /usr/bin/python3 /usr/bin/colcon build --base-paths "$REPO/ros2/src" --cmake-clean-cache --executor sequential --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3 -DPYTHON_EXECUTABLE=/usr/bin/python3
 ```
 
@@ -146,7 +148,7 @@ core 0.28.0은 카메라와 독립된 `/ets2/ground_truth/traffic`을 SDK frame_
 3. WSL에서 저장소 환경을 불러온 뒤 명시적으로 노드를 실행하고 게임 창으로 돌아갑니다. 런처와 같은 ROS domain 42를 사용합니다.
 
 ```bash
-source /mnt/c/path/to/ETS2-Autonomy-Lab/bridge/ros-env.sh  # 실제 저장소 경로
+source "$REPO/bridge/ros-env.sh"  # REPO는 위 빌드 단계의 저장소 루트
 ros2 run ets2_autonomy drive_speed --ros-args -p arm:=true -p target_speed_mps:=8.333333 -p steering_target:=0.0
 ```
 

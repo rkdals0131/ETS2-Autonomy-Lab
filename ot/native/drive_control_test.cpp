@@ -1,7 +1,5 @@
 #include "drive_control.hpp"
 #include "manual_input.hpp"
-#include <windows.h>
-#include <fstream>
 #include <iostream>
 #include <stdexcept>
 

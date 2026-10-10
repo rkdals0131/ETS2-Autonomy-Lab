@@ -17,8 +17,10 @@ static const OtDriveHost* input_host{};
 static bool split_axes() {return input_host && input_host->size>=sizeof(OtDriveHost) && input_host->request_axes;}
 static json drive_status(OtDriveStatus status) {
     const char* reasons[]={"disabled","disarmed","armed","command","expired","manual","paused","panic","disconnected","unloaded","input_unavailable","profile_unsupported"};
+    // A newer resident loader may report reasons this core does not know.
+    const auto reason=static_cast<size_t>(status.reason);
     return {{"available",bool(status.available)},{"permitted",bool(status.permitted)},{"profile_supported",bool(status.profile_supported)},
-        {"armed",bool(status.armed)},{"active",bool(status.active)},{"reason",reasons[static_cast<size_t>(status.reason)]},
+        {"armed",bool(status.armed)},{"active",bool(status.active)},{"reason",reason<std::size(reasons)?reasons[reason]:"unknown"},
         {"owner",status.owner},{"epoch",status.epoch},{"sequence",status.sequence},{"deadline_ms",status.deadline_ms},
         {"command_window_ms",status.command_window_ms},{"steering",status.steering},{"throttle",status.throttle},{"brake",status.brake},
         {"manual_steering",status.manual_steering},{"manual_throttle",status.manual_throttle},{"manual_brake",status.manual_brake},{"error",status.error}};

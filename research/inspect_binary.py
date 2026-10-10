@@ -5,12 +5,19 @@ not proof that the pointed-to runtime object or its layout is correct.
 """
 import csv
 import json
+import os
 import pathlib
 import re
 import struct
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent
-GAME = pathlib.Path(r"D:\SteamLibrary\steamapps\common\Euro Truck Simulator 2")
+if len(sys.argv) > 1:
+    GAME = pathlib.Path(sys.argv[1])
+elif os.environ.get("ETS2_DIR"):
+    GAME = pathlib.Path(os.environ["ETS2_DIR"])
+else:
+    raise SystemExit("Usage: inspect_binary.py <ETS2 install directory>, or set ETS2_DIR")
 exe = GAME / "bin/win_x64/eurotrucks2.exe"
 data = exe.read_bytes()
 pe = struct.unpack_from("<I", data, 0x3C)[0]

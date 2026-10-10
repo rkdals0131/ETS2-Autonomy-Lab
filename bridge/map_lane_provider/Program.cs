@@ -15,7 +15,8 @@ try
         if (i + 1 == args.Length || !args[i].StartsWith("--")) throw new ArgumentException("Options require --name value pairs");
         options.Add(args[i], args[i + 1]);
     }
-    string game = options.GetValueOrDefault("--game", @"D:\SteamLibrary\steamapps\common\Euro Truck Simulator 2");
+    string game = options.GetValueOrDefault("--game") ?? Environment.GetEnvironmentVariable("ETS2_DIR")
+        ?? throw new ArgumentException("Pass --game <ETS2 install directory> or set ETS2_DIR");
     using var snapshot = options.TryGetValue("--snapshot", out var saved)
         ? JsonDocument.Parse(File.ReadAllText(saved)) : ReadSnapshot();
     var state = snapshot.RootElement;

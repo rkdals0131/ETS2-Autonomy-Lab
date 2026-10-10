@@ -7,6 +7,7 @@ namespace bridge {
 StateSource::StateSource(const VehicleProfile& vehicle,const json& settings):
     sensors_(vehicle,settings),configuration_(sensors_.configuration()) {
     configuration_["sensor_session"]=uuid_string();
+    configuration_["core_version"]=command({{"cmd","version"}}).at("plugin_version");
     configuration_["vehicle"]=vehicle.configuration;
     worker_=std::jthread([this](std::stop_token stop) {
         try {

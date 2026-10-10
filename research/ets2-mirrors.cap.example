@@ -3,8 +3,8 @@
   "settings": {
     "inject": false,
     "autoStart": false,
-    "executable": "D:\\SteamLibrary\\steamapps\\common\\Euro Truck Simulator 2\\bin\\win_x64\\eurotrucks2.exe",
-    "workingDir": "D:\\SteamLibrary\\steamapps\\common\\Euro Truck Simulator 2\\bin\\win_x64",
+    "executable": "<ETS2_DIR>\\bin\\win_x64\\eurotrucks2.exe",
+    "workingDir": "<ETS2_DIR>\\bin\\win_x64",
     "commandLine": "-rdevice dx11",
     "environment": [],
     "numQueuedFrames": 0,

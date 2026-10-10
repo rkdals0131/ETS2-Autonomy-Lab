@@ -35,17 +35,21 @@ struct LanePath {
             const auto t=std::clamp(((x-a.x)*dx+(y-a.y)*dy)/(length*length),0.0,1.0);
             const auto distance=std::hypot(x-a.x-t*dx,y-a.y-t*dy);
             if(distance<nearest) {
+                // Distance to the path itself, not to the segment's infinite line,
+                // so points beyond either end are not reported as on-lane.
                 nearest=distance;
-                best={a.s+t*length,std::abs((x-a.x)*dy-(y-a.y)*dx)/length,i};
+                best={a.s+t*length,distance,i};
             }
         }
         return best;
     }
     Point at(double s) const {
-        s=std::clamp(s,0.0,points.back().s);
+        // Continue the last segment past the end. A lookahead clamped to the end
+        // point would shrink toward the vehicle and saturate steering there.
+        s=std::max(s,0.0);
         const auto upper=std::upper_bound(points.begin(),points.end(),s,[](double s,const Point& p){return s<p.s;});
-        if(upper==points.end()) return points.back();
-        const auto& a=*(upper-1);const auto& b=*upper;const auto t=(s-a.s)/(b.s-a.s);
+        const auto last=upper==points.end()?points.end()-1:upper;
+        const auto& a=*(last-1);const auto& b=*last;const auto t=(s-a.s)/(b.s-a.s);
         return {a.x+t*(b.x-a.x),a.y+t*(b.y-a.y),s};
     }
     struct Target {double curvature,remaining,error;};

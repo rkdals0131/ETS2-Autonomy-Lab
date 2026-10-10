@@ -42,7 +42,7 @@ private:
         const auto begin=pos_;
         while(pos_<text_.size() && (std::isalnum(static_cast<unsigned char>(text_[pos_]))||text_[pos_]=='_'||text_[pos_]=='.')) ++pos_;
         if(begin==pos_) throw std::runtime_error("Unsupported control operator");
-        Expression result{text_.substr(begin,pos_-begin)};spaces();
+        Expression result{text_.substr(begin,pos_-begin),0,{}};spaces();
         if(pos_<text_.size() && text_[pos_]=='(') {
             ++pos_;
             for(;;) {result.args.push_back(expression(0));spaces();if(pos_==text_.size()) throw std::runtime_error("Unclosed control function");const auto end=text_[pos_++];if(end==')') break;if(end!=',') throw std::runtime_error("Invalid control arguments");}
@@ -77,7 +77,7 @@ struct ManualInput::Impl {
         for(size_t i=0;i<count;++i) args[i]=eval(e.args[i],input,semantic,depth+1,active);
         if(e.op=="?" && count==2) return args[0]?args[0]:args[1];
         for(size_t i=0;i<count;++i) if(!args[i]) return std::nullopt;
-        const float a=*args[0],b=count>1?*args[1]:0,c=count>2?*args[2]:0;
+        const float a=*args[0],b=count>1?*args[1]:0;
         if(e.op=="neg" && count==1) return -a;
         if(e.op=="pos" && count==1) return a;
         if(e.op=="abs" && count==1) return std::abs(a);

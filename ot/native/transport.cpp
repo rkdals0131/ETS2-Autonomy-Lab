@@ -79,6 +79,9 @@ void Transport::serve() noexcept {
             if(error==ERROR_IO_PENDING) {
                 if(!wait_io(event.h,INFINITE)) {DWORD ignored{}; CancelIoEx(pipe_.h,&op); GetOverlappedResult(pipe_.h,&op,&ignored,TRUE); break;}
                 DWORD ignored{}; connected=GetOverlappedResult(pipe_.h,&op,&ignored,FALSE);
+            } else if(error==ERROR_NO_DATA) {
+                // A client connected and closed before this accept; reset and keep serving.
+                DisconnectNamedPipe(pipe_.h); continue;
             } else connected=(error==ERROR_PIPE_CONNECTED || connected);
             if(!connected) break;
             std::string input; std::array<char,4096> buffer{}; bool complete=false;
@@ -108,6 +111,8 @@ void Transport::serve() noexcept {
             DisconnectNamedPipe(pipe_.h);
             poll_panic();
         }
+        // This thread also polls F11 and lease expiry; fail closed if it ends early.
+        if(WaitForSingleObject(stop_event_.h,0)==WAIT_TIMEOUT) {log("Command server stopped unexpectedly"); panic_();}
     } catch(const std::exception& e) {log(std::string("Command server stopped: ")+e.what()); panic_();}
     catch(...) {log("Command server stopped with unknown exception"); panic_();}
 }

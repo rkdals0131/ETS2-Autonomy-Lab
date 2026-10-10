@@ -86,6 +86,7 @@ class Controller:
                       "recording": {"phase": "idle"}, "recording_error": ""}
         self.relay = self.wsl = self.job = self.stop_event = None
         self.unit = None
+        self.distro = "Ubuntu"
         self.desired = False
         self.input_only = False
         self.provider = None
@@ -109,10 +110,12 @@ class Controller:
         with self.lock:
             self.logs.append(line)
 
-    @staticmethod
-    def linux_paths(*paths):
-        result = subprocess.run(["wsl.exe", "-d", "Ubuntu", "--cd", "/", "--exec", "/bin/sh", "-c",
-                                 'for p do wslpath -a "$p" || exit; done', "ets2-launcher", *map(str, paths)],
+    def wsl_exec(self, *command):
+        return ["wsl.exe", "-d", self.distro, "--cd", "/", "--exec", *command]
+
+    def linux_paths(self, *paths):
+        result = subprocess.run(self.wsl_exec("/bin/sh", "-c",
+                                 'for p do wslpath -a "$p" || exit; done', "ets2-launcher", *map(str, paths)),
                                 capture_output=True, text=True, encoding="utf-8", timeout=30,
                                 creationflags=subprocess.CREATE_NO_WINDOW, check=True)
         return result.stdout.strip().splitlines()
@@ -137,6 +140,7 @@ class Controller:
         if not self.config.is_file():
             raise RuntimeError("bridge/configure.py를 먼저 실행해 로컬 설정을 만들어 주세요.")
         settings = json.loads(self.config.read_text(encoding="utf-8"))
+        self.distro = str(settings.get("wsl_distro", "Ubuntu"))
         changed = any(value is not None for value in (duration, camera_hz, lidar_hz, preview_hz))
         if duration is not None:
             duration = float(duration)
@@ -171,12 +175,12 @@ class Controller:
         self.started = time.monotonic()
         self.last_wsl = self.last_relay = self.last_heartbeat = 0.0
         self.job = Job()
-        self.update(phase="starting", message="Ubuntu의 ROS·Foxglove 서버를 시작합니다.",
+        self.update(phase="starting", message=f"{self.distro}의 ROS·Foxglove 서버를 시작합니다.",
                     wsl={}, relay={}, duration_s=duration)
         bridge, app, config = self.linux_paths(BRIDGE_ROOT, APP_ROOT, self.config)
         self.unit = "ets2-launcher-" + uuid.uuid4().hex
         command = session.command(self.unit, config, bridge + '/ros-env.sh', app, duration)
-        self.wsl = self.spawn(["wsl.exe", "-d", "Ubuntu", "--cd", "/", "--exec", *command], "wsl")
+        self.wsl = self.spawn(self.wsl_exec(*command), "wsl")
         self.started = time.monotonic()
         self.update(wsl_pid=self.wsl.pid, unit=self.unit)
 
@@ -262,11 +266,10 @@ class Controller:
                 except subprocess.TimeoutExpired:
                     pass
             if self.unit:
-                subprocess.run(["wsl.exe", "-d", "Ubuntu", "--cd", "/", "--exec", "systemctl", "--user",
-                                         "stop", self.unit], capture_output=True, timeout=15,
+                subprocess.run(self.wsl_exec("systemctl", "--user", "stop", self.unit), capture_output=True, timeout=15,
                                         creationflags=subprocess.CREATE_NO_WINDOW)
-                check = subprocess.run(["wsl.exe", "-d", "Ubuntu", "--cd", "/", "--exec", "systemctl", "--user",
-                                        "show", self.unit, "-p", "ActiveState", "-p", "MainPID"],
+                check = subprocess.run(self.wsl_exec("systemctl", "--user", "show", self.unit,
+                                                     "-p", "ActiveState", "-p", "MainPID"),
                                        capture_output=True, text=True, timeout=10,
                                        creationflags=subprocess.CREATE_NO_WINDOW)
                 properties = dict(line.split("=", 1) for line in check.stdout.splitlines() if "=" in line)
@@ -574,7 +577,7 @@ def show_window(controller):
         recording_text.config(text=record_label)
         rows["게임 SDK"].config(text=state["game"])
         rows["Windows 릴레이"].config(text=f"PID {state['relay_pid']}" if state.get("relay_pid") else "중지됨")
-        rows["WSL ROS / Foxglove"].config(text=f"Ubuntu · ROS PID {wsl.get('ros_pid', '—')}" if state.get("wsl_pid") else "중지됨")
+        rows["WSL ROS / Foxglove"].config(text=f"{controller.distro} · ROS PID {wsl.get('ros_pid', '—')}" if state.get("wsl_pid") else "중지됨")
         rows["전송 / ROS 수신"].config(text=f"{relay.get('sent_bundles', 0)} / {relay.get('ros_received_bundles', 0)} 묶음 · 큐 누락 {relay.get('queue_dropped', 0)}")
         rows["수집 상태"].config(text=("활성" if relay.get("capture_active") else "대기") if phase == "running" else
                               ("연결 확인 중" if active else "중지됨"))

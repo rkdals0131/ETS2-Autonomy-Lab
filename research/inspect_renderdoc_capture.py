@@ -1,6 +1,7 @@
 """Run in RenderDoc 1.46: open an RDC, Window > Python Scripting > Load > Run.
 
-Exports the captured frame's action tree, texture descriptions, and API callstacks.
+Exports the captured frame's action tree, texture descriptions, and API callstacks
+to <capture>-inspection.json beside the opened capture.
 Does not inject into or change the running game, replay event, or capture file.
 """
 import json
@@ -89,10 +90,9 @@ def collect(controller):
 
 
 pyrenderdoc.Replay().BlockInvoke(collect)
-output_dir = Path(r"C:\Users\kikiw\Desktop\ETS2-Autonomy-Lab\research\live\2026-10-08-renderdoc")
-output_dir.mkdir(parents=True, exist_ok=True)
-capture_name = Path(pyrenderdoc.GetCaptureFilename()).stem
-output = output_dir / (capture_name + "-inspection.json")
+# RenderDoc scripts have no reliable __file__; write next to the opened capture.
+capture = Path(pyrenderdoc.GetCaptureFilename())
+output = capture.with_name(capture.stem + "-inspection.json")
 with output.open("w", encoding="utf-8") as stream:
     json.dump(result, stream, ensure_ascii=False, indent=2)
 print("Saved", output)

@@ -14,7 +14,9 @@ using namespace std::chrono_literals;
 namespace fs=std::filesystem;
 static std::atomic<bool> stopped{false};
 static BOOL WINAPI signal_handler(DWORD) {stopped=true;return TRUE;}
-static std::string wsl_address() {
+static std::string wsl_address(const std::string& distro) {
+    if(distro.empty() || distro.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")!=std::string::npos)
+        throw std::runtime_error("wsl_distro must be a WSL distribution name");
     SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};HANDLE read_raw{},write_raw{};
     if(!CreatePipe(&read_raw,&write_raw,&sa,0)) throw std::runtime_error("Cannot query WSL address");
     Handle read(read_raw),write(write_raw);SetHandleInformation(read.h,HANDLE_FLAG_INHERIT,0);
@@ -23,7 +25,7 @@ static std::string wsl_address() {
     if(!job.h || !SetInformationJobObject(job.h,JobObjectExtendedLimitInformation,&limits,sizeof(limits))) throw std::runtime_error("Cannot own WSL query");
     STARTUPINFOW startup{sizeof(startup)};startup.dwFlags=STARTF_USESTDHANDLES|STARTF_USESHOWWINDOW;startup.wShowWindow=SW_HIDE;
     startup.hStdOutput=write.h;startup.hStdError=write.h;startup.hStdInput=GetStdHandle(STD_INPUT_HANDLE);
-    PROCESS_INFORMATION process{};std::wstring command=L"wsl.exe -d Ubuntu --cd / --exec ip -j -4 addr show dev eth0";
+    PROCESS_INFORMATION process{};std::wstring command=L"wsl.exe -d "+std::wstring(distro.begin(),distro.end())+L" --cd / --exec ip -j -4 addr show dev eth0";
     if(!CreateProcessW(nullptr,command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW|CREATE_SUSPENDED,nullptr,nullptr,&startup,&process)) throw std::runtime_error("WSL query failed to start");
     Handle owner(process.hProcess),thread(process.hThread);
     if(!AssignProcessToJobObject(job.h,owner.h)) {TerminateProcess(owner.h,1);WaitForSingleObject(owner.h,3000);throw std::runtime_error("Cannot contain WSL query");}
@@ -36,7 +38,7 @@ static std::string wsl_address() {
     auto result=json::parse(buffer,buffer+size);
     for(const auto& iface:result) for(const auto& address:iface.at("addr_info"))
         if(address.at("family")=="inet") return address.at("local");
-    throw std::runtime_error("Ubuntu has no eth0 IPv4 address");
+    throw std::runtime_error(distro+" has no eth0 IPv4 address");
 }
 int main(int argc,char** argv) {
     // The game renders synchronously; relay queues can discard old bundles.
@@ -101,7 +103,7 @@ int main(int argc,char** argv) {
         const auto run=[&](double remaining) {
         struct DriveEnd {std::function<json(json)> control;~DriveEnd(){try{control({{"cmd","drive"},{"action","disconnect"}});}catch(...) {}}} drive_end{owned};
         const auto session=uuid_string();
-        const auto ip=wsl_address();std::cout<<"WSL direct IP "<<ip<<"; session "<<session<<std::endl;
+        const auto ip=wsl_address(config.value("wsl_distro",std::string("Ubuntu")));std::cout<<"WSL direct IP "<<ip<<"; session "<<session<<std::endl;
         auto state=connect_to(ip,config.value("state_port",17401),true),bulk=connect_to(ip,config.value("bulk_port",17400),false);
         send_packet(state,{{"token",token},{"session",session},{"channel","state"}});
         const auto welcome=receive_packet(state);if(!welcome.meta.value("ready",false) || welcome.meta.at("session")!=session) throw std::runtime_error("WSL pairing failed");
@@ -220,7 +222,7 @@ int main(int argc,char** argv) {
             try {if(!run((deadline-ticks())/1000.0)) break;}
             catch(const TransportError& e) {std::cerr<<e.what()<<std::endl;}
             if(stopped || !lease_ok || ticks()>=deadline) break;
-            std::cout<<"Network disconnected; render capture is off, motion sensors continue. Resolving Ubuntu eth0 again."<<std::endl;
+            std::cout<<"Network disconnected; render capture is off, motion sensors continue. Resolving WSL eth0 again."<<std::endl;
             for(int i=0;i<20 && !stopped && lease_ok;++i) std::this_thread::sleep_for(50ms);
         }
         return lease_ok?0:1;
