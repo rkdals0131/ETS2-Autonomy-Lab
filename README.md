@@ -58,7 +58,7 @@ Linux에서는 `apps/launch.sh`로 ROS 실행·상태·중지·보조·기록을
 | 범위·진행 | [요구사항](docs/01_requirements_and_decisions.md), [마일스톤](docs/13_game_operating_table.md), [남은 작업](docs/08_open_questions.md) |
 | 설계 | [구조](docs/03_system_design.md), [좌표·시각·데이터](docs/04_sensors_and_data.md), [FH4 센서 리그](docs/14_phase1_highway_sensors.md) |
 | 센서·ROS | [라이다](docs/15_virtual_sensors.md), [ROS 계약](docs/16_ros2_bridge.md), [센서 확장](docs/17_sensor_expansion.md) |
-| 다음 개발 | [성능 진단](docs/18_performance.md), [인지·제어](docs/07_learning_and_control.md) |
+| 다음 개발 | [실차 스택 인터페이스 계획](docs/19_real_stack_interface_plan.md), [성능 진단](docs/18_performance.md), [인지·제어](docs/07_learning_and_control.md) |
 | 엔진 참조 | [설치 분석](docs/10_installed_game_static_analysis.md), [SDK·물리 상태](docs/11_idle_memory_and_telemetry.md), [DX11·가시성](docs/12_dx11_mirror_render_path.md) |
 | 시행착오 | [해결 과정과 재발 조건](docs/history/lessons.md) |
 
