@@ -16,8 +16,8 @@ Linux에서는 `apps/launch.sh`로 ROS 실행·상태·중지·보조·기록을
 
 | 구성 | 구현 |
 | --- | --- |
-| 게임 | ETS2 1.61.1.1, DX11, 설치본 core 0.30.0 / 상주 loader 0.29.0(✔ 2026-10-12 `version`·`loader status`). 저장소는 0.31.0(W00 파서, loader 교체·게임 재시작 필요) |
-| 운전 API | ✔ 설치된 loader 0.29.0은 `profile_supported=false`(현재 프로필의 `no_cstm_mod`·`joy.b5`를 못 읽어 arm 거절). 0.31.0 loader가 이 프로필을 읽는다(코드·테스트 완료, 게임 확인 전). [W00](docs/20_windows_native_port_plan.md) |
+| 게임 | ETS2 1.61.1.1, DX11, core/상주 loader 0.31.0 설치(2026-10-12, W00 파서; 게임 재시작 후 확인 전) |
+| 운전 API | ✔ 이전 loader 0.29.0은 `profile_supported=false`(현재 프로필의 `no_cstm_mod`·`joy.b5`를 못 읽어 arm 거절). 0.31.0 loader가 이 프로필을 읽는다(MSVC·WSL 테스트 통과, 게임 확인 전). [W00](docs/20_windows_native_port_plan.md) |
 | 카메라 | C_FN·C_FW 1280×720, C_RL·C_RR 960×544, 기본 30 Hz 요청 |
 | 배치 | FH4 4x2, stock 공통 캐빈·미러 외곽 기준의 캐빈 부착 |
 | 출력 | RGB8, 미터 광축 깊이, CameraInfo, JPEG, TF, 차량 GT |

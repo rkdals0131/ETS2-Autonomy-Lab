@@ -28,7 +28,7 @@ source "$REPO/bridge/ros-env.sh"
 
 버전 규칙: `ets2_msgs`의 메시지를 바꾸면 `ets2_msgs/package.xml` 버전과 `bridge/common/wire.hpp`의 `msgs_version`을 함께 올립니다(`tests/wire_test`가 둘을 대조). 토픽 목록·소켓 경로·패킷 meta나 릴레이가 직렬화하는 메시지 형식이 바뀌면 `wire_version`을 올립니다. 릴레이와 ets2_bridge는 서로 다른 `wire_version`이면 양쪽 버전을 보고하고 연결하지 않으므로, Windows 릴레이와 ROS 패키지는 같은 커밋에서 함께 빌드합니다. 실행 중인 버전은 `/ets2/sensors/config`의 `core_version`·`wire_version`·`msgs_version`에서 확인합니다. ROS 전용 설정은 ets2_bridge 패키지에 설치됩니다.
 
-Jazzy는 시스템 Python 3.12를 사용합니다. 이 머신의 기본 PATH에는 사용자 Python 3.11도 있으므로 위 명령은 시스템 interpreter를 명시합니다. 저장소의 `ros2/build`, `ros2/install`, `ros2/log`는 격리 빌드에 사용한 Git 제외 산출물이며 일반 실행 overlay는 `~/ets2-ros/install`입니다. 향후 Linux ext4 checkout을 원본으로 선택하면 그 checkout의 `ros2`에서 `src/build/install/log` workspace로 운용할 수 있습니다.
+Jazzy는 시스템 Python 3.12를 사용합니다. 이 머신의 기본 PATH에는 사용자 Python 3.11도 있으므로 위 명령은 시스템 interpreter를 명시합니다. WSL의 일반 실행 overlay는 `~/ets2-ros/install`입니다. 저장소의 `ros2/build`, `ros2/install`, `ros2/log`는 Windows `pixi run build`(merge-install)의 Git 제외 산출물입니다([P0 실행서](../docs/22_p0_spike_runbook.md)). 향후 Linux ext4 checkout을 원본으로 선택하면 그 checkout의 `ros2`에서 `src/build/install/log` workspace로 운용할 수 있습니다.
 
 ## 실행
 

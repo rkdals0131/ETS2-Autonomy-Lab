@@ -8,7 +8,7 @@
 | --- | --- |
 | VS2022 x64 C++ 빌드 도구 | ✔ 사용 중(`ot/build.cmd`가 vswhere로 찾음) |
 | pixi | ✔ 0.81.0 설치(2026-10-12, `winget install prefix-dev.pixi --scope user`). 새 터미널부터 PATH에 잡힘 |
-| MSVC | ✔ 없음(2026-10-12): `C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools` 폴더가 사라지고 설치 기록만 남음. **재설치가 P0 빌드·W00 loader 빌드의 선행**(관리자 권한) |
+| MSVC | ✔ 2026-10-12 VS 2022 Build Tools 17.14 재설치(`winget install Microsoft.VisualStudio.2022.BuildTools`, VCTools 워크로드). 이전 v18 Build Tools는 폴더가 사라지고 설치 기록만 남아 있으나 vswhere `-requires VC.Tools`가 2022를 고른다 |
 | 긴 경로 | ✔ `LongPathsEnabled=1` |
 | PATH의 Python | ✔ `python.exe`가 C:\Python27. 모든 빌드·실행은 `pixi shell`/`pixi run` 안에서만 한다(△ 밖에서 CMake FindPython이 2.7을 잡을 수 있음) |
 | 게임 | ✔ DX11, core 0.30.0, exe SHA 일치 |
@@ -22,7 +22,8 @@
 - ✔ pixi 0.81.0을 `winget install prefix-dev.pixi --scope user`로 설치(관리자 불필요, `%LOCALAPPDATA%\pixi\bin`). `pixi install` 성공, `pixi.lock` 커밋.
 - ✔ 해석된 버전: python 3.12.15, ros-base 0.11.0, rmw-fastrtps-cpp 8.4.4, foxglove-bridge 3.6.0, rosbag2-storage-mcap 0.26.11, vision-msgs 4.1.1, ament-cmake-gtest 2.5.6(이름 확인), `compilers` → `vs2022_win-64` 19.44, cmake 4.4.4, ninja 1.13.2.
 - ✔ `pixi run`에서 activation 확인: `FASTRTPS_DEFAULT_PROFILES_FILE`·`ROS_DOMAIN_ID`·`RMW_IMPLEMENTATION`·`ROS_AUTOMATIC_DISCOVERY_RANGE`가 설정되고 `ros2.exe`가 env에 있다.
-- ✔ **MSVC가 없어 `pixi run build`는 아직 못 한다**(`where cl` 실패, VS Build Tools 폴더 없음). △ `vs2022_win-64` activation이 VS 18(2026) Build Tools도 받아들이는지는 재설치 뒤 확인. 안 되면 VS 2022 Build Tools를 설치한다.
+- ✔ VS 2022 Build Tools 설치 뒤 `pixi run build`가 ets2_msgs·ets2_bridge·ets2_sensor_degradation·ets2_autonomy를 70 s에 빌드(Ninja, Release). 저장소에 남아 있던 Linux용 `ros2/build·install·log`(10-10 격리 빌드, isolated 레이아웃)는 merge-install과 충돌해 지웠다.
+- ✔ **foxglove-bridge DLL 경로 문제**: RoboStack win-64의 foxglove-bridge(3.6.0과 3.4.3 둘 다)가 `foxglove.dll`·`foxglove_cpp_shared.dll`을 PATH에 없는 `Library\lib`에 설치해 `foxglove_bridge.exe`가 `0xC0000135`(DLL 없음)로 죽는다. `ros2/activate.bat`이 `Library\lib`를 PATH **맨 뒤**에 붙여 해결(그 폴더의 DLL은 이 둘뿐). 3.4.3 고정은 해결책이 아니다: 빌드 번호 _21이라 rclcpp 28.1.22→28.1.21처럼 배포판 전체가 이전 스냅숏으로 내려간다. 그래서 3.6.0(_25)을 유지한다.
 - `FASTRTPS_DEFAULT_PROFILES_FILE`을 activation에 두는 이유: ✔ 지금은 `bridge.launch.py`만 DDS 프로필(128 MiB SHM, 8 MiB 메시지)을 설정한다. P1부터 런처가 직접 띄우는 릴레이·스택·기록기도 같은 프로필을 받아야 한다. P1에서 경로를 `bridge/config/fastdds.xml`로 바꾼다.
 
 ## 3. 코드 변경(모두 `#ifdef _WIN32` 보호, 아무것도 삭제하지 않음; ✔ 2026-10-12 반영, Linux 빌드 확인)
@@ -52,6 +53,12 @@
 `"bind_address": "127.0.0.1"`. ✔ 릴레이 `main.cpp:ros_address`가 읽어 WSL 조회를 건너뛰고, foxglove_bridge의 `address`도 같은 값이 된다. 이 값이 있으면 WSL 쪽 `ets2_bridge`도 127.0.0.1에서 기다리므로 A/B의 WSL 회차에서는 빈 문자열로 되돌린다(로컬 파일이라 Git과 무관).
 
 `ets2_autonomy`도 빌드 대상이다: ✔ W00에서 `control/drive_session.hpp`가 `getpid`/`_getpid`와 stop event를 감쌌다(`drive_hold` 포함).
+
+### 게임 없이 확인한 것(2026-10-12)
+
+- ✔ `ros2 launch ets2_bridge bridge.launch.py`(임시 설정 `bind_address=127.0.0.1`): ets2_bridge가 127.0.0.1:17401·17400, foxglove_bridge 3.6.0이 127.0.0.1:8765에서 대기. 다른 프로세스의 `ros2 topic list --no-daemon`에서 토픽 61개(`/clock`, `/tf`, `/ets2/drive/state`, `/ets2/lidar/L_F/points` 등). launch 파일은 `domain_id` 인자(기본 42)로 `ROS_DOMAIN_ID`를 덮어쓰므로 확인용 CLI도 같은 도메인이어야 한다.
+- ✔ `drive_hold --stop-event`: 이름 있는 이벤트 신호에 disarm하고 exit 0, 50.6 Hz.
+- ✔ Windows에서 `ros2 topic list`를 출력 캡처로 부르면 ros2 데몬이 파이프를 물고 있어 끝나지 않는다. 런처·스크립트에서는 `--no-daemon`을 쓴다.
 
 ## 4. 실행 순서
 
@@ -102,7 +109,7 @@ ros2 bag record -s mcap -o bridge\recordings\p0-state --disable-keyboard-control
 
 Windows에서 `sent_steady_ns`의 원점이 C++(`std::chrono::steady_clock`, MSVC=QPC)과 Python(`time.perf_counter_ns()`)에서 같은지 본다.
 
-✔ 2026-10-12, pixi Python 3.12.15: `time.get_clock_info('monotonic')`은 `GetTickCount64()`·분해능 0.015625 s, `perf_counter`는 `QueryPerformanceCounter()`. 같은 순간 `QPC×1e9/freq − perf_counter_ns` = −700 ns(호출 간격), `monotonic_ns − perf_counter_ns` = **−35.5 ms**. 즉 Python 발행기가 `monotonic`을 쓰면 50 ms 나이 한도의 70%가 시작부터 사라진다. Python은 `perf_counter_ns`만 쓴다. △ C++ 쪽(MSVC `steady_clock`=QPC)은 MSVC 재설치 뒤 같은 방식으로 확인. [16 시계](16_ros2_bridge.md#시계복구).
+✔ 2026-10-12, pixi Python 3.12.15: `time.get_clock_info('monotonic')`은 `GetTickCount64()`·분해능 0.015625 s, `perf_counter`는 `QueryPerformanceCounter()`. 같은 순간 `QPC×1e9/freq − perf_counter_ns` = −700 ns(호출 간격), `monotonic_ns − perf_counter_ns` = **−35.5 ms**. 즉 Python 발행기가 `monotonic`을 쓰면 50 ms 나이 한도의 70%가 시작부터 사라진다. Python은 `perf_counter_ns`만 쓴다. ✔ C++ 쪽도 확인: Windows에서 `drive_hold`(MSVC `steady_clock`)가 찍은 `sent_steady_ns`를 Python 모의 수신기가 `perf_counter_ns`로 빼면 최대 0.80 ms(50 Hz, 83개). 두 시계의 원점이 같다. [16 시계](16_ros2_bridge.md#시계복구).
 
 ## 9. 예상 문제
 

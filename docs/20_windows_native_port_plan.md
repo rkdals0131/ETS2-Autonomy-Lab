@@ -56,9 +56,11 @@
 - ✔ `tests/fixtures/controls_xbox_cstm.sii`: 실제 프로필에서 조향·페달 closure와 상수만 뽑은 fixture(`no_cstm_mod`, 데드존 0/0). `drive_control_test`가 두 fixture로 돈다: 휴지 중립, 데드존 0에서 트리거 0.001도 개입, LB 유지 중 스로틀 값 유지·개입 판정, `&&`·`||` 거절. ✔ WSL g++ ASan/UBSan 통과, 실제 controls.sii로도 통과.
 - ✔ `ets2_autonomy/drive_hold`: arm → 고정 명령 50 Hz(`sent_steady_ns`) → Ctrl+C 또는 `--stop-event`(Windows)에서 disarm. DriveState reason 변화를 시뮬레이션 시각과 함께 출력. 종료 코드 0 disarm, 1 오류, 2 게임이 해제. ✔ WSL에서 모의 drive 엔드포인트로 50 Hz·명령 나이 < 1.2 ms·disarm·해제 경로 확인. GT 노드와 공유하는 `control/drive_session.hpp`(StopSignal·`request_drive_control`·`steady_ns`)로 GT 노드도 `--stop-event`를 받는다.
 
-남은 것(게임·MSVC 필요):
-- ✔ 2026-10-12 현재 이 PC에 MSVC Build Tools가 없다(10-10 빌드에 쓴 `C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools` 폴더가 없고 설치 기록만 남음). 재설치 후 `ot\build.cmd`로 loader 0.31.0을 빌드한다.
-- 설치: 게임 정상 종료 → `ot/dist/ot_loader.dll`을 `plugins/`에, `ot_core.dll`을 `plugins/ot_runtime/`에 → 게임 재시작.
+빌드·설치(2026-10-12):
+- ✔ VS 2022 Build Tools로 core/loader 0.31.0 빌드(/W4 경고 없음). MSVC `ot_drive_test`가 두 fixture와 실제 controls.sii에서 통과.
+- ✔ 게임 종료 상태에서 `ot_loader.dll`(plugins/)과 `ot_core.dll`(plugins/ot_runtime/) 교체, 해시 일치. 이전 DLL은 `ot/backup/2026-10-12-before-0.31.0/`. 설치된 `ot_config.json`은 그대로.
+
+남은 것(게임 필요):
 - 완료 기준: `ot.cmd version`에서 `drive.profile_supported=true`. disarmed 상태에서 LB를 누른 채 RT를 당겨 `drive status`의 `manual_throttle`이 유지되는지 보고 b5=LB를 확인. [21](21_safety_checklist.md) #0(데드존 0/0 휴지 노이즈 30 s) 통과.
 
 ### P0. 스파이크 (S)
