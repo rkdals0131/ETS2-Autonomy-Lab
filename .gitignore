@@ -32,6 +32,7 @@ venv/
 /ros2/install/
 /ros2/log/
 /.pixi/
+/tests/build/
 *.dll
 *.exe
 *.pdb

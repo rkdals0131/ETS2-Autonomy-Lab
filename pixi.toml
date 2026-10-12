@@ -31,3 +31,6 @@ build = { cmd = "colcon build --merge-install --packages-select ets2_msgs ets2_r
 relay = { cmd = "ros2/install/lib/ets2_relay/ets2_relay.exe" }
 # Detached GUI: the activated environment passes to pythonw and everything it starts.
 launcher = { cmd = "cmd /c start \"\" pythonw apps/launcher/launcher.py" }
+# Unit tests without the game: relay endpoint and degradation (colcon), then tests/ (MSVC).
+test-portable = { cmd = "cmake -S tests -B tests/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build tests/build && ctest --test-dir tests/build --output-on-failure" }
+test = { cmd = "colcon test --merge-install --packages-select ets2_relay ets2_sensor_degradation && colcon test-result --verbose", cwd = "ros2", depends-on = ["build", "test-portable"] }
