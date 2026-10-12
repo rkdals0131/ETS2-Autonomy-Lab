@@ -27,6 +27,7 @@ FOXGLOVE_PORT = 8765
 sys.path.insert(0, str(PROJECT_ROOT / "ot" / "py"))
 from otpy.client import Client, LoaderClient
 from bag_recording import BagRecording
+import cpu_layout
 
 K = C.WinDLL("kernel32", use_last_error=True)
 for name, result, args in [
@@ -44,7 +45,7 @@ for name, result, args in [
 
 
 class Job:
-    def __init__(self):
+    def __init__(self, affinity=0):
         class Basic(C.Structure):
             _fields_ = [("process_time", C.c_int64), ("job_time", C.c_int64),
                         ("flags", W.DWORD), ("min_working", C.c_size_t),
@@ -57,6 +58,9 @@ class Job:
         self.handle = K.CreateJobObjectW(None, None)
         limits = Limits()
         limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE
+        if affinity:  # Children stay off the game's cores (cpu_layout).
+            limits.basic.flags |= 0x10
+            limits.basic.affinity = affinity
         if not self.handle or not K.SetInformationJobObject(self.handle, 9, C.byref(limits), C.sizeof(limits)):
             self.close()
             raise C.WinError(C.get_last_error())
@@ -124,6 +128,9 @@ class Controller:
         self.input_only = False
         self.drive_request = None
         self.last_relay = 0.0
+        self.layout = None
+        self.last_layout = self.last_listen = 0.0
+        self.listening = False
         self.closed = threading.Event()
         self.worker = threading.Thread(target=self._loop, daemon=False)
         self.worker.start()
@@ -155,7 +162,7 @@ class Controller:
         threading.Thread(target=read, daemon=True).start()
         return process
 
-    def _start(self, duration, camera_hz=None, lidar_hz=None, preview_hz=None, input_only=False):
+    def _start(self, duration, camera_hz=None, lidar_hz=None, preview_hz=None, input_only=False, cpu_placement=None):
         if self.desired or self.relay:
             return
         if not shutil.which("ros2"):
@@ -179,6 +186,9 @@ class Controller:
         if not math.isfinite(preview_hz) or not 0 < preview_hz <= camera_hz:
             raise ValueError("미리보기 주기는 0보다 크고 카메라 주기 이하여야 합니다.")
         settings.update(camera_hz=camera_hz, lidar_hz=lidar_hz, preview_hz=preview_hz)
+        if cpu_placement is not None and bool(cpu_placement) != settings.get("cpu_layout", True):
+            settings["cpu_layout"] = bool(cpu_placement)
+            changed = True
         if changed:
             temporary = self.config.with_name(self.config.name + ".tmp")
             try:
@@ -196,7 +206,14 @@ class Controller:
         self.desired = True
         self.input_only = bool(input_only)
         self.started = time.monotonic()
-        self.job = Job()
+        placement = settings.get("cpu_layout", True)
+        plan = None
+        if placement:
+            try:
+                plan = cpu_layout.Plan()
+            except OSError as error:
+                self.log(f"CPU 배치 건너뜀: {error}")
+        self.job = Job(plan.helpers if plan else 0)
         self.recording = BagRecording(self.config, self.job)
         self.update(phase="starting", message="Foxglove 서버와 게임 릴레이를 시작합니다.", relay={}, foxglove=False,
                     duration_s=duration)
@@ -211,6 +228,15 @@ class Controller:
         self.last_relay = time.monotonic()
         self.update(foxglove_pid=self.foxglove.pid, relay_pid=self.relay.pid,
                     phase="connecting", message="게임 릴레이의 첫 상태 보고를 기다립니다.")
+        if plan:
+            try:
+                self.layout = cpu_layout.Layout(Client(timeout=1).request("ping")["pid"],
+                                                LoaderClient(timeout=1).status()["sdk_thread_id"])
+                self.layout.refresh()
+                self.log("CPU 배치: " + self.layout.plan.describe())
+            except Exception as error:
+                self.layout = None
+                self.log(f"CPU 배치 건너뜀: {error}")
 
     def _release_drive(self, timeout=3):
         """Disarm through the GT node's stop event; kill only if it does not exit."""
@@ -303,6 +329,9 @@ class Controller:
                 self.recording.close()
                 self.update(recording=self.recording.poll())
             self._release_drive()
+            if self.layout:
+                self.layout.restore()
+                self.layout = None
             if self.relay_stop:
                 self.relay_stop.set()
             if self.relay:
@@ -374,7 +403,15 @@ class Controller:
                        ("현재 차량과 센서 보정이 다릅니다. 차량에 맞는 rig를 선택하거나 ‘입력·상태만’을 선택하고 시작하세요." if code == 2 else
                         "릴레이 종료: F11·게임 연결·아래 로그를 확인해 주세요. 자동 재시작은 멈췄습니다."))
             return
-        foxglove = foxglove_listening()
+        if self.layout and now - self.last_layout > 5:
+            self.last_layout = now
+            try:
+                self.layout.refresh()  # New game threads and viewer windows.
+            except OSError as error:
+                self.log(f"CPU 배치 갱신 실패: {error}")
+        if now - self.last_listen > 1:
+            self.listening, self.last_listen = foxglove_listening(), now
+        foxglove = self.listening
         relay = self.snapshot()["relay"]
         if now - self.last_relay < 3 and relay:
             label = "게임 일시정지" if relay.get("paused") else (
@@ -397,9 +434,9 @@ class Controller:
                         self._stop()
                     elif action == "restart":
                         self._stop()
-                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False))
+                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False), values.get("cpu_layout"))
                     elif action == "start":
-                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False))
+                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False), values.get("cpu_layout"))
                     elif action in ("drive_start", "drive_stop"):
                         self._drive(action, values.get("speed_kmh", 30), values.get("acc", True), values.get("lcc", True))
                     elif action in ("record_start", "record_stop"):
@@ -460,16 +497,18 @@ def show_window(controller):
     camera_hz, lidar_hz = tk.StringVar(value="30"), tk.StringVar(value="10")
     preview_hz = tk.StringVar(value="10")
     input_only = tk.BooleanVar(value=False)
+    cpu_placement = tk.BooleanVar(value=True)
     try:
         settings = json.loads(controller.config.read_text(encoding="utf-8"))
         duration.set(str(settings["duration_s"]))
         camera_hz.set(str(settings.get("camera_hz", 30)))
         lidar_hz.set(str(settings.get("lidar_hz", 10)))
         preview_hz.set(str(settings.get("preview_hz", 10)))
+        cpu_placement.set(bool(settings.get("cpu_layout", True)))
     except (OSError, ValueError, KeyError):
         pass
     def request(action):
-        controller.request(action, duration=duration.get(), camera_hz=camera_hz.get(), lidar_hz=lidar_hz.get(), preview_hz=preview_hz.get(), input_only=input_only.get())
+        controller.request(action, duration=duration.get(), camera_hz=camera_hz.get(), lidar_hz=lidar_hz.get(), preview_hz=preview_hz.get(), input_only=input_only.get(), cpu_layout=cpu_placement.get())
     start = ttk.Button(actions, text="시작", command=lambda: request("start"))
     start.pack(side="left")
     stop = ttk.Button(actions, text="중지", command=lambda: request("stop"))
@@ -488,6 +527,8 @@ def show_window(controller):
         entry.pack(side="left", padx=(0, 18))
         rate_entries.append(entry)
     ttk.Checkbutton(frame, text="입력·상태만 (다음 시작에 적용, 센서 설정 유지)", variable=input_only).pack(anchor="w", pady=(8, 0))
+    ttk.Checkbutton(frame, text="CPU 배치: 게임 메인 스레드에 코어 하나, 릴레이·Foxglove 뷰어는 다른 L3 묶음 (다음 시작에 적용)",
+                    variable=cpu_placement).pack(anchor="w")
     driving_box = ttk.LabelFrame(frame, text="GT 주행 보조", padding=8)
     driving_box.pack(fill="x", pady=(8, 0))
     driving_controls = ttk.Frame(driving_box)
@@ -546,6 +587,12 @@ def show_window(controller):
     log.pack(fill="both", expand=True, pady=(8, 0))
     closing = False
     last_logs = None
+    shown = {}
+    def put(widget, **options):
+        """Reconfigure only on change: config calls re-lay out wrapped labels (35% of a core at 4 Hz)."""
+        if shown.get(str(widget)) != options:
+            widget.config(**options)
+            shown[str(widget)] = options
     def close():
         nonlocal closing
         closing = True
@@ -563,24 +610,24 @@ def show_window(controller):
         state = controller.snapshot()
         phase = state["phase"]
         active = phase in ("starting", "connecting", "running", "stopping")
-        start.config(state="disabled" if active or closing else "normal")
-        stop.config(state="normal" if active and phase != "stopping" and not closing else "disabled")
-        restart.config(state="normal" if phase in ("running", "connecting") and not closing else "disabled")
-        duration_entry.config(state="disabled" if active else "normal")
+        put(start, state="disabled" if active or closing else "normal")
+        put(stop, state="normal" if active and phase != "stopping" and not closing else "disabled")
+        put(restart, state="normal" if phase in ("running", "connecting") and not closing else "disabled")
+        put(duration_entry, state="disabled" if active else "normal")
         for entry in rate_entries:
-            entry.config(state="disabled" if active else "normal")
-        summary.config(text=state["message"])
+            put(entry, state="disabled" if active else "normal")
+        put(summary, text=state["message"])
         relay = state["relay"]
-        drive_start.config(state="normal" if phase == "running" and not closing else "disabled")
-        drive_stop.config(state="normal" if phase == "running" and not closing else "disabled")
+        put(drive_start, state="normal" if phase == "running" and not closing else "disabled")
+        put(drive_stop, state="normal" if phase == "running" and not closing else "disabled")
         mask, reason = observed_drive(relay, time.monotonic() - controller.last_relay)
-        drive_status.config(text=f"실제 상태: ACC {'켜짐' if mask & 2 else '꺼짐'} · LCC {'켜짐' if mask & 1 else '꺼짐'} · {reason}")
+        put(drive_status, text=f"실제 상태: ACC {'켜짐' if mask & 2 else '꺼짐'} · LCC {'켜짐' if mask & 1 else '꺼짐'} · {reason}")
         recording = state["recording"]
         record_phase = recording.get("phase", "idle")
         writing = record_phase in ("starting", "recording", "stopping")
-        record_start.config(state="normal" if phase == "running" and not writing and not closing else "disabled")
-        record_stop.config(state="normal" if writing and record_phase != "stopping" and not closing else "disabled")
-        profile_entry.config(state="disabled" if writing else "readonly")
+        put(record_start, state="normal" if phase == "running" and not writing and not closing else "disabled")
+        put(record_stop, state="normal" if writing and record_phase != "stopping" and not closing else "disabled")
+        put(profile_entry, state="disabled" if writing else "readonly")
         labels = {"idle": "기록 안 함", "starting": "기록 준비", "recording": "기록 중", "stopping": "파일 마무리 중",
                   "saved": "저장 완료", "error": "기록 오류"}
         recording_path = recording.get("path", "")
@@ -593,17 +640,17 @@ def show_window(controller):
         error = state.get("recording_error") or recording.get("error")
         if error:
             record_label += "\n" + error
-        recording_text.config(text=record_label)
-        rows["게임 SDK"].config(text=state["game"])
-        rows["Windows 릴레이"].config(text=f"PID {state['relay_pid']}" if state.get("relay_pid") else "중지됨")
-        rows["Foxglove 서버"].config(text=(f"PID {state['foxglove_pid']} · " + ("대기 중" if state.get("foxglove") else "시작 중"))
+        put(recording_text, text=record_label)
+        put(rows["게임 SDK"], text=state["game"])
+        put(rows["Windows 릴레이"], text=f"PID {state['relay_pid']}" if state.get("relay_pid") else "중지됨")
+        put(rows["Foxglove 서버"], text=(f"PID {state['foxglove_pid']} · " + ("대기 중" if state.get("foxglove") else "시작 중"))
                                      if state.get("foxglove_pid") else "중지됨")
         commands = relay.get("drive_commands") or {}
-        rows["발행"].config(text=f"{relay.get('sent_bundles', 0)} 묶음 · 큐 누락 {relay.get('queue_dropped', 0)}"
+        put(rows["발행"], text=f"{relay.get('sent_bundles', 0)} 묶음 · 큐 누락 {relay.get('queue_dropped', 0)}"
                                f" · 명령 {commands.get('forwarded_commands', 0)} (지연 폐기 {commands.get('stale_commands', 0)})")
-        rows["수집 상태"].config(text=("활성" if relay.get("capture_active") else "대기") if phase == "running" else
+        put(rows["수집 상태"], text=("활성" if relay.get("capture_active") else "대기") if phase == "running" else
                                 ("연결 확인 중" if active else "중지됨"))
-        rows["Foxglove 주소"].config(text=endpoint if state.get("foxglove") else "—")
+        put(rows["Foxglove 주소"], text=endpoint if state.get("foxglove") else "—")
         text = "\n".join(state["logs"])
         if text != last_logs:
             log.config(state="normal")

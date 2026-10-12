@@ -60,13 +60,30 @@ public:
     void poll_lease();
     static void SCSAPIFUNC event_callback(scs_event_t event,const void* data,scs_context_t context) noexcept {
         auto& self=*static_cast<Runtime*>(context);
+        const auto start=qpc_now();
         try {self.event(event,data);} catch(const std::exception& e) {self.panic();log(std::string("SDK event error: ")+e.what());}
         catch(...) {self.panic();}
+        auto& timing=event==SCS_TELEMETRY_EVENT_frame_end?self.frame_end_timing_:
+            event==SCS_TELEMETRY_EVENT_frame_start?self.frame_start_timing_:self.other_event_timing_;
+        timing.add(qpc_now()-start);
     }
     static void SCSAPIFUNC channel_callback(scs_string_t,scs_u32_t,const scs_value_t* value,scs_context_t context) noexcept {
         auto& channel=*static_cast<Channel*>(context);
+        const auto start=qpc_now();
         try {channel.owner->value(channel,value);} catch(...) {channel.owner->panic();}
+        channel.owner->channel_timing_.add(qpc_now()-start);
     }
+    // Game-thread cost of the SDK callbacks (they run at the SDK frame rate,
+    // which can be several times the render rate).
+    struct CallbackTiming {
+        std::atomic<uint64_t> count{0},total{0},maximum{0};
+        void add(uint64_t ticks) noexcept {
+            ++count;total+=ticks;
+            for(auto seen=maximum.load();ticks>seen && !maximum.compare_exchange_weak(seen,ticks););
+        }
+        json snapshot() const {return {{"samples",count.load()},{"total_ticks",total.load()},{"max_ticks",maximum.load()}};}
+    };
+    CallbackTiming channel_timing_,frame_start_timing_,frame_end_timing_,other_event_timing_;
 private:
     json engine_snapshot();
     json snapshot() const;
@@ -394,6 +411,8 @@ json Runtime::command(const json& request) {
     }
     if(cmd=="reload_permissions") return reload_permissions();
     if(cmd=="hooks") return render_probe_->status();
+    if(cmd=="sdk_timing") return {{"qpc_frequency",qpc_frequency()},{"channel",channel_timing_.snapshot()},
+        {"frame_start",frame_start_timing_.snapshot()},{"frame_end",frame_end_timing_.snapshot()},{"other_events",other_event_timing_.snapshot()}};
     if(cmd=="frames") return render_probe_->frames(request.value("after_id",uint64_t(0)));
     if(cmd=="camera_rig") {
         std::lock_guard lock(control_);
