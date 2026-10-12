@@ -125,3 +125,4 @@ core가 overlay enable 때 매핑을 만들고 릴레이가 연다(✔ `OT_State
 | manager 파이프라이닝으로 카메라 한 프레임 어긋남 | graph index 매칭(§3). T3에서 확인 |
 | 렌더 스레드 CPU 초과 | camera만 읽기, 마스크 래스터는 CPU worker, 상수 갱신만 렌더 스레드 |
 | 게임 업데이트 | 모든 RVA와 함께 무효. W01 |
+| 렌더러를 가로채는 모드(✔ snowymoon: AA·DLSS가 메인 후처리를 바꾸고 센서 pass와 충돌) | §1 구조는 순정 렌더 기준. 모드가 켜져 있으면 데칼을 그리지 않거나 지원 범위 밖으로 둔다([브리지 문서](../bridge/README.md#렌더-모드와의-충돌)) |

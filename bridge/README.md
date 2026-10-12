@@ -211,6 +211,13 @@ pixi run relay bridge/config/bridge.local.json            # 또는 apps\launch.c
 
 `publish` 외에는 센서 토픽을 발행하지 않습니다. DLL의 작은 라이다·노출 버퍼 읽기는 모든 수집 단계에서 유지됩니다. 릴레이 로그의 `consumed_bundles`, `encoded_bundles`, `sent_bundles`로 실제 처리 진행을 확인합니다. 종료 뒤 일반 설정으로 실행합니다. [측정 결과](../docs/18_performance.md).
 
+## 렌더 모드와의 충돌
+
+센서 카메라는 게임의 미러 슬롯으로 메인 화면과 같은 deferred 파이프라인을 한 번 더 렌더합니다. 게임 렌더러를 가로채는 모드는 이 추가 pass를 메인 화면으로 볼 수 있습니다.
+
+- **snowymoon.io 조명 모드**(`bin/win_x64/dxgi.dll` 프록시): ✔ 2026-10-12, 센서 수집 중 안티앨리어싱(TAA/DLSS)을 켜면 메인 화면이 센서 렌더 주기로 한 프레임씩 깨집니다. 안티앨리어싱을 끄거나 브리지를 끄면 정상입니다. △ 시간 누적 AA 히스토리가 센서 카메라 프레임으로 오염되는 것으로 보이며, AA를 끄면 snowymoon 효과 대부분도 함께 빠집니다.
+- 권장: 센서를 수집하는 개발·기록 세션에서는 snowymoon을 끕니다. 센서 RGB의 조명이 모드 설정에 따라 바뀌면 인지 데이터가 달라지기 때문입니다. **입력·상태만** 실행은 렌더 hook을 켜지 않으므로 해당하지 않습니다.
+
 ## 운영 구조
 
 런처는 단일 Windows mutex로 중복 창을 막고, Windows Job Object로 Foxglove 서버·릴레이·지도 provider·GT 주행·기록기를 소유합니다. 창이 비정상 종료돼도 Job이 닫히며 모두 종료됩니다. 중지는 기록기 CTRL_C → GT 노드 stop event(disarm) → 릴레이 stop event(lease 해제·Tier 0) → Job 종료 순서입니다. 릴레이가 7초 안에 끝나지 않으면 강제 종료하고 lease 만료(5초)를 기다립니다.
