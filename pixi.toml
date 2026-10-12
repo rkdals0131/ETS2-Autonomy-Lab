@@ -1,0 +1,31 @@
+# Windows-native ROS 2 Jazzy (RoboStack). P0 spike: docs/22_p0_spike_runbook.md.
+# Visual Studio 2022+ C++ build tools must be installed separately. Run every
+# ROS build or command through `pixi run` / `pixi shell` (PATH holds Python 2.7).
+[workspace]
+name = "ets2-autonomy-lab"
+channels = ["https://prefix.dev/robostack-jazzy", "conda-forge"]
+platforms = ["win-64"]
+
+[dependencies]
+ros-jazzy-ros-base = "*"
+ros-jazzy-rmw-fastrtps-cpp = "*"
+ros-jazzy-vision-msgs = "*"
+ros-jazzy-foxglove-bridge = "*"
+ros-jazzy-rosbag2-storage-mcap = "*"
+ros-jazzy-ament-cmake-gtest = "*"
+colcon-common-extensions = "*"
+compilers = "*"
+nlohmann_json = "*"
+cmake = "*"
+ninja = "*"
+pkg-config = "*"
+
+[activation]
+# Overlay (when built) and the shared DDS profile for every process, not only launch files.
+scripts = ["ros2/activate.bat"]
+env = { ROS_DOMAIN_ID = "42", RMW_IMPLEMENTATION = "rmw_fastrtps_cpp", ROS_AUTOMATIC_DISCOVERY_RANGE = "LOCALHOST" }
+
+[tasks]
+build = { cmd = "colcon build --merge-install --packages-select ets2_msgs ets2_bridge ets2_sensor_degradation ets2_autonomy --cmake-args -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF", cwd = "ros2" }
+bridge = { cmd = "ros2 launch ets2_bridge bridge.launch.py config:=$PIXI_PROJECT_ROOT/bridge/config/bridge.local.json" }
+relay = { cmd = "bridge/dist/ets2_relay.exe bridge/config/bridge.local.json" }

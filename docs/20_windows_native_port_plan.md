@@ -109,12 +109,12 @@
 | 릴레이 빌드 | `ros2/src/ets2_relay` ament 패키지. `bridge/CMakeLists.txt` 삭제. `if(NOT WIN32)` 빈 패키지 분기도 두지 않음(Linux 폐기) |
 | 복사 횟수 | `Packet.data` → `SerializedMessage` 한 번 복사 |
 | 명령 시계(Windows) | `sent_steady_ns`는 QPC 기반: C++ `std::chrono::steady_clock`(MSVC=QPC), Python `time.perf_counter_ns()`. △ Python 3.12 `time.monotonic`은 GetTickCount64 기반(15.6 ms)이라 금지. 원점 일치는 P0에서 두 값을 같은 순간에 찍어 확인. [16 시계](16_ros2_bridge.md#시계복구) |
-| 종료 프로토콜 | 런처가 띄우는 모든 자체 프로세스(릴레이·스택·GT baseline·`drive_hold`·기록기)는 이름 있는 stop event(✔ 릴레이 `main.cpp:stop_watch` 방식)로 정상 종료. GT 노드·스택에 `--stop-event` 인자 추가(✔ 지금 GT 노드는 SIGINT로만 `control(false)`를 호출하므로 kill되면 `disarmed`가 아니라 `expired`). rosbag2는 △ CTRL_BREAK가 SIGINT 핸들러를 안 탈 가능성이 커서 P0에서 (a) `AttachConsole`+`GenerateConsoleCtrlEvent(CTRL_C)` → (b) `rosbag2_transport`를 감싼 소형 C++ 기록기 순으로 시험해 고른다 |
+| 종료 프로토콜 | 런처가 띄우는 모든 자체 프로세스(릴레이·스택·GT baseline·`drive_hold`·기록기)는 이름 있는 stop event(✔ 릴레이 `main.cpp:stop_watch` 방식)로 정상 종료. GT 노드·스택에 `--stop-event` 인자 추가(✔ 지금 GT 노드는 SIGINT로만 `control(false)`를 호출하므로 kill되면 `disarmed`가 아니라 `expired`). rosbag2는 ✔ 자기 콘솔로 띄우고 `AttachConsole`+`CTRL_C_EVENT`로 끝낸다(P0 §6 실측: CTRL_BREAK·kill은 `metadata.yaml`을 남기지 않음) |
 | W01 방법 | (1) 설치 폴더 전체를 다른 드라이브에 복사(기본), (2) ✔ SHA 게이트가 불일치 시 SDK 전용으로 닫으므로 업데이트는 즉시 감지됨, (3) △ Steam beta 탭에 이전 버전 브랜치(`temporary_1_61`류)가 있으면 고정. 브랜치 제공 여부는 미확인이므로 (1)·(2)가 필수, (3)은 있으면 추가 |
 | 앞차 지붕에 데칼 | **셰이더 책임**(z·법선 판정). 스택은 경로를 자르지 않는다(경로 의미를 표시 때문에 바꾸지 않음) |
 | 런처 실행 | `apps/launch.cmd`는 `pixi run launcher`(pixi activation이 `ros2/install/setup.bat`을 포함하므로 자식 프로세스 모두 overlay 활성). `--host-only`는 `pixi run relay`. `ot/.venv` 분기 삭제 |
 | foxglove_bridge 실행 | `ets2_launch` 패키지 없이 런처가 `ros2 run foxglove_bridge foxglove_bridge --ros-args --params-file bridge/config/foxglove.yaml -p address:=127.0.0.1`을 직접 spawn. launch 파일은 CLI 편의용으로만 선택 |
-| 런처의 rclpy | 없앤다. ✔ telemetry JSON에 `drive`가 있으므로(`core.cpp` frame_end, `state_messages.cpp:state_messages`) 릴레이 stdout 1 Hz JSON에 armed·axes·reason을 싣는다. GT 모드 변경은 `ros2 param set` 3회(speed→acc→lcc) |
+| 런처의 rclpy | 없앤다. ✔ telemetry JSON에 `drive`가 있으므로(`core.cpp` frame_end, `state_messages.cpp:state_messages`) 릴레이 stdout 1 Hz JSON에 armed·axes·reason을 싣는다. GT 모드 변경은 `ros2 service call …/set_parameters_atomically` 한 번(세 값 원자적) |
 | 진단 | `status_publish_roundtrip` → 명령 나이(`sent_steady_ns`→core 수락) p50/p99 |
 
 ## 4. 삭제 목록(P1)

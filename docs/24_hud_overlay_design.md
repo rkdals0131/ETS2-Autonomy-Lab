@@ -65,9 +65,9 @@ core가 overlay enable 때 매핑을 만들고 릴레이가 연다(✔ `OT_State
 
 ## 5. 데칼 렌더링
 
-**기본안: BEV 마스크 텍스처 한 번 샘플.** 경로가 바뀔 때(≤ 20 Hz) 폴리라인을 자차 주변 128 m×128 m, 0.25 m 격자(512×512, R8G8: 알파·정규화 호 길이)로 CPU에서 래스터라이즈해 `UpdateSubresource`. 데칼 픽셀 셰이더는 복원한 world 위치로 그 텍스처를 한 번 샘플한다(O(1)). 모양·색·페이드는 마스크에 구워 넣으므로 셰이더를 고칠 일이 없다. 비교안(픽셀당 세그먼트 루프)은 구현하지 않는다.
+**기본안: BEV 마스크 텍스처 한 번 샘플.** 경로가 바뀔 때(≤ 20 Hz) 폴리라인을 **경로 방향으로 정렬한 직사각형**(경로 시작점 원점, 길이 160 m × 폭 32 m, 0.25 m 격자 = 640×128, R8G8: 알파·정규화 호 길이)에 CPU에서 래스터라이즈해 `UpdateSubresource`. world→마스크 uv는 2×3 affine으로 상수 버퍼에 싣는다. 자차 중심 정사각형(128 m×128 m)은 앞쪽이 64 m뿐이라 0–80 m 궤적과 120 m 페이드를 담지 못하고, 같은 범위를 정사각형으로 덮으면 텍셀이 6배다. 데칼 픽셀 셰이더는 복원한 world 위치로 그 텍스처를 한 번 샘플한다(O(1)). 모양·색·페이드는 마스크에 구워 넣으므로 셰이더를 고칠 일이 없다. 비교안(픽셀당 세그먼트 루프)은 구현하지 않는다.
 
-상수 버퍼(프레임마다): `inv_projection`(외부 pass projection 역행렬), `view_to_world_rotation`, 카메라 world 위치(double로 마스크 원점과 빼서 float), `depth_range`(외부 pass `viewport_depth`), `mask_origin_xy`, `mask_scale`, `ground_z`, `z_tolerance` 1.0 m, `slope_tolerance` tan 8°, `rgba`.
+상수 버퍼(프레임마다): `inv_projection`(외부 pass projection 역행렬), `view_to_world_rotation`, 카메라 world 위치(double로 마스크 원점과 빼서 float), `depth_range`(외부 pass `viewport_depth`), `mask_affine`(world→uv 2×3), `ground_z`, `z_tolerance` 1.0 m, `slope_tolerance` tan 8°, `rgba`.
 
 픽셀 셰이더:
 1. `d = depth.Load(pixel)`; `d < near || d > far`(외부 범위 밖: 실내·하늘)면 discard.

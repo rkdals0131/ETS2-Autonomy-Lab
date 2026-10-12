@@ -3,7 +3,9 @@
 #include <std_srvs/srv/set_bool.hpp>
 #include <ets2_msgs/msg/drive_command.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
+#ifndef _WIN32
 #include <ifaddrs.h>
+#endif
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -15,6 +17,9 @@
 using namespace bridge;
 using namespace std::chrono_literals;
 static std::string eth0() {
+#ifdef _WIN32
+    throw std::runtime_error("bind_address is required on Windows");
+#else
     ifaddrs* addresses=nullptr;
     if(getifaddrs(&addresses)) throw std::runtime_error("Cannot inspect eth0");
     std::string ip;
@@ -24,10 +29,11 @@ static std::string eth0() {
     freeifaddrs(addresses);
     if(ip.empty()) throw std::runtime_error("No eth0 IPv4 address");
     return ip;
+#endif
 }
 static Socket listener(const std::string& ip,uint16_t port) {
     Socket s(socket(AF_INET,SOCK_STREAM,IPPROTO_TCP));
-    int yes=1;setsockopt(s.id,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof(yes));
+    int yes=1;setsockopt(s.id,SOL_SOCKET,SO_REUSEADDR,reinterpret_cast<const char*>(&yes),sizeof(yes));
     sockaddr_in address{};address.sin_family=AF_INET;address.sin_port=htons(port);inet_pton(AF_INET,ip.c_str(),&address.sin_addr);
     if(bind(s.id,reinterpret_cast<sockaddr*>(&address),sizeof(address)) || listen(s.id,2))
         throw std::runtime_error("Cannot listen on "+ip+":"+std::to_string(port));
@@ -38,13 +44,17 @@ static Socket accept_client(const Socket& server,bool state,bool paired=false) {
     while(rclcpp::ok()) {
         if(paired && std::chrono::steady_clock::now()>=deadline) throw TransportError("Bulk connection did not arrive");
         fd_set reads;FD_ZERO(&reads);FD_SET(server.id,&reads);timeval timeout{0,250000};
-        if(select(server.id+1,&reads,nullptr,nullptr,&timeout)>0) {
+        if(select(static_cast<int>(server.id+1),&reads,nullptr,nullptr,&timeout)>0) {
             Socket s(accept(server.id,nullptr,nullptr));s.configure(state);return s;
         }
     }
     throw std::runtime_error("Stopped");
 }
 int main(int argc,char** argv) {
+#ifdef _WIN32
+    WSADATA winsock{};if(WSAStartup(MAKEWORD(2,2),&winsock)) return 1;
+    struct WinsockEnd {~WinsockEnd(){WSACleanup();}} winsock_end;
+#endif
     rclcpp::init(argc,argv);
     try {
         auto node=std::make_shared<rclcpp::Node>("ets2_bridge");

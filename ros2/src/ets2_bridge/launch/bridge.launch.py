@@ -1,5 +1,6 @@
 """Run the serialized bridge and the compressed-only Foxglove endpoint."""
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -18,6 +19,8 @@ def generate_launch_description():
         settings = json.loads(Path(config).read_text(encoding="utf-8"))
         address = settings.get("bind_address")
         if not address:
+            if os.name == "nt":
+                raise RuntimeError("Set bind_address in bridge.local.json on Windows")
             interfaces = json.loads(subprocess.check_output(["ip", "-j", "-4", "addr", "show", "eth0"]))
             address = next(a["local"] for i in interfaces for a in i["addr_info"] if a["family"] == "inet")
         return [

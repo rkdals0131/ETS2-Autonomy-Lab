@@ -98,7 +98,7 @@ ament_package()
 | `Controller.wsl_exec`·`linux_paths` | 삭제 |
 | `Controller._start`: WSL 세션 spawn, `session.command` | `ros2 run foxglove_bridge foxglove_bridge --ros-args --params-file bridge/config/foxglove.yaml -p address:=127.0.0.1`을 Job에 spawn → 즉시 `_start_relay()`. 준비 판정은 `127.0.0.1:8765` 소켓 연결 성공 |
 | `_signal_wsl`·heartbeat | 삭제 |
-| `_drive`: WSL 세션에 위임 | `ros2 run ets2_autonomy drive_speed --ros-args -p arm:=true -p path_file:=… -p acc_enabled:=… -p lcc_enabled:=… -p target_speed_mps:=…`(✔ `ros_session.py:run_session`의 인자)를 Job에 spawn, `--stop-event` 전달. 모드 변경은 `ros2 param set /ets2_drive_speed` 3회(target_speed_mps → acc_enabled → lcc_enabled), 실패는 로그 |
+| `_drive`: WSL 세션에 위임 | `ros2 run ets2_autonomy drive_speed --ros-args -p arm:=true -p path_file:=… -p acc_enabled:=… -p lcc_enabled:=… -p target_speed_mps:=…`(✔ `ros_session.py:run_session`의 인자)를 Job에 spawn, `--stop-event` 전달. 모드 변경은 `ros2 service call /ets2_drive_speed/set_parameters_atomically rcl_interfaces/srv/SetParametersAtomically` 한 번으로 세 값을 원자적으로(✔ 기존 `ros_session.py`의 `SetParametersAtomically`와 같은 의미; `param set` 3회는 중간 상태가 생기고 Windows에서 CLI 시작이 3번 든다), 실패는 로그 |
 | `_record` | `BagRecording`을 런처 안에서 직접 사용(§7) |
 | `_stop`: systemd 정지·확인 | 삭제. stop event set → 각 프로세스 wait → Job close |
 | `_observe`: `session_status` 해석, `observed_drive` | 릴레이 stdout JSON만. 릴레이 1 Hz JSON에 `drive.armed`·`axes`·`reason`을 추가해(✔ telemetry의 `drive`, `state_messages.cpp:state_messages`가 이미 읽음) 그 값으로 ACC/LCC 실제 상태 표시. "연결됨" 판정은 `now-last_relay<3` |
@@ -124,7 +124,7 @@ popd
 | `ets2_relay` | stop event(기존) | lease 해제·Tier 0 |
 | `drive_speed`, `drive_hold`, `ets2_stack` | `--stop-event <name>`: 이벤트 신호 → `stopped=true` → 루프 종료 → `control(false)`(disarm) | ✔ 지금 GT 노드는 SIGINT만 보므로 Windows에서 kill되면 `disarmed`가 아니라 `expired`로 끝난다. [21](21_safety_checklist.md) 참고 |
 | `foxglove_bridge` | Job close(kill) | 상태 없음 |
-| `ros2 bag record` | P0 §6 결과에 따라 (a) `AttachConsole`+`CTRL_C_EVENT` 또는 (b) `rosbag2_transport`를 감싼 소형 기록기(stop event) | △ |
+| `ros2 bag record` | 자기 콘솔(`CREATE_NEW_CONSOLE`, 창 숨김)로 띄우고, 종료 때 보조 프로세스가 `AttachConsole(pid)`+`GenerateConsoleCtrlEvent(CTRL_C_EVENT,0)` | ✔ P0 §6: 이 방식만 `metadata.yaml`을 남김(CTRL_BREAK·kill은 실패) |
 
 ## 7. P3를 위한 릴레이 몫
 
@@ -134,7 +134,7 @@ popd
 
 ## 8. `bag_recording.py` 이식
 
-- `signal_group(SIGINT)`(`BagRecording.stop`) → P0 §6에서 고른 방식. `wslpath` 변환 삭제, 경로는 Windows만. 8 s 뒤 `SIGKILL`(`BagRecording.poll`) → `process.kill()`.
+- `signal_group(SIGINT)`(`BagRecording.stop`) → 자기 콘솔로 띄운 기록기에 `AttachConsole`+`CTRL_C_EVENT`(✔ P0 §6). 보조 프로세스는 `FreeConsole`→`AttachConsole`→`SetConsoleCtrlHandler(NULL,TRUE)`→`GenerateConsoleCtrlEvent(CTRL_C_EVENT,0)` 순서로 자기 자신은 끝나지 않게 한다. `wslpath` 변환 삭제, 경로는 Windows만. 8 s 뒤 `SIGKILL`(`BagRecording.poll`) → `process.kill()`.
 
 ## 9. 완료 기준과 회귀 시험
 

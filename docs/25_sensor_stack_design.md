@@ -59,7 +59,7 @@ float32 confidence
 
 카메라 선택: ✔ 핀홀 계산으로 C_FN(HFOV 30°, pitch −1.5°, z 3.04 m)의 최하단 광선은 약 −10.1°라 노면을 카메라 앞 약 17 m부터 본다. C_FW(120°, −8°)는 약 2.4 m부터 본다. 따라서 **근거리 차로(0–30 m)는 C_FW, 원거리·ACC 보조는 C_FN**. △ 실제 CameraInfo로 재확인.
 
-1단계(고전, P2 완료 기준): C_FW(120°, 960×544 perception 축소 영상)의 하단 ROI를 IPM으로 BEV에 펼친다. 카메라 내·외참은 ✔ CameraInfo + `/tf_static`(cabin→C_FW_optical) + `base_link→cabin`으로 정확히 안다. 노면 평면 가정(자차 접지면). BEV에서 밝기 경사·색(흰/노랑)으로 차선 픽셀 → 좌우 RANSAC 3차 다항식 → `Lane.msg`. 밤·비·터널은 1단계 비범위.
+1단계(고전, P2 완료 기준): C_FW(120°, 1280×720의 절반인 640×360 perception 영상)의 하단 ROI를 IPM으로 BEV에 펼친다. 카메라 내·외참은 ✔ CameraInfo + `/tf_static`(cabin→C_FW_optical) + `base_link→cabin`으로 정확히 안다. 노면 평면 가정(자차 접지면). BEV에서 밝기 경사·색(흰/노랑)으로 차선 픽셀 → 좌우 RANSAC 3차 다항식 → `Lane.msg`. 밤·비·터널은 1단계 비범위.
 
 2단계: DNN. **라벨은 GT에서 자동 생성한다.** 지도 provider 차로(✔ 2D world 좌표)와 `world→gt/base_link`·TF·CameraInfo로 차선을 영상에 투영해 마스크를 만든다. 기록 bag에서 수만 장을 자동 라벨링할 수 있으므로 학습 데이터 비용이 없다. 학습은 별도 Python 환경(PyTorch CUDA)에서 하고 ONNX로 내보낸다. 추론은 `ets2_stack` 안에서 ONNX Runtime(CUDA → TensorRT → DirectML EP 순으로 시도)으로 돌려 같은 `Lane.msg`를 낸다. robostack 환경과 PyTorch CUDA를 한 환경에 섞지 않는다. Python 인지 노드는 선택 사항이다. 이 경로가 "GT를 학습에는 쓰되 주행에는 쓰지 않는" 경계다.
 
