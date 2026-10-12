@@ -1,9 +1,14 @@
 #pragma once
-#include "wire.hpp"
+#include "topics.hpp"
 #include "motion_sensors.hpp"
+#include <cstdint>
 #include <set>
+#include <vector>
 struct IWICImagingFactory;
 namespace bridge {
+using Bytes=std::vector<uint8_t>;
+// XCDRv1 messages back to back in data; meta.messages lists topic/offset/length.
+struct Packet {json meta;Bytes data;};
 using Demand=std::set<std::string>;
 struct SensorBundle {json manifest;Bytes data;size_t blob_offset=0;};
 SensorBundle decode_bundle(Bytes data);

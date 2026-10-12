@@ -1,4 +1,4 @@
-# Windows-native ROS 2 Jazzy (RoboStack). P0 spike: docs/22_p0_spike_runbook.md.
+# Windows-native ROS 2 Jazzy (RoboStack): build, relay node, launcher. docs/20, docs/22.
 # Visual Studio 2022+ C++ build tools must be installed separately. Run every
 # ROS build or command through `pixi run` / `pixi shell` (PATH holds Python 2.7).
 [workspace]
@@ -26,6 +26,8 @@ scripts = ["ros2/activate.bat"]
 env = { ROS_DOMAIN_ID = "42", RMW_IMPLEMENTATION = "rmw_fastrtps_cpp", ROS_AUTOMATIC_DISCOVERY_RANGE = "LOCALHOST" }
 
 [tasks]
-build = { cmd = "colcon build --merge-install --packages-select ets2_msgs ets2_bridge ets2_sensor_degradation ets2_autonomy --cmake-args -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF", cwd = "ros2" }
-bridge = { cmd = "ros2 launch ets2_bridge bridge.launch.py config:=$PIXI_PROJECT_ROOT/bridge/config/bridge.local.json" }
-relay = { cmd = "bridge/dist/ets2_relay.exe bridge/config/bridge.local.json" }
+build = { cmd = "colcon build --merge-install --packages-select ets2_msgs ets2_relay ets2_sensor_degradation ets2_autonomy --cmake-args -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON", cwd = "ros2" }
+# Relay alone (host only): pixi run relay bridge/config/bridge.local.json [stop-event] [--input-only]
+relay = { cmd = "ros2/install/lib/ets2_relay/ets2_relay.exe" }
+# Detached GUI: the activated environment passes to pythonw and everything it starts.
+launcher = { cmd = "cmd /c start \"\" pythonw apps/launcher/launcher.py" }

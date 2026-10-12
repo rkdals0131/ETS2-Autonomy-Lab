@@ -1,6 +1,7 @@
 #pragma once
-#include "wire.hpp"
+#include "messages.hpp"
 #include "windows_support.hpp"
+#include <algorithm>
 #include <atomic>
 #include <deque>
 #include <iostream>
@@ -33,14 +34,12 @@ public:
     void put(Bytes b) {if(!b.capacity()) return;std::lock_guard lock(mutex_);free_.push_back(std::move(b));}
 };
 struct Workers {
-    std::atomic<bool> alive{true},network_failed{false},fatal{false};const Socket& state;const Socket& bulk;std::vector<std::jthread> threads;
-    Workers(const Socket& a,const Socket& b):state(a),bulk(b) {}
-    void stop(){alive=false;state.interrupt();bulk.interrupt();for(auto& t:threads) if(t.joinable()) t.join();}
+    std::atomic<bool> alive{true},fatal{false};std::vector<std::jthread> threads;
+    void stop(){alive=false;for(auto& t:threads) if(t.joinable()) t.join();}
     ~Workers(){stop();}
     template<class F> void start(F f) {threads.emplace_back([this,f]{
         try{f();}
-        catch(const TransportError& e) {if(alive.exchange(false)) {network_failed=true;std::cerr<<e.what()<<std::endl;}state.interrupt();bulk.interrupt();}
-        catch(const std::exception& e) {if(alive.exchange(false)) {fatal=true;std::cerr<<e.what()<<std::endl;}state.interrupt();bulk.interrupt();}
+        catch(const std::exception& e) {if(alive.exchange(false)) {fatal=true;std::cerr<<e.what()<<std::endl;}}
     });}
 };
 }

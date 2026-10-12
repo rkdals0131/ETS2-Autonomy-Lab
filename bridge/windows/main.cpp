@@ -4,6 +4,7 @@
 #include "relay_workers.hpp"
 #include "state_source.hpp"
 #include "render_capture.hpp"
+#include "ros_endpoint.hpp"
 #include <filesystem>
 #include <fstream>
 #include <wincodec.h>
@@ -14,53 +15,19 @@ using namespace std::chrono_literals;
 namespace fs=std::filesystem;
 static std::atomic<bool> stopped{false};
 static BOOL WINAPI signal_handler(DWORD) {stopped=true;return TRUE;}
-static std::string wsl_address(const std::string& distro) {
-    if(distro.empty() || distro.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")!=std::string::npos)
-        throw std::runtime_error("wsl_distro must be a WSL distribution name");
-    SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};HANDLE read_raw{},write_raw{};
-    if(!CreatePipe(&read_raw,&write_raw,&sa,0)) throw std::runtime_error("Cannot query WSL address");
-    Handle read(read_raw),write(write_raw);SetHandleInformation(read.h,HANDLE_FLAG_INHERIT,0);
-    Handle job(CreateJobObjectW(nullptr,nullptr));JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-    limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if(!job.h || !SetInformationJobObject(job.h,JobObjectExtendedLimitInformation,&limits,sizeof(limits))) throw std::runtime_error("Cannot own WSL query");
-    STARTUPINFOW startup{sizeof(startup)};startup.dwFlags=STARTF_USESTDHANDLES|STARTF_USESHOWWINDOW;startup.wShowWindow=SW_HIDE;
-    startup.hStdOutput=write.h;startup.hStdError=write.h;startup.hStdInput=GetStdHandle(STD_INPUT_HANDLE);
-    PROCESS_INFORMATION process{};std::wstring command=L"wsl.exe -d "+std::wstring(distro.begin(),distro.end())+L" --cd / --exec ip -j -4 addr show dev eth0";
-    if(!CreateProcessW(nullptr,command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW|CREATE_SUSPENDED,nullptr,nullptr,&startup,&process)) throw std::runtime_error("WSL query failed to start");
-    Handle owner(process.hProcess),thread(process.hThread);
-    if(!AssignProcessToJobObject(job.h,owner.h)) {TerminateProcess(owner.h,1);WaitForSingleObject(owner.h,3000);throw std::runtime_error("Cannot contain WSL query");}
-    ResumeThread(thread.h);
-    if(WaitForSingleObject(owner.h,30000)!=WAIT_OBJECT_0) {
-        TerminateJobObject(job.h,1);WaitForSingleObject(owner.h,3000);throw std::runtime_error("WSL eth0 query timed out");
-    }
-    CloseHandle(std::exchange(write.h,nullptr));
-    char buffer[8192];DWORD size{};if(!ReadFile(read.h,buffer,sizeof(buffer),&size,nullptr)) throw std::runtime_error("No WSL address response");
-    auto result=json::parse(buffer,buffer+size);
-    for(const auto& iface:result) for(const auto& address:iface.at("addr_info"))
-        if(address.at("family")=="inet") return address.at("local");
-    throw std::runtime_error(distro+" has no eth0 IPv4 address");
-}
-// The ROS listener binds bind_address (empty: WSL eth0); the relay connects to the same address.
-static std::string ros_address(const json& config) {
-    const auto configured=config.value("bind_address",std::string{});
-    if(configured.empty()) return wsl_address(config.value("wsl_distro",std::string("Ubuntu")));
-    in_addr parsed{};
-    if(inet_pton(AF_INET,configured.c_str(),&parsed)!=1 || parsed.s_addr==INADDR_ANY)
-        throw std::runtime_error("bind_address must be the ROS host's reachable IPv4 address; leave it empty for WSL eth0");
-    return configured;
-}
 int main(int argc,char** argv) {
     // The game renders synchronously; relay queues can discard old bundles.
-    // Yield CPU scheduling priority without pinning the user's WSL or desktop.
+    // Yield CPU scheduling priority to the game and the desktop.
     if(SetPriorityClass(GetCurrentProcess(),BELOW_NORMAL_PRIORITY_CLASS))
         std::cout<<"Relay CPU priority: below normal"<<std::endl;
     else std::cerr<<"Could not lower relay CPU priority: "<<GetLastError()<<std::endl;
-    SetConsoleCtrlHandler(signal_handler,TRUE);WSADATA winsock{};
-    if(WSAStartup(MAKEWORD(2,2),&winsock)) return 1;
-    struct WinsockEnd {~WinsockEnd(){WSACleanup();}} end;
+    SetConsoleCtrlHandler(signal_handler,TRUE);
     try {
-        const bool input_only=argc>2 && std::string_view(argv[argc-1])=="--input-only";
-        const auto arguments=argc-(input_only?1:0);
+        // Relay arguments come first; anything from --ros-args on belongs to rclcpp.
+        int positional=argc;
+        for(int i=1;i<argc;++i) if(std::string_view(argv[i])=="--ros-args") {positional=i;break;}
+        const bool input_only=positional>2 && std::string_view(argv[positional-1])=="--input-only";
+        const auto arguments=positional-(input_only?1:0);
         if(arguments!=2 && arguments!=3) throw std::runtime_error("Usage: ets2_relay.exe path/to/bridge.local.json [stop-event] [--input-only]");
         Handle stop_event(arguments==3?OpenEventA(SYNCHRONIZE,FALSE,argv[2]):nullptr);
         if(arguments==3 && !stop_event.h) throw std::runtime_error("Launcher stop event unavailable");
@@ -77,7 +44,6 @@ int main(int argc,char** argv) {
         const bool map_images=sensor_stage!="gpu_copy";
         const bool encode_sensors=sensor_stage=="encode" || sensor_stage=="publish";
         const bool publish_sensors=sensor_stage=="publish";
-        const auto token=config.at("token").get<std::string>();if(token.size()<32) throw std::runtime_error("Missing pairing token");
         std::ifstream preset(path.parent_path()/config.at("rig").get<std::string>());json rig;preset>>rig;
         const auto selected=input_only?json::array():config.value("slots",json::array({0}));
         if(!selected.empty()) (void)rig.at("truck_id").get<std::string>();
@@ -112,18 +78,10 @@ int main(int argc,char** argv) {
         const auto owned=[&](json request){request["owner"]=owner;return command(std::move(request));};
         owned({{"cmd","tier"},{"value",1}});
         StateSource source(vehicle,config,core_version);
+        RosEndpoint ros(argc,argv,owned);
         const auto run=[&](double remaining) {
         struct DriveEnd {std::function<json(json)> control;~DriveEnd(){try{control({{"cmd","drive"},{"action","disconnect"}});}catch(...) {}}} drive_end{owned};
         const auto session=uuid_string();
-        const auto ip=ros_address(config);std::cout<<"ROS host IP "<<ip<<"; session "<<session<<std::endl;
-        auto state=connect_to(ip,config.value("state_port",17401),true),bulk=connect_to(ip,config.value("bulk_port",17400),false);
-        send_packet(state,{{"token",token},{"session",session},{"channel","state"},{"wire_version",wire_version}});
-        const auto welcome=receive_packet(state);
-        // Version mismatches are fatal rather than retried: both sides must be rebuilt together.
-        if(const auto ros=welcome.meta.value("wire_version",1);ros!=wire_version)
-            throw std::runtime_error("Wire version mismatch: relay "+std::to_string(wire_version)+", ROS "+std::to_string(ros)+"; rebuild bridge and ros2 from the same commit");
-        if(!welcome.meta.value("ready",false) || welcome.meta.at("session")!=session) throw std::runtime_error(welcome.meta.value("error",std::string("WSL pairing failed")));
-        send_packet(bulk,{{"token",token},{"session",session},{"channel","bulk"}});
         Handle reader(CreateMutexW(nullptr,FALSE,L"Local\\OT_Bundles_Reader"));
         const auto acquired=reader.h?WaitForSingleObject(reader.h,0):WAIT_FAILED;
         if(acquired!=WAIT_OBJECT_0 && acquired!=WAIT_ABANDONED) throw std::runtime_error("Another bundle reader is active");
@@ -131,50 +89,28 @@ int main(int argc,char** argv) {
         if(!lease_ok || stopped) return false;
         RenderCapture capture(owned,rig,patterns,config);
         std::atomic<uint64_t> stream_id{0};
-        std::atomic<bool> capture_wanted{welcome.meta.value("capture",true)},capture_active{false};
-        std::atomic<std::shared_ptr<const Demand>> demand{std::make_shared<const Demand>()};
-        std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0},received{0},last_ack{0};Latency latency,copy_time,encode_time,send_time;
+        std::atomic<bool> capture_active{false};
+        std::atomic<uint64_t> dropped{0},sent{0},bytes_sent{0};Latency copy_time,encode_time,send_time;
         std::atomic<uint64_t> consumed{0},encoded{0},encoded_bytes{0};
         LatestQueue<SensorBundle> read_queue;LatestQueue<Packet> send_queue;ReadBuffers read_buffers;
         std::mutex capture_access;
-        std::mutex state_tx;
-        const auto state_send=[&](const json& meta,std::span<const uint8_t> bytes=std::span<const uint8_t>{}) {std::lock_guard lock(state_tx);send_packet(state,meta,bytes);};
-        Workers workers(state,bulk);
-        workers.start([&]{while(workers.alive) {
-            const auto p=receive_packet(state);if(p.meta.at("session")!=session) throw std::runtime_error("Stale control session");
-            if(p.meta.contains("demand")) demand.store(std::make_shared<const Demand>(p.meta.at("demand").get<Demand>()));
-            if(p.meta.contains("capture")) capture_wanted=p.meta.at("capture").get<bool>();
-            if(p.meta.contains("drive_request")) {
-                const auto& incoming=p.meta.at("drive_request");json reply={{"id",incoming.at("id")},{"accepted",false}};
-                try {auto request=incoming;request.erase("id");request["cmd"]="drive";
-                    // ets2_bridge already dropped stale commands; the window starts at receipt
-                    // on the core's clock (GetTickCount64), so it never exceeds now+200.
-                    if(request.value("action",std::string{})=="command") request["deadline_ms"]=ticks()+200;
-                    reply["state"]=owned(std::move(request));reply["accepted"]=reply["state"].value("accepted",false);}
-                catch(const std::exception& e) {reply["error"]=e.what();}
-                state_send({{"session",session},{"drive_reply",reply}});
-            }
-            if(p.meta.contains("received_bundles")) received=p.meta.at("received_bundles").get<uint64_t>();
-            const auto echo=p.meta.value("echo_us",uint64_t{0});if(echo) {latency.add(echo);last_ack=ticks();}
-        }});
+        Workers workers;
         workers.start([&]{
-            auto fixed=static_messages(rig,patterns,session,source.configuration());add_sensor_configuration(fixed,source.configuration());state_send(fixed.meta,fixed.data);
-            uint64_t diagnostic_time=0,last_stamp=0,last_frame=0,last_send=0,last_gnss_us=0;
+            auto fixed=static_messages(rig,patterns,session,source.configuration());add_sensor_configuration(fixed,source.configuration());ros.publish(fixed);
+            uint64_t diagnostic_time=0,last_stamp=0,last_frame=0,last_gnss_us=0;
             while(workers.alive) {Packet packet{{{"session",session}}, {}};
                 if(const auto sample=source.latest()) {
                     const auto& telemetry=sample->telemetry;
                     const auto frame=telemetry.at("frame_id").get<uint64_t>();
                     if(frame!=last_frame) {
                         last_frame=frame;last_stamp=telemetry.at("paused_simulation_time_us").get<uint64_t>();
-                        packet=state_messages(telemetry,session,base,gt_localization_tf);append_motion_messages(packet,sample->motion,*demand.load(),last_gnss_us);
+                        packet=state_messages(telemetry,session,base,gt_localization_tf);append_motion_messages(packet,sample->motion,*ros.demand(),last_gnss_us);
                     }
                 }
                 if(ticks()-diagnostic_time>=1000) {add_diagnostics(packet,{{"stamp_us",last_stamp},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
-                    {"queue_dropped",dropped.load()},{"capture_active",capture_active.load()},{"status_publish_roundtrip",latency.snapshot()},
+                    {"queue_dropped",dropped.load()},{"capture_active",capture_active.load()},{"drive_commands",ros.diagnostics()},
                     {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}});diagnostic_time=ticks();}
-                if(!packet.data.empty() || ticks()-last_send>=20) {
-                    packet.meta["ping_us"]=microseconds();state_send(packet.meta,packet.data);last_send=ticks();
-                }
+                if(!packet.data.empty()) ros.publish(packet);
                 std::this_thread::sleep_for(2ms);}
         });
         workers.start([&]{std::unique_ptr<Mapping> mapping;Bytes bytes;GpuReadback gpu;while(workers.alive) {
@@ -198,19 +134,19 @@ int main(int argc,char** argv) {
             Microsoft::WRL::ComPtr<IWICImagingFactory> imaging;
             if(FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging)))) throw std::runtime_error("WIC initialization failed");
             while(workers.alive) {SensorBundle bundle;if(read_queue.pop(bundle)) {
-                const auto begin=microseconds();auto packet=sensor_messages(bundle,session,*demand.load(),dropped,stream_id,rig,imaging.Get(),preview_stride);
+                const auto begin=microseconds();auto packet=sensor_messages(bundle,session,*ros.demand(),dropped,stream_id,rig,imaging.Get(),preview_stride);
                 encode_time.add(begin);read_buffers.put(std::move(bundle.data));
                 if(!packet.data.empty()) {++encoded;encoded_bytes+=packet.data.size();
                     if(publish_sensors && send_queue.push(std::move(packet))) ++dropped;}
             }else std::this_thread::sleep_for(2ms);}
         });
-        workers.start([&]{uint64_t heartbeat=0;while(workers.alive) {
-            Packet packet;if(send_queue.pop(packet)) {if(packet.meta.at("native_stream")!=stream_id.load()) continue;const auto begin=microseconds();send_packet(bulk,packet.meta,packet.data);send_time.add(begin);++sent;bytes_sent+=packet.data.size();heartbeat=ticks();}
-            else {if(ticks()-heartbeat>250) {send_packet(bulk,{{"session",session}});heartbeat=ticks();}std::this_thread::sleep_for(2ms);}
+        workers.start([&]{while(workers.alive) {
+            Packet packet;if(send_queue.pop(packet)) {if(packet.meta.at("native_stream")!=stream_id.load()) continue;const auto begin=microseconds();ros.publish(packet);send_time.add(begin);++sent;bytes_sent+=packet.data.size();}
+            else std::this_thread::sleep_for(2ms);
         }});
         const auto start=ticks();uint64_t report=0;Demand previous_demand;json outputs=json::object();
         while(workers.alive && !stopped && lease_ok && ticks()-start<remaining*1000) {
-            const auto requested=demand.load();
+            const auto requested=ros.demand();
             if(*requested!=previous_demand) {
                 outputs=capture_outputs(rig,patterns,*requested);
                 owned({{"cmd","traffic_observation"},{"enabled",requested->contains("/ets2/ground_truth/traffic")}});
@@ -218,33 +154,30 @@ int main(int argc,char** argv) {
             }
             {
                 std::lock_guard access(capture_access);
-                const auto next=capture.reconcile(capture_wanted,outputs,remaining-(ticks()-start)/1000.0);
+                const auto next=capture.reconcile(ros.capture_wanted(),outputs,remaining-(ticks()-start)/1000.0);
                 if(next!=stream_id) {stream_id=next;read_queue.clear();send_queue.clear();}
                 capture_active=capture.active();
             }
-            if(ticks()-report>=1000) {std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
-                {"session",session},{"wsl_ip",ip},{"capture_active",capture_active.load()},{"demand_topics",requested->size()},
+            if(ticks()-report>=1000) {
+                // The launcher reads this line; ACC/LCC ownership comes from the same SDK sample.
+                json drive=nullptr;
+                if(const auto sample=source.latest();sample && sample->telemetry.contains("drive")) {
+                    const auto& d=sample->telemetry.at("drive");
+                    drive={{"armed",d.value("armed",false)},{"axes",d.value("axes",0u)},{"reason",d.value("reason",std::string{})}};
+                }
+                std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
+                {"session",session},{"capture_active",capture_active.load()},{"demand_topics",requested->size()},{"drive",drive},
                 {"diagnostic_sensor_stage",sensor_stage},{"consumed_bundles",consumed.load()},
                 {"encoded_bundles",encoded.load()},{"encoded_bytes",encoded_bytes.load()},
                 {"camera_hz",camera_hz},{"lidar_hz",lidar_hz},
-                {"ros_received_bundles",received.load()},{"ros_ack_age_ms",last_ack.load()?json(ticks()-last_ack.load()):json(nullptr)},
-                {"queue_dropped",dropped.load()},{"status_publish_roundtrip",latency.snapshot()},
+                {"queue_dropped",dropped.load()},{"drive_commands",ros.diagnostics()},
                 {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}}.dump()<<std::endl;report=ticks();}
             std::this_thread::sleep_for(20ms);
         }
         workers.stop();
         if(workers.fatal) throw std::runtime_error("Relay session ended on a data or game error; explicit restart required");
-        return workers.network_failed.load();
         };
-        const auto deadline=ticks()+static_cast<uint64_t>(duration*1000);
-        while(!stopped && lease_ok && ticks()<deadline) {
-            source.latest(); // Surface game/clock errors even while no WSL peer is available.
-            try {if(!run((deadline-ticks())/1000.0)) break;}
-            catch(const TransportError& e) {std::cerr<<e.what()<<std::endl;}
-            if(stopped || !lease_ok || ticks()>=deadline) break;
-            std::cout<<"Network disconnected; render capture is off, motion sensors continue. Resolving the ROS host again."<<std::endl;
-            for(int i=0;i<20 && !stopped && lease_ok;++i) std::this_thread::sleep_for(50ms);
-        }
+        run(duration);
         return lease_ok?0:1;
     } catch(const SensorMountMismatch& e) {std::cerr<<e.what()<<std::endl;return 2;}
     catch(const std::exception& e) {std::cerr<<e.what()<<std::endl;return 1;}

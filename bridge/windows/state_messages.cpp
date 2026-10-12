@@ -54,7 +54,7 @@ Packet static_messages(const json& rig,const json& patterns,const std::string& s
 void add_diagnostics(Packet& packet,const json& values) {
     append_cdr(packet,"/diagnostics",8192,[&](Cdr& c){
         header(c,values.value("stamp_us",uint64_t{0}),"base_link");c<<uint32_t{1}<<uint8_t{0}
-            <<std::string("ets2_bridge")<<std::string("Streaming")<<std::string("Windows relay / WSL Jazzy")<<uint32_t(values.size());
+            <<std::string("ets2_relay")<<std::string("Streaming")<<std::string("Windows relay")<<uint32_t(values.size());
         for(const auto& item:values.items()) c<<item.key()<<item.value().dump();
     });
 }

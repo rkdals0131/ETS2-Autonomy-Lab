@@ -1,13 +1,12 @@
-"""Create local pairing/settings; never writes credentials to tracked configuration."""
+"""Create the local relay settings file; tracked configuration stays untouched."""
 import json
 from pathlib import Path
-import secrets
 
 path = Path(__file__).parent / "config" / "bridge.local.json"
 if path.exists():
     raise SystemExit(f"Existing settings preserved: {path}")
 path.write_text(json.dumps({
-    "token": secrets.token_hex(32), "state_port": 17401, "bulk_port": 17400, "wsl_distro": "Ubuntu", "bind_address": "", "gt_localization_tf": True,
+    "gt_localization_tf": True,
     "rig": "../../ot/presets/phase1-highway-fh4-private.json", "slots": [3, 4, 6, 7],
     "lidar": "../../ot/presets/phase1-lidar-private.json",
     "duration_s": 60, "color_gain": 1.0, "auto_exposure": True, "shared_gpu": True,

@@ -1,5 +1,5 @@
 #pragma once
-#include "wire.hpp"
+#include "messages.hpp"
 #include "windows_support.hpp"
 #include "../../ot/include/ipc_reader.hpp"
 
