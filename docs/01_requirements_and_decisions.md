@@ -14,10 +14,10 @@ Phase 1 범위는 운전자 감독 아래 고속도로 ACC·차로 유지·사�
 | --- | --- | --- | --- |
 | G1 | 목표 | 게임 내 자율주행만. 실차·창업 없음 | 사용자 확인 2026-10-12 |
 | G2 | GT 사용 | `/ets2/ground_truth/*`, `world→base_link`(GT)는 평가·baseline 전용. 스택 입력은 `/sensing/*`와 `/ets2/camera|lidar|imu|wheels|gnss` | 목표 G1 |
-| P1 | 실행 환경 | **Windows 네이티브 ROS 2 Jazzy(RoboStack/pixi)**. WSL은 포팅 P1 완료 시 폐기 | Ubuntu가 필요했던 이유(Autoware 패키지 그대로 의존, 실차 이식)가 G1으로 사라짐. [포팅 계획](20_windows_native_port_plan.md) |
+| P1 | 실행 환경 | **Windows 네이티브 ROS 2 Jazzy(RoboStack/pixi)**. ✔ 2026-10-12 P1로 이전 실행 환경 코드 삭제 | Ubuntu가 필요했던 이유(Autoware 패키지 그대로 의존, 실차 이식)가 G1으로 사라짐. [포팅 계획](20_windows_native_port_plan.md) |
 | P2 | ROS 범위 | 메시지 버스·rosbag2·Foxglove·Python 인지와의 경계만. 알고리즘은 rclcpp 비의존 라이브러리 + 얇은 노드 래퍼 | 기록·재생·시각화를 다시 만들지 않기 위해 ROS를 남기고, 그 밖의 결합은 피함 |
 | P3 | Autoware | 메시지 패키지는 선택(win-64 바이너리 있음). 알고리즘 패키지 의존 없음. 필요하면 알고리즘 소스를 복사해 라이브러리로 감쌈 | ✔ 알고리즘 패키지(예: autoware_simple_pure_pursuit)는 win-64 빌드가 없음 |
-| P4 | 릴레이 | Windows 릴레이가 단일 ROS 노드가 됨. TCP 전송·세션 pairing·wire_version 삭제 | 같은 프로세스에서 CDR을 바로 publish. ✔ 릴레이는 이미 XCDRv1 바이트를 만듦 |
+| P4 | 릴레이 | Windows 릴레이가 단일 ROS 노드(`ets2_relay`)가 됨. TCP 전송·세션 pairing·wire_version 삭제(✔ 2026-10-12) | 같은 프로세스에서 CDR을 바로 publish. ✔ 릴레이는 이미 XCDRv1 바이트를 만듦 |
 | P5 | 프로세스 경계 | 자율주행 스택은 릴레이와 **별도 프로세스**. 게임 공유메모리 소비자는 릴레이 하나 | 릴레이가 lease·GPU를 소유하므로 알고리즘 크래시와 수집 복구를 분리. ✔ 번들 reader mutex는 단일 소유 |
 | P6 | HUD | 스택은 궤적을 `base_link`+센서 stamp로 내고, **릴레이**가 자기 SDK 자세 이력으로 `world`로 바꿔 공유메모리 블록으로 core에 넘긴다. core는 world 폴리라인을 그 프레임의 렌더 카메라로 투영해 톤매핑 결과(`main0/composition_out`)에 블릿 직전 데칼로 그린다. 가림은 외부 pass 깊이 범위 비교로. pipe는 enable/disable만 | 스택은 GT를 모르고(G2), 게임 DLL 변경은 최소화. ✔ 실내는 별도 pass·깊이 [0.9,1.0]이라 범위 비교로 가려짐([20 §0 A4](20_windows_native_port_plan.md#0-2026-10-12-읽기-전용-실측)). ✔ pipe는 단일 인스턴스라 표시 데이터를 안전 명령 채널에 태우지 않음 |
 | P7 | 후퇴 경로 | 포팅 P0 스파이크가 실패하면 ROS 없이 공유메모리 + C++ 단일 프로세스 + Foxglove SDK | P0 전에는 아무것도 지우지 않으므로 후퇴 비용 0 |

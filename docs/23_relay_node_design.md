@@ -1,6 +1,6 @@
 # 릴레이 ROS 노드 설계 (P1)
 
-[포팅 계획](20_windows_native_port_plan.md) P1의 상세입니다. 센서 계산·수집·CDR 생성은 건드리지 않고 전송 계층을 rclcpp로 바꿉니다. 코드 인용은 `파일:심볼`입니다.
+[포팅 계획](20_windows_native_port_plan.md) P1의 상세입니다. 센서 계산·수집·CDR 생성은 건드리지 않고 전송 계층을 rclcpp로 바꿉니다. ✔ 2026-10-12 구현(게임 시험 전). 아래는 설계 기록이며 달라진 점은 [20 P1](20_windows_native_port_plan.md#p1-릴레이를-ros-노드로-접기-m---코드-완료-2026-10-12-게임-시험-남음)에 있습니다. 코드 인용은 `파일:심볼`입니다.
 
 ## 1. 현재 릴레이의 스레드와 바꿀 지점
 
@@ -46,14 +46,14 @@ public:
 
 | 대상 | 처리 |
 | --- | --- |
-| `main.cpp:wsl_address`·`ros_address` | 삭제 |
+| `main.cpp`의 ROS 호스트 주소 조회 | 삭제 |
 | `main.cpp:run`의 connect·hello·`wire_version`·welcome, `state_tx`·`state_send`, control rx worker, bulk heartbeat, 재연결 루프 | 삭제·교체(§1) |
 | `relay_workers.hpp:Workers`의 소켓 인자·`TransportError`·`network_failed` | 제거 |
 | `wire.hpp`의 `Socket`·`connect_to`·`transfer`·`send_packet`·`receive_*` | 삭제 |
-| `state_messages.cpp:add_diagnostics`의 `status_publish_roundtrip`, 하드웨어 문자열 "Windows relay / WSL Jazzy" | 명령 나이 p50/p99·publish 소요로 교체, 문자열 "Windows relay" |
+| `state_messages.cpp:add_diagnostics`의 `status_publish_roundtrip`, 하드웨어 문자열 | 명령 나이 p50/p99·publish 소요로 교체, 문자열 "Windows relay" |
 | `/ets2/sensors/config`의 `wire_version`(`state_source.cpp`) | 삭제, `msgs_version` 유지 |
 | `ros2/src/ets2_bridge` | 삭제. `config/fastdds.xml`·`config/foxglove.yaml`은 `bridge/config/`로. launch 파일은 CLI 편의용으로 `bridge/config/foxglove.launch.py`에 선택 보존 |
-| `bridge.local.json`의 `token`·`state_port`·`bulk_port`·`wsl_distro`·`bind_address`, `configure.py` 기본값 | 제거 |
+| `bridge.local.json`의 `token`·`state_port`·`bulk_port`·배포판 이름·`bind_address`, `configure.py` 기본값 | 제거 |
 | `tests/wire_test.cpp` | `msgs_version` 대조만 `topics_test.cpp`로. `tests/CMakeLists.txt`의 WIN32 차단 제거, MSVC는 sanitizer 생략 |
 
 ## 4. 빌드 배치: 릴레이를 colcon 패키지로
@@ -95,16 +95,16 @@ ament_package()
 
 | 현재 | 변경 |
 | --- | --- |
-| `Controller.wsl_exec`·`linux_paths` | 삭제 |
-| `Controller._start`: WSL 세션 spawn, `session.command` | `ros2 run foxglove_bridge foxglove_bridge --ros-args --params-file bridge/config/foxglove.yaml -p address:=127.0.0.1`을 Job에 spawn → 즉시 `_start_relay()`. 준비 판정은 `127.0.0.1:8765` 소켓 연결 성공 |
-| `_signal_wsl`·heartbeat | 삭제 |
-| `_drive`: WSL 세션에 위임 | `ros2 run ets2_autonomy drive_speed --ros-args -p arm:=true -p path_file:=… -p acc_enabled:=… -p lcc_enabled:=… -p target_speed_mps:=…`(✔ `ros_session.py:run_session`의 인자)를 Job에 spawn, `--stop-event` 전달. 모드 변경은 `ros2 service call /ets2_drive_speed/set_parameters_atomically rcl_interfaces/srv/SetParametersAtomically` 한 번으로 세 값을 원자적으로(✔ 기존 `ros_session.py`의 `SetParametersAtomically`와 같은 의미; `param set` 3회는 중간 상태가 생기고 Windows에서 CLI 시작이 3번 든다), 실패는 로그 |
+| 이전 세션 실행·경로 변환 헬퍼 | 삭제 |
+| `Controller._start`: 이전 세션 spawn | `ros2 run foxglove_bridge foxglove_bridge --ros-args --params-file bridge/config/foxglove.yaml -p address:=127.0.0.1`을 Job에 spawn → 즉시 `_start_relay()`. 준비 판정은 `127.0.0.1:8765` 소켓 연결 성공 |
+| 세션 신호·heartbeat | 삭제 |
+| `_drive`: 이전 세션에 위임 | `ros2 run ets2_autonomy drive_speed --ros-args -p arm:=true -p path_file:=… -p acc_enabled:=… -p lcc_enabled:=… -p target_speed_mps:=…`(✔ `ros_session.py:run_session`의 인자)를 Job에 spawn, `--stop-event` 전달. 모드 변경은 `ros2 service call /ets2_drive_speed/set_parameters_atomically rcl_interfaces/srv/SetParametersAtomically` 한 번으로 세 값을 원자적으로(✔ 기존 `ros_session.py`의 `SetParametersAtomically`와 같은 의미; `param set` 3회는 중간 상태가 생기고 Windows에서 CLI 시작이 3번 든다), 실패는 로그 |
 | `_record` | `BagRecording`을 런처 안에서 직접 사용(§7) |
 | `_stop`: systemd 정지·확인 | 삭제. stop event set → 각 프로세스 wait → Job close |
 | `_observe`: `session_status` 해석, `observed_drive` | 릴레이 stdout JSON만. 릴레이 1 Hz JSON에 `drive.armed`·`axes`·`reason`을 추가해(✔ telemetry의 `drive`, `state_messages.cpp:state_messages`가 이미 읽음) 그 값으로 ACC/LCC 실제 상태 표시. "연결됨" 판정은 `now-last_relay<3` |
-| 상태 행 "WSL ROS / Foxglove" | "Foxglove 서버"(PID·포트) |
+| 이전 ROS 세션 상태 행 | "Foxglove 서버"(PID·포트) |
 
-삭제 파일: `session.py`, `ros_session.py`, `processes.py`, `linux_launcher.py`, `apps/launch.sh`, `bridge/ros-env.sh`.
+삭제 파일: 이전 세션 관리(`session.py`·`ros_session.py`·`processes.py`), Linux 진입점(`linux_launcher.py`·`apps/launch.sh`), 셸 환경 스크립트.
 
 `launch.cmd` 최종 형태:
 
@@ -134,14 +134,14 @@ popd
 
 ## 8. `bag_recording.py` 이식
 
-- `signal_group(SIGINT)`(`BagRecording.stop`) → 자기 콘솔로 띄운 기록기에 `AttachConsole`+`CTRL_C_EVENT`(✔ P0 §6). 보조 프로세스는 `FreeConsole`→`AttachConsole`→`SetConsoleCtrlHandler(NULL,TRUE)`→`GenerateConsoleCtrlEvent(CTRL_C_EVENT,0)` 순서로 자기 자신은 끝나지 않게 한다. `wslpath` 변환 삭제, 경로는 Windows만. 8 s 뒤 `SIGKILL`(`BagRecording.poll`) → `process.kill()`.
+- POSIX 그룹 신호(`BagRecording.stop`) → 자기 콘솔로 띄운 기록기에 `AttachConsole`+`CTRL_C_EVENT`(✔ P0 §6). 보조 프로세스는 `FreeConsole`→`AttachConsole`→`SetConsoleCtrlHandler(NULL,TRUE)`→`GenerateConsoleCtrlEvent(CTRL_C_EVENT,0)` 순서로 자기 자신은 끝나지 않게 한다. 경로 변환 삭제, 경로는 Windows만. 8 s 뒤 `SIGKILL`(`BagRecording.poll`) → `process.kill()`.
 
 ## 9. 완료 기준과 회귀 시험
 
 1. `pixi run build` 한 번으로 `ets2_msgs`·`ets2_relay`·`ets2_sensor_degradation`·`ets2_autonomy` 빌드.
-2. 런처 시작 → Foxglove 수신(P0 A·B 동일) → `wsl.exe`·`vmmemWSL` 없음.
+2. 런처 시작 → Foxglove 수신(JPEG 4·표시용 점군 3·TF·`/diagnostics`)·전체 점군 약 10 Hz.
 3. GT baseline 회귀(W00 선행): 입력·상태만 → GT 주행 30 km/h → 약 453 m, 중심 오차 0.03–0.57 m.
 4. [21](21_safety_checklist.md) #6·#7 재수행.
 5. 중지·창 닫기·릴레이 강제 종료에서 lease 해제·Tier 0(✔ 런처 `_stop`의 5.1 s 대기 유지).
 6. 진단에 명령 나이 p50/p99가 나오고 p99 < 20 ms(△ 목표치, BELOW_NORMAL 우선순위에서 측정).
-7. `git grep -n -E "wsl|eth0|systemd|OTR1|wire_version"`이 `docs/legacy` 밖에서 비어 있음.
+7. ✔ 코드에서 `git grep -n -E "wsl|eth0|systemd|OTR1|wire_version"` 0건(문서는 기록용 언급만).

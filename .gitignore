@@ -26,7 +26,6 @@ venv/
 /ot/dist/
 /ot/backup/
 /bridge/build/
-/bridge/dist/
 /bridge/recordings/
 /ros2/build/
 /ros2/install/

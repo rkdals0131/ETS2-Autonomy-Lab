@@ -73,7 +73,7 @@ NavSatFix에는 WGS84 위치와 ENU 공분산을 넣고, fixed/float·보정 정
 
 ## 노이즈 모델 추가 위치
 
-현재 노이즈 생성 코드·파라미터·난수 seed는 없습니다. 상태 센서 잡음을 추가할 위치는 `bridge/windows/motion_sensors.cpp`의 이상적 측정 계산과 `MotionSample` 반환 사이입니다. 영상 노이즈가 필요하면 JPEG 이전 GPU 영상에 적용합니다. WSL은 수신·발행을 담당합니다.
+현재 노이즈 생성 코드·파라미터·난수 seed는 없습니다. 상태 센서 잡음을 추가할 위치는 `bridge/windows/motion_sensors.cpp`의 이상적 측정 계산과 `MotionSample` 반환 사이입니다. 영상 노이즈가 필요하면 JPEG 이전 GPU 영상에 적용합니다. 상태 센서 잡음은 현재 `ets2_sensor_degradation`(`/ets2/*` → `/sensing/*`)이 담당합니다.
 
 | 센서 | 모델에 넣을 특성 |
 | --- | --- |

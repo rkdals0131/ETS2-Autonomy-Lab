@@ -1,6 +1,6 @@
 # ROS 2 토픽 계약
 
-Windows 릴레이가 메시지를 만들고 ROS 2 Jazzy에 발행합니다. 전송 계층은 포팅 중입니다. 현재는 WSL의 `ets2_bridge`가 TCP로 받아 GenericPublisher로 발행하고([legacy/16 전송](legacy/16_ros2_bridge.md#전송)), P1 이후에는 릴레이 자신이 노드가 되어 직접 발행합니다([포팅 계획](20_windows_native_port_plan.md)). 아래 토픽·QoS·수집·시계·복구 계약은 두 경우에 같습니다.
+Windows 릴레이 노드(`ros2/src/ets2_relay`, 소스 `bridge/windows`)가 XCDRv1 메시지를 직접 만들어 ROS 2 Jazzy에 발행합니다(중간 전송 없음). 이전 TCP 전송은 [legacy/16](legacy/16_ros2_bridge.md#전송)에 있습니다.
 
 ## 토픽
 
@@ -45,7 +45,7 @@ TF는 `base_link → cabin → sensors`, `base_link → imu_link / gnss_link`, `
 
 ## 시계·복구
 
-`/clock`과 센서 stamp는 `paused_simulation_time_us`입니다. pause 동안 `/clock`은 정지하고 상태 전송은 유지되며 준비된 센서 묶음은 폐기합니다. 운전 명령·watchdog은 steady clock입니다. `DriveCommand.sent_steady_ns`는 발행 프로세스의 monotonic 시각이며 수신 쪽(현재 `ets2_bridge`, P1 이후 릴레이 노드)이 자기 steady clock과의 차이로 `max_command_age_ms`(기본 50)보다 오래된 명령을 버립니다. 따라서 발행자와 수신자가 **같은 원점의 시계**를 써야 합니다. Windows에서는 QPC 기반이어야 합니다: C++ `std::chrono::steady_clock`(MSVC=QPC), Python `time.perf_counter_ns()`. ✔ Python 3.12의 `time.monotonic`은 GetTickCount64 기반(15.6 ms 분해능)이고 2026-10-12 이 PC에서 QPC보다 35.5 ms 뒤였습니다. 50 ms 한도의 대부분을 시작부터 잃으므로 쓰지 않습니다. `perf_counter_ns`와 QPC의 차이는 호출 간격(0.7 µs)뿐이었습니다([22 §8](22_p0_spike_runbook.md#8-명령-시계-확인)).
+`/clock`과 센서 stamp는 `paused_simulation_time_us`입니다. pause 동안 `/clock`은 정지하고 상태 전송은 유지되며 준비된 센서 묶음은 폐기합니다. 운전 명령·watchdog은 steady clock입니다. `DriveCommand.sent_steady_ns`는 발행 프로세스의 monotonic 시각이며 릴레이 노드가 자기 steady clock과의 차이로 `max_command_age_ms`(기본 50)보다 오래된 명령을 버립니다. 따라서 발행자와 수신자가 **같은 원점의 시계**를 써야 합니다. Windows에서는 QPC 기반이어야 합니다: C++ `std::chrono::steady_clock`(MSVC=QPC), Python `time.perf_counter_ns()`. ✔ Python 3.12의 `time.monotonic`은 GetTickCount64 기반(15.6 ms 분해능)이고 2026-10-12 이 PC에서 QPC보다 35.5 ms 뒤였습니다. 50 ms 한도의 대부분을 시작부터 잃으므로 쓰지 않습니다. `perf_counter_ns`와 QPC의 차이는 호출 간격(0.7 µs)뿐이었습니다([22 §8](22_p0_spike_runbook.md#32-명령-시계)).
 
 lease가 만료되면 Tier 0으로 복귀합니다. F11은 lease를 취소하고 사용자 시작을 기다립니다. `/ets2/capture=false`는 렌더 hook·stream을 해제하고 Tier 1 물리 읽기·IMU·휠·GNSS를 유지합니다. 릴레이 중지·재시작은 새 `sensor_session`·오도메트리 원점·GNSS 기준점을 만들며, 게임 시각 초기화·차량 구성 변경은 명시적 재시작을 요구합니다.
 

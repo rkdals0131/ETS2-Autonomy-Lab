@@ -60,7 +60,6 @@ pause 중 센서 준비와 시계 처리를 섞으면 상태 전송이나 재개
 - 렌더 스레드 Map·대용량 복사와 반복 버퍼 생성이 프레임을 늘렸습니다. 재사용 버퍼·공유 텍스처·fence로 readback을 중계기로 옮겼습니다.
 - 프로세스 내부 관측의 반복 ReadProcessMemory와 pass 문자열 스캔 비용을 SEH memcpy·pass 식별·비수집 callback 조기 종료로 줄였습니다.
 - 기본 미러와 attributes_0을 입력으로 쓰는 후처리 pass에서도 차량 정보를 반복 수집했습니다. 0.24.2는 요청 카메라의 형상 출력 pass로 범위를 좁혔고 같은 장면의 전체 브리지가 31.39 → 39.24 FPS로 개선됐습니다.
-- 두 TCP 경로로 영상 송신과 상태 응답을 분리했습니다. WSL localhost 경로는 약 0.55Gbps, eth0 직접 연결은 약 6.1Gbps의 중간 종료 표본을 얻어 직접 연결을 채택했습니다.
 - Python 기록에 XYZ를 중복 저장하자 worker를 늘려도 누락이 남았습니다. 빔 range·설정으로 XYZ를 복원하고 실시간 경로는 GPU gather로 옮겼습니다.
 
 현재 성능 표와 남은 CPU·드라이버 경합 가설은 [성능 진단](../18_performance.md)에 있습니다.
@@ -69,7 +68,14 @@ pause 중 센서 준비와 시계 처리를 섞으면 상태 전송이나 재개
 
 RenderDoc으로 시작한 첫 게임이 Steam에서 새 프로세스로 재실행돼 캡처 연결이 빠졌습니다. 조사 실행에 임시 App ID 설정을 사용했고 캡처 뒤 제거했습니다. RenderDoc Python 스크립트는 내장 환경에서 실행해야 renderdoc 모듈을 사용할 수 있습니다.
 
-Zsh에서 Bash용 ROS setup을 source하면 setup 경로가 잘못 계산됐습니다. `ros-env.sh`가 셸에 맞는 setup을 선택합니다. 런처는 Bash 환경을 직접 준비합니다.
+## Windows 네이티브 ROS 2 전환(2026-10-12)
+
+- RoboStack win-64의 foxglove-bridge(3.6.0·3.4.3)가 `foxglove.dll`·`foxglove_cpp_shared.dll`을 PATH 밖 `Library\lib`에 설치해 `0xC0000135`로 죽었습니다. `ros2/activate.bat`이 그 폴더를 PATH 맨 뒤에 붙입니다. 버전 고정은 빌드 번호가 달라 배포판 전체를 이전 스냅숏으로 내리므로 해결책이 아니었습니다.
+- `ros2 bag record`는 CTRL_C에서만 MCAP·`metadata.yaml`을 마무리합니다. CTRL_BREAK·kill은 헤더만 남겼습니다. 기록기를 숨긴 자기 콘솔로 띄우고 보조 프로세스가 `AttachConsole`로 CTRL_C를 보냅니다.
+- Python 3.12의 `time.monotonic`은 GetTickCount64라 QPC보다 35.5 ms 뒤였습니다. 50 ms 명령 나이 한도에서 Python 발행기는 `perf_counter_ns`를 씁니다.
+- rclcpp executor를 `rclcpp::init`보다 먼저 만들면 기본 컨텍스트가 없어 예외로 끝납니다. 릴레이 노드의 executor는 init 뒤에 만들며, 게임 없이 도는 endpoint gtest가 이를 잡았습니다.
+- 출력을 캡처하는 스크립트에서 `ros2 topic list`가 끝나지 않았습니다. 새로 뜬 ros2 daemon이 파이프를 물고 있어서이며 `--no-daemon`을 씁니다.
+- 상주 loader의 controls 파서가 custom modifier(`!`·`&`·`joy.b5`·빈 mix)를 몰라 실제 프로필을 거절했고, 축약 fixture만 쓰던 테스트는 이를 놓쳤습니다. 실제 프로필에서 뽑은 fixture를 함께 돌립니다.
 
 ## 외부 플러그인의 문서와 소비 코드
 

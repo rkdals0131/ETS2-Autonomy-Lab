@@ -22,7 +22,7 @@
 | `ot/` 게임 어댑터, 공유메모리, 운전 pipe | 유지 | ✔ Windows 전용. `ot/native/ipc_layout.hpp`, `drive_api.hpp` |
 | 릴레이의 센서 계산·CDR 생성 | 유지, 역할 확대 | ✔ XCDRv1 바이트를 이미 만듦(`bridge/windows/state_messages.cpp`, `image_messages.cpp`, `ros_cdr.hpp:append_cdr`) |
 | TCP 전송·세션·`wire_version` | 삭제 | ✔ `bridge/common/wire.hpp`(Socket·send_packet·receive_*), `bridge/windows/main.cpp:run`의 connect·hello, `ros2/src/ets2_bridge` 전체 |
-| WSL 주소 조회·systemd 세션·Linux 런처 | 삭제 | ✔ `main.cpp:wsl_address`·`ros_address`, `apps/launcher/session.py:command`, `ros_session.py`, `processes.py`, `linux_launcher.py`, `apps/launch.sh` |
+| 이전 실행 환경(ROS 호스트 주소 조회·세션 관리·Linux 진입점) | ✔ 삭제(2026-10-12) | 릴레이 주소 조회, 런처 세션 모듈 3개, Linux 런처, `apps/launch.sh` |
 | `ets2_msgs`, rosbag2 MCAP, foxglove_bridge | 유지 | ✔ robostack-jazzy win-64: rosbag2-storage-mcap 0.26.11, foxglove-bridge 3.6.0, vision-msgs 4.1.1, rmw-fastrtps-cpp 8.4.4 |
 | `ets2_sensor_degradation` | 유지 | GT를 안 쓰는 방향에 필요 |
 | `ets2_autonomy`(GT baseline) | 유지, 동결 | 비교 기준. 알고리즘 개선 없음. 시험 도구(`drive_hold`) 추가만 |
@@ -37,8 +37,8 @@
 | 단계 | 크기 | 선행 | 게임 실행 |
 | --- | --- | --- | --- |
 | W00 조향·페달 프로필 파서 보완(안전 선행) | S | 없음 | 예 |
-| P0 스파이크: Windows ROS 2에서 기존 릴레이와 loopback 연결, WSL과 A/B | S | 없음 | 예 |
-| P1 접기: 릴레이를 ROS 노드로, 전송·WSL·Linux 런처 삭제 | M | P0 go, W00(회귀 시험) | 예 |
+| P0 스파이크: Windows ROS 2 확인 — ✔ 게임 없는 항목 완료, 게임 항목은 P1 완료 기준으로 흡수 | S | 없음 | 예 |
+| P1 접기: 릴레이를 ROS 노드로, 전송·이전 실행 환경 삭제 — ✔ 코드 완료 2026-10-12, 게임 시험 남음 | M | W00(회귀 시험) | 예 |
 | P2 스택 배치: 별도 C++ 프로세스 | M | P1 | 예 |
 | P3 HUD 궤적 데칼 | M | P1 | 예 |
 | P4 문서·테스트 정리 | S | P1 | 아니오 |
@@ -53,8 +53,8 @@
 - ✔ `manual_input.cpp:Parser`: 단항 `!`, 이항 `&`. 우선순위 `|` < `&` < `+`·`-` < `*`·`/` < `?`, 단항 `!`·`-`·`+`는 `?`까지 포함한 피연산자에 붙는다(`! x?0`은 `!(x?0)`). `&&`·`||`는 엔진 의미가 확인되지 않아 **지원하지 않고 프로필을 거절**한다(추측보다 fail closed). 조향·페달 closure에는 쓰이지 않는다.
 - ✔ `manual_input.cpp:Impl::eval`: `unbound`는 값 없음(`?` 기본값으로 감), 빈 mix(본문이 빈 `cstm_mod_2`–`cstm_mod_6`)는 0. 근거: 게임에서 패드 스로틀이 동작하려면 `(! cstm_mod_2)`가 1이어야 한다. `memory(c, v)`는 c가 0인 동안 마지막 값을 유지한다(LB를 누른 동안 게임 스로틀이 멈추는 것과 같음). v는 여전히 평가되므로 **LB+RT도 수동 개입으로 판정**해 소유권을 푼다(보수적).
 - ✔ `input_device.cpp:InputDevice::sample`: `PhysicalInput.buttons`=XInput `wButtons`. `joy.bN` 대응은 기본 Xbox 프로필의 기능 배치에서 추론한 값이다: b1 A, b2 B, b3 X, b4 Y, b5 LB, b6 RB, b9 LS, b10 RS, b11 Back, b12 Start. b7·b8은 엔진이 트리거 축에서 만드는 버튼이라 미지원. △ 게임에서 확인 전(아래 완료 기준).
-- ✔ `tests/fixtures/controls_xbox_cstm.sii`: 실제 프로필에서 조향·페달 closure와 상수만 뽑은 fixture(`no_cstm_mod`, 데드존 0/0). `drive_control_test`가 두 fixture로 돈다: 휴지 중립, 데드존 0에서 트리거 0.001도 개입, LB 유지 중 스로틀 값 유지·개입 판정, `&&`·`||` 거절. ✔ WSL g++ ASan/UBSan 통과, 실제 controls.sii로도 통과.
-- ✔ `ets2_autonomy/drive_hold`: arm → 고정 명령 50 Hz(`sent_steady_ns`) → Ctrl+C 또는 `--stop-event`(Windows)에서 disarm. DriveState reason 변화를 시뮬레이션 시각과 함께 출력. 종료 코드 0 disarm, 1 오류, 2 게임이 해제. ✔ WSL에서 모의 drive 엔드포인트로 50 Hz·명령 나이 < 1.2 ms·disarm·해제 경로 확인. GT 노드와 공유하는 `control/drive_session.hpp`(StopSignal·`request_drive_control`·`steady_ns`)로 GT 노드도 `--stop-event`를 받는다.
+- ✔ `tests/fixtures/controls_xbox_cstm.sii`: 실제 프로필에서 조향·페달 closure와 상수만 뽑은 fixture(`no_cstm_mod`, 데드존 0/0). `drive_control_test`가 두 fixture로 돈다: 휴지 중립, 데드존 0에서 트리거 0.001도 개입, LB 유지 중 스로틀 값 유지·개입 판정, `&&`·`||` 거절. ✔ g++ ASan/UBSan(당시 Linux)과 MSVC에서 통과, 실제 controls.sii로도 통과.
+- ✔ `ets2_autonomy/drive_hold`: arm → 고정 명령 50 Hz(`sent_steady_ns`) → Ctrl+C 또는 `--stop-event`(Windows)에서 disarm. DriveState reason 변화를 시뮬레이션 시각과 함께 출력. 종료 코드 0 disarm, 1 오류, 2 게임이 해제. ✔ 모의 drive 엔드포인트로(Linux·Windows) 50 Hz·명령 나이 < 1.2 ms·disarm·해제 경로 확인. GT 노드와 공유하는 `control/drive_session.hpp`(StopSignal·`request_drive_control`·`steady_ns`)로 GT 노드도 `--stop-event`를 받는다.
 
 빌드·설치(2026-10-12):
 - ✔ VS 2022 Build Tools로 core/loader 0.31.0 빌드(/W4 경고 없음). MSVC `ot_drive_test`가 두 fixture와 실제 controls.sii에서 통과.
@@ -63,26 +63,22 @@
 남은 것(게임 필요):
 - 완료 기준: `ot.cmd version`에서 `drive.profile_supported=true`. disarmed 상태에서 LB를 누른 채 RT를 당겨 `drive status`의 `manual_throttle`이 유지되는지 보고 b5=LB를 확인. [21](21_safety_checklist.md) #0(데드존 0/0 휴지 노이즈 30 s) 통과.
 
-### P0. 스파이크 (S)
+### P0. 스파이크 (S) — P1에 흡수
 
-목표: 아무것도 지우지 않은 채 Windows에서 Foxglove 수신·bag 기록·재생이 되고, 같은 세션·같은 장면에서 WSL과 Windows를 번갈아 측정(A/B)해 나쁘지 않음을 본다. 실패하면 [01 P7](01_requirements_and_decisions.md)로 간다. 절차·판정 표는 [22](22_p0_spike_runbook.md).
+2026-10-12에 게임 없이 할 수 있는 Windows 확인을 마쳤다: ✔ pixi 환경과 `pixi.lock`, VS 2022로 네이티브 빌드, foxglove-bridge DLL 경로 우회, rosbag2는 CTRL_C로만 MCAP을 마무리, 명령 시계 원점(C++ `steady_clock`·Python `perf_counter_ns` 동일, `time.monotonic`은 35.5 ms 어긋남), DDS 탐색. 사용자가 WSL을 이미 제거해 WSL 대비 A/B는 할 수 없으므로, 남은 게임 확인(Foxglove 수신·전체 점군·bag·frame time)은 P1 완료 기준으로 옮겼다. P0용으로 바꾼 TCP 수신기는 P1에서 삭제됐다. 기록은 [22](22_p0_spike_runbook.md).
 
-- `ros2/src/ets2_bridge/src/main.cpp`: `<ifaddrs.h>`·`eth0`를 `#ifndef _WIN32`, Windows는 `bind_address` 필수, `WSAStartup`/`WSACleanup`, ✔ `listener`의 `setsockopt(... ,&yes,...)`는 MSVC에서 `const char*` 캐스트 필요, `CMakeLists.txt`에 `ws2_32` 링크(✔ 지금은 nlohmann_json만 링크).
-- `bridge.launch.py`: Windows에서 `ip -j` 호출 금지, `bind_address` 없으면 오류.
-- `bridge/config/bridge.local.json`: `bind_address: "127.0.0.1"`(✔ `main.cpp:ros_address`가 읽음).
-- `pixi.toml`(RoboStack 템플릿 형태, `compilers`, activation 스크립트로 overlay 활성화, `FASTRTPS_DEFAULT_PROFILES_FILE`·`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`), `pixi.lock` 커밋.
-- 판정: Foxglove 수신, 전체 점군 통과, bag 기록·재생, **PresentMon frame time p50/p99·CPU/GPU busy의 A/B**(FPS 기준선 66.00은 core 0.26.1·FH5 값이라 쓰지 않음), 프레임 리미터 유무 기록, rosbag2 종료 방식 확인(§B9).
+### P1. 릴레이를 ROS 노드로 접기 (M) — ✔ 코드 완료 2026-10-12, 게임 시험 남음
 
-### P1. 릴레이를 ROS 노드로 접기 (M)
+설계는 [23](23_relay_node_design.md). 구현:
+- ✔ `bridge/windows/ros_endpoint.*`: GenericPublisher(기존 QoS 규칙), 200 ms 구독 수 → demand, `/ets2/capture`, `/ets2/drive/control`(서비스 콜백에서 core 동기 호출), `/ets2/drive/command`(검증·`max_command_age_ms` 나이 검사 → 최신 슬롯 → 전용 전달 스레드가 200 ms 유효창을 붙여 core로). `Packet.data`에서 `SerializedMessage`로 한 번 복사. `/ets2/overlay/path`는 P3.
+- ✔ `main.cpp`: 주소 조회·pairing·hello·재연결 루프 삭제, `run()` 한 번. 1 Hz stdout JSON에 `paused`, `drive{armed,axes,reason}`, `drive_commands{command_age,forwarded_commands,stale_commands,rejected_commands}`.
+- ✔ 빌드: `ros2/src/ets2_relay`(동적 CRT, 환경 fastcdr·nlohmann_json). `bridge/CMakeLists.txt`·`build.cmd` 삭제. `pixi run build`가 msgs·relay·degradation·autonomy를 빌드.
+- ✔ 런처: rclpy 없이 foxglove_bridge·릴레이·provider·GT 노드·기록기를 Job Object로 소유. 릴레이·GT 노드는 stop event, 기록기는 숨긴 자기 콘솔+CTRL_C, GT 모드 변경은 `set_parameters_atomically` 한 번. `launch.cmd`는 `pixi run launcher`, `--host-only`는 `pixi run relay`.
+- ✔ 삭제: `ros2/src/ets2_bridge`, `wire.hpp`(→ `topics.hpp`), 이전 세션 관리·Linux 진입점·셸 환경 스크립트, 설정의 `token`·포트·배포판·`bind_address`.
+- ✔ 테스트(`pixi run test`): `ros_endpoint_test`(게임 없이 발행·demand·arm·명령 나이·전달 — executor를 `rclcpp::init` 전에 만들던 버그를 잡음), degradation gtest, MSVC `tests/`(drive_control·topics·motion_sensors). 기록기 CTRL_C 종료(메시지 53개, metadata)와 원자적 모드 변경도 게임 없이 확인. 코드에서 `wsl|eth0|systemd|OTR1|wire_version` 0건.
+- 설계와 달라진 점: drive worker를 `main.cpp`의 Workers 대신 RosEndpoint 안의 전달 스레드로 두었다(ROS 수명과 함께 시작·종료). launch 파일은 두지 않았다.
 
-목표: 전송 계층을 없애고 프로세스를 하나 줄인다. 센서 계산·수집·CDR 코드는 건드리지 않는다. 설계는 [23](23_relay_node_design.md).
-
-- `bridge/windows/ros_endpoint.*` 신설: GenericPublisher, 구독 수 → demand, `/ets2/capture`, `/ets2/drive/control`·`/ets2/drive/command`, `/ets2/overlay/path`.
-- `main.cpp:run`: `state_send`와 bulk sender의 `send_packet`을 `publish`로. control rx worker → drive worker. `wsl_address`·`ros_address`·hello·`wire_version`·`received_bundles`·ping 왕복·재연결 루프 삭제. `Packet.data`에서 `SerializedMessage`로 **한 번 복사**(rclcpp는 외부 버퍼를 빌리지 않음).
-- 빌드: `ros2/src/ets2_relay/`(ament_cmake, 소스는 `bridge/windows` 참조). `bridge/CMakeLists.txt`·`bridge/build.cmd` 삭제. 동적 CRT.
-- 런처: WSL·rclpy 없이 릴레이 stdout JSON으로 상태 표시, `foxglove_bridge`·GT baseline·기록기를 Job Object로 직접 spawn. 종료는 이름 있는 stop event로 통일(§B9).
-- 삭제: `ros2/src/ets2_bridge`, `apps/launcher/{session,ros_session,processes,linux_launcher}.py`, `apps/launch.sh`, `bridge/ros-env.sh`, `wire.hpp`의 소켓·프레이밍(토픽 표는 `topics.hpp`).
-- 완료 기준: 런처 시작 한 번으로 Foxglove 수신, `wsl.exe`·`vmmemWSL` 없음. GT baseline 회귀(약 453 m, 중심 오차 0.03–0.57 m; W00 선행). [21](21_safety_checklist.md) #6·#7 재수행. lease 해제·Tier 0 복귀. `git grep -E "wsl|eth0|systemd|OTR1|wire_version"`이 legacy 밖에서 비어 있음.
+완료 기준(게임 필요, 남음): 런처 시작 한 번으로 Foxglove `ws://127.0.0.1:8765` 수신(JPEG 4·표시용 점군 3·TF·`/diagnostics`), 전체 점군 약 10 Hz·`queue_dropped` 0, 상태 bag 기록·재생(pause 중 `/clock` 정지), PresentMon frame time p50/p99·CPU/GPU busy 기록, GT baseline 회귀(약 453 m, 중심 오차 0.03–0.57 m; W00 선행), [21](21_safety_checklist.md) #6·#7, 명령 나이 p99 < 20 ms, 중지·창 닫기·릴레이 강제 종료에서 lease 해제·Tier 0 복귀.
 
 ### P2. 스택 배치 (M)
 
@@ -101,7 +97,7 @@
 
 ### P4. 문서·테스트 정리 (S)
 
-`bridge/README.md`·`apps/README.md`·`ros2/README.md`의 WSL 절차를 pixi 절차로. `docs/03` "포팅 영향" 열 제거. `docs/16` 전송 문단 제거. [legacy/README](legacy/README.md) 완료 표시. `README.md` 실행 절차.
+✔ 2026-10-12: `bridge/README.md`·`apps/README.md`·`ros2/README.md`·`README.md`를 pixi 절차로 교체, `docs/03` 코드 경계 갱신("포팅 영향" 열 제거), `docs/16` 전송 문단 제거, [legacy/README](legacy/README.md) 갱신, `tests/`를 MSVC로 이전.
 
 ## 3. 결정 (검토 질문에 대한 답)
 
@@ -119,17 +115,17 @@
 | 런처의 rclpy | 없앤다. ✔ telemetry JSON에 `drive`가 있으므로(`core.cpp` frame_end, `state_messages.cpp:state_messages`) 릴레이 stdout 1 Hz JSON에 armed·axes·reason을 싣는다. GT 모드 변경은 `ros2 service call …/set_parameters_atomically` 한 번(세 값 원자적) |
 | 진단 | `status_publish_roundtrip` → 명령 나이(`sent_steady_ns`→core 수락) p50/p99 |
 
-## 4. 삭제 목록(P1)
+## 4. 삭제 목록(P1, ✔ 2026-10-12 완료)
 
 | 경로 | 처리 |
 | --- | --- |
 | `ros2/src/ets2_bridge/` | 삭제. `config/fastdds.xml`·`config/foxglove.yaml`은 `bridge/config/`로 이동 |
 | `bridge/common/wire.hpp` 소켓·프레이밍 | 삭제, `topics.hpp`만 |
-| `bridge/windows/main.cpp` `wsl_address`·`ros_address`·hello·재연결 루프 | 삭제 |
+| `bridge/windows/main.cpp`의 주소 조회·hello·재연결 루프 | 삭제 |
 | `bridge/CMakeLists.txt`, `bridge/build.cmd`, `bridge/ros-env.sh`, `apps/launch.sh` | 삭제 |
 | `apps/launcher/session.py`, `ros_session.py`, `processes.py`, `linux_launcher.py` | 삭제 |
 | `tests/wire_test.cpp` | `msgs_version` 대조만 남김 |
-| `bridge.local.json`의 `wsl_distro`, `token`, `state_port`, `bulk_port`, `bind_address` | 제거(`configure.py`) |
+| `bridge.local.json`의 배포판 이름, `token`, `state_port`, `bulk_port`, `bind_address` | 제거(`configure.py`, 로컬 파일) |
 
 ## 5. 리스크
 
@@ -182,7 +178,7 @@ graph TD
 
 - legacy/19 D1·D4·D6 폐기. D9의 "W01·W02 먼저"는 유지하되 W00이 그 앞에 온다.
 - legacy/19 W03–W08·W14·W17은 완료 상태 그대로 가치가 있다. W05·W07·W14는 남고, W04의 `sent_steady_ns` 나이 검사는 릴레이 노드로 옮겨진다. W06·W08은 전송과 함께 사라진다.
-- 2026-10-12 오전 리뷰의 "WSL 유지 + mirrored" 권고는 실차 이식성이 근거였고 G1로 사라졌다.
+- 2026-10-12 오전 리뷰의 "이전 실행 환경 유지 + mirrored 네트워크" 권고는 실차 이식성이 근거였고 G1로 사라졌다.
 
 ## 8. 개정 이력
 

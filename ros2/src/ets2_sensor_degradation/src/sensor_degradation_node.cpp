@@ -1,7 +1,7 @@
 // Republishes ideal /ets2 sensors as /sensing topics with seeded noise, latency and
 // drops. Stamps stay at measurement time; latency delays publication on the node
 // clock (/clock when use_sim_time). Inputs are subscribed only while an output has
-// a subscriber, because ets2_bridge turns subscriptions into render demand.
+// a subscriber, because the relay turns subscriptions into render demand.
 #include "ets2_sensor_degradation/models.hpp"
 #include <ets2_msgs/msg/wheel_state.hpp>
 #include <rclcpp/rclcpp.hpp>
