@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>ets2_autonomy</name><version>0.1.0</version>
-  <description>GT ACC/LCC connection-check baseline for ETS2, frozen without algorithm improvements (docs/19 D8).</description>
+  <description>GT ACC/LCC connection-check baseline for ETS2, frozen without algorithm improvements, and the drive_hold safety-test command source (docs/21).</description>
   <maintainer email="maintainers@example.invalid">ETS2 Autonomy Lab</maintainer>
   <license>MIT</license>
   <buildtool_depend>ament_cmake</buildtool_depend>

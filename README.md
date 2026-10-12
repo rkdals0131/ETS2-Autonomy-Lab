@@ -1,6 +1,6 @@
 # 유로파일럿 — ETS2 자율주행 연구
 
-ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치하고 ROS 2 Jazzy로 실시간 전달합니다. IMU·바퀴·휠 오도메트리·가상 GNSS도 연결돼 있습니다. Phase 1 목표는 고속도로 ACC·차로 유지·사각지대 감시입니다. 상주 입력 장치와 core 0.29.0을 설치했고, 실제 지도 차로·GT 위치를 쓰는 속도 PI/경로 추종으로 FH4 약453m 자동 주행을 확인했습니다. 이 GT 주행은 연결 확인용 baseline으로 동결했고, 목표는 게임 GT 없이 센서만으로 달리는 것입니다. 실행 환경을 WSL에서 Windows 네이티브 ROS 2로 옮기는 [포팅 계획](docs/20_windows_native_port_plan.md)이 다음 단계입니다.
+ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치하고 ROS 2 Jazzy로 실시간 전달합니다. IMU·바퀴·휠 오도메트리·가상 GNSS도 연결돼 있습니다. Phase 1 목표는 고속도로 ACC·차로 유지·사각지대 감시입니다. 상주 입력 장치와 core 0.30.0을 설치했고, 실제 지도 차로·GT 위치를 쓰는 속도 PI/경로 추종으로 FH4 약453m 자동 주행을 확인했습니다. 이 GT 주행은 연결 확인용 baseline으로 동결했고, 목표는 게임 GT 없이 센서만으로 달리는 것입니다. 실행 환경을 WSL에서 Windows 네이티브 ROS 2로 옮기는 [포팅 계획](docs/20_windows_native_port_plan.md)이 다음 단계입니다.
 
 ## 실행
 
@@ -16,8 +16,8 @@ Linux에서는 `apps/launch.sh`로 ROS 실행·상태·중지·보조·기록을
 
 | 구성 | 구현 |
 | --- | --- |
-| 게임 | ETS2 1.61.1.1, DX11, core 0.30.0(✔ 2026-10-12 `version`) / 상주 loader 0.29.0(△) |
-| 운전 API | ✔ `profile_supported=false`: 현재 프로필의 `no_cstm_mod`·`joy.b5`를 파서가 못 읽어 arm 거절. [W00](docs/20_windows_native_port_plan.md)이 선행 |
+| 게임 | ETS2 1.61.1.1, DX11, 설치본 core 0.30.0 / 상주 loader 0.29.0(✔ 2026-10-12 `version`·`loader status`). 저장소는 0.31.0(W00 파서, loader 교체·게임 재시작 필요) |
+| 운전 API | ✔ 설치된 loader 0.29.0은 `profile_supported=false`(현재 프로필의 `no_cstm_mod`·`joy.b5`를 못 읽어 arm 거절). 0.31.0 loader가 이 프로필을 읽는다(코드·테스트 완료, 게임 확인 전). [W00](docs/20_windows_native_port_plan.md) |
 | 카메라 | C_FN·C_FW 1280×720, C_RL·C_RR 960×544, 기본 30 Hz 요청 |
 | 배치 | FH4 4x2, stock 공통 캐빈·미러 외곽 기준의 캐빈 부착 |
 | 출력 | RGB8, 미터 광축 깊이, CameraInfo, JPEG, TF, 차량 GT |

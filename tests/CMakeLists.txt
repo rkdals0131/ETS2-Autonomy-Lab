@@ -19,7 +19,7 @@ enable_testing()
 
 add_executable(drive_control_test "${ROOT}/ot/native/drive_control_test.cpp" "${ROOT}/ot/native/manual_input.cpp")
 target_include_directories(drive_control_test PRIVATE "${ROOT}/ot/native")
-add_test(NAME drive_control COMMAND drive_control_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/controls_xbox.sii")
+add_test(NAME drive_control COMMAND drive_control_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/controls_xbox.sii" "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/controls_xbox_cstm.sii")
 
 add_executable(wire_test wire_test.cpp)
 target_include_directories(wire_test PRIVATE "${ROOT}/bridge/common")

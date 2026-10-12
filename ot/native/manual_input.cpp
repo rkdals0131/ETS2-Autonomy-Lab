@@ -7,6 +7,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ot {
@@ -22,11 +23,16 @@ public:
     Expression parse() {auto result=expression(0);spaces();if(pos_!=text_.size()) throw std::runtime_error("Unsupported control expression");return result;}
 private:
     void spaces() {while(pos_<text_.size() && std::isspace(static_cast<unsigned char>(text_[pos_]))) ++pos_;}
+    // The postfix default '?' binds tightest, so "! x?0" negates "x?0". The
+    // doubled '||' and '&&' have unverified engine meanings; their second
+    // character fails as an operand, rejecting the profile instead of guessing.
+    static constexpr int postfix=5;
     Expression expression(int minimum) {
         auto left=atom();
         for(;;) {
             spaces();if(pos_==text_.size()) break;
-            const char op=text_[pos_];int priority=op=='|'?1:(op=='+'||op=='-')?2:(op=='*'||op=='/')?3:op=='?'?4:0;
+            const char op=text_[pos_];
+            const int priority=op=='|'?1:op=='&'?2:(op=='+'||op=='-')?3:(op=='*'||op=='/')?4:op=='?'?postfix:0;
             if(!priority || priority<minimum) break;
             ++pos_;auto right=expression(priority+1);left={std::string(1,op),0,{std::move(left),std::move(right)}};
         }
@@ -34,7 +40,9 @@ private:
     }
     Expression atom() {
         spaces();if(pos_==text_.size()) throw std::runtime_error("Incomplete control expression");
-        if(text_[pos_]=='-' || text_[pos_]=='+') {const auto op=text_[pos_++];return {op=='-'?"neg":"pos",0,{atom()}};}
+        if(text_[pos_]=='-' || text_[pos_]=='+' || text_[pos_]=='!') {
+            const auto op=text_[pos_++];return {op=='-'?"neg":op=='+'?"pos":"not",0,{expression(postfix)}};
+        }
         if(text_[pos_]=='(') {++pos_;auto result=expression(0);spaces();if(pos_==text_.size()||text_[pos_++]!=')') throw std::runtime_error("Unclosed control expression");return result;}
         if(std::isdigit(static_cast<unsigned char>(text_[pos_])) || text_[pos_]=='.') {
             size_t consumed{};const float number=std::stof(text_.substr(pos_),&consumed);pos_+=consumed;return {"number",number,{}};
@@ -52,9 +60,20 @@ private:
     std::string text_;size_t pos_{};
 };
 }
+// joy.bN as XInput wButtons bits, inferred from the default Xbox profile's
+// functions (b1 activate, b5 custom modifier, b12 menu); b7/b8 are trigger
+// buttons the engine derives from the axes and stay unsupported. Each bit is
+// checked against the game per docs/11 before a profile relies on it.
+constexpr std::array<uint16_t,12> joy_buttons={
+    0x1000,0x2000,0x4000,0x8000, // A B X Y
+    0x0100,0x0200,0,0,           // LB RB, (LT RT)
+    0x0040,0x0080,0x0020,0x0010};// LS RS Back Start
 struct ManualInput::Impl {
     std::map<std::string,Expression> bindings;
     std::map<std::string,float> constants;
+    // memory() nodes retain their last value while the condition is false.
+    // Only the input callback evaluates, under the device lock.
+    mutable std::map<const Expression*,float> memory;
     std::optional<float> eval(const Expression& e,const PhysicalInput& input,const std::array<float,3>& semantic,unsigned depth=0,bool* active=nullptr) const {
         if(depth>64) throw std::runtime_error("Recursive control binding");
         if(e.op=="number") return e.number;
@@ -64,9 +83,16 @@ struct ManualInput::Impl {
             if(e.op=="semantical.steering") return semantic[0];
             if(e.op=="semantical.aforward") return semantic[1];
             if(e.op=="semantical.abackward") return semantic[2];
+            if(e.op=="unbound") return std::nullopt;
             if(e.op=="joy.x") return input.connected?std::optional(input.x):std::nullopt;
             if(e.op=="joy.rt") return input.connected?std::optional(input.right_trigger):std::nullopt;
             if(e.op=="joy.lt") return input.connected?std::optional(input.left_trigger):std::nullopt;
+            if(e.op.starts_with("joy.b")) {
+                const auto digits=std::string_view(e.op).substr(5);size_t index=0;
+                for(const auto c:digits) index=std::isdigit(static_cast<unsigned char>(c)) && index<100?index*10+(c-'0'):1000;
+                if(!digits.empty() && index>=1 && index<=joy_buttons.size() && joy_buttons[index-1])
+                    return input.connected?std::optional((input.buttons&joy_buttons[index-1])?1.f:0.f):std::nullopt;
+            }
             static constexpr const char* names[]={"keyboard.a","keyboard.larrow","keyboard.d","keyboard.rarrow","keyboard.w","keyboard.uarrow","keyboard.s","keyboard.darrow"};
             for(size_t i=0;i<8;++i) if(e.op==names[i]) {if(active && input.keys[i]) *active=true;return input.keys[i]?1.f:0.f;}
             throw std::runtime_error("Unsupported physical control binding: "+e.op);
@@ -80,6 +106,8 @@ struct ManualInput::Impl {
         const float a=*args[0],b=count>1?*args[1]:0;
         if(e.op=="neg" && count==1) return -a;
         if(e.op=="pos" && count==1) return a;
+        if(e.op=="not" && count==1) return a==0?1.f:0.f;
+        if(e.op=="&" && count==2) return (a!=0&&b!=0)?1.f:0.f;
         if(e.op=="abs" && count==1) return std::abs(a);
         if(e.op=="sign" && count==1) return a>0?1.f:a<0?-1.f:0.f;
         if(e.op=="+" && count==2) return a+b;
@@ -89,9 +117,10 @@ struct ManualInput::Impl {
         if(e.op=="|" && count==2) return (a!=0||b!=0)?1.f:0.f;
         if(e.op=="pow" && count==2) return std::pow(a,b);
         if(e.op=="normalize" && count==2 && b>=0 && b<1) {const auto value=std::max(0.f,(a-b)/(1-b));if(active && value!=0) *active=true;return value;}
-        // This profile updates analog memory every frame. Conditional retained
-        // inputs require engine state and cannot be polled independently.
-        if(e.op=="memory" && count==2 && a!=0) return b;
+        // A held custom modifier freezes the axis at its last value in game.
+        // The value was still evaluated, so a pressed trigger stays manual
+        // activity and revokes ownership even while the game ignores it.
+        if(e.op=="memory" && count==2) {auto& retained=memory[&e];if(a!=0) retained=b;return retained;}
         throw std::runtime_error("Unsupported control function: "+e.op);
     }
     std::array<float,3> values(const PhysicalInput& input,const std::array<float,3>& semantic={},uint32_t* active_axes=nullptr) const {
@@ -118,23 +147,29 @@ ManualInput::ManualInput(const std::filesystem::path& path):impl_(std::make_uniq
         }
     }
     if(devices["keyboard"]!="di8.keyboard" || devices["joy"]!="xinput.xinput_gamepad_1") throw std::runtime_error("Drive takeover supports keyboard and the first configured XInput gamepad");
+    // An empty mix (an unassigned custom modifier slot) reads as released:
+    // the game's throttle works while "(! cstm_mod_2)" depends on such a slot.
+    const auto parse=[](const std::string& text) {
+        return text.find_first_not_of(" \t")==std::string::npos?Expression{"number",0,{}}:Parser(text).parse();
+    };
     std::function<void(const Expression&,unsigned)> compile=[&](const Expression& expression,unsigned depth) {
         if(depth>64) throw std::runtime_error("Recursive control binding");
         if(expression.args.empty()) if(auto found=expressions.find(expression.op);found!=expressions.end()) {
-            if(!impl_->bindings.contains(expression.op)) impl_->bindings.emplace(expression.op,Parser(found->second).parse());
+            if(!impl_->bindings.contains(expression.op)) impl_->bindings.emplace(expression.op,parse(found->second));
             compile(impl_->bindings.at(expression.op),depth+1);
         }
         for(const auto& arg:expression.args) compile(arg,depth+1);
     };
     for(const auto* name:{"steering","forward","backward"}) {
         if(!expressions.contains(name)) throw std::runtime_error("Missing vehicle control mix");
-        impl_->bindings.emplace(name,Parser(expressions.at(name)).parse());compile(impl_->bindings.at(name),0);
+        impl_->bindings.emplace(name,parse(expressions.at(name)));compile(impl_->bindings.at(name),0);
     }
     // Confirm the actual mix applies our three semantic axes with the expected
     // units/sign. Different vehicle-control mixes need a corresponding adapter.
     PhysicalInput neutral{true};const auto base=impl_->values(neutral);
     if(base!=std::array<float,3>{}) throw std::runtime_error("Physical controls are not neutral at rest");
     for(size_t i=0;i<3;++i) {std::array<float,3> axis{};axis[i]=1;const auto mixed=impl_->values(neutral,axis);std::array<float,3> expected{};expected[i]=i==0?-1.f:1.f;if(mixed!=expected) throw std::runtime_error("Unsupported semantic drive mix");}
+    impl_->memory.clear();
 }
 ManualInput::~ManualInput()=default;
 ManualInput::Sample ManualInput::evaluate(const PhysicalInput& input) const {Sample result;result.values=impl_->values(input,{},&result.active_axes);result.active=result.active_axes!=0;return result;}

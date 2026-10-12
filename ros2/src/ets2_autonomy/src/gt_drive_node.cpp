@@ -1,3 +1,4 @@
+#include "control/drive_session.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <ets2_msgs/msg/drive_command.hpp>
 #include <ets2_msgs/msg/drive_state.hpp>
@@ -11,19 +12,18 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <csignal>
 #include <iostream>
+#include <optional>
 #include <thread>
-#include <unistd.h>
 
 using namespace std::chrono_literals;
 using Clock=std::chrono::steady_clock;
-static std::atomic<bool> stopped{false};
-static void stop(int) {stopped=true;}
 
 int main(int argc,char** argv) {
     rclcpp::init(argc,argv,rclcpp::InitOptions(),rclcpp::SignalHandlerOptions::None);
-    std::signal(SIGINT,stop);std::signal(SIGTERM,stop);
+    std::optional<StopSignal> stop;
+    try {stop.emplace(argc,argv);} catch(const std::exception& e) {std::cerr<<e.what()<<std::endl;rclcpp::shutdown();return 1;}
+    const auto stopped=[&]{return stop->requested();};
     auto node=std::make_shared<rclcpp::Node>("ets2_drive_speed");
     const auto initial=declare_driving_parameters(*node);
     std::atomic<std::shared_ptr<const DrivingParameters>> configuration{std::make_shared<const DrivingParameters>(initial)};
@@ -43,7 +43,7 @@ int main(int argc,char** argv) {
         std::cerr<<(initial.arm?"Invalid driving parameters":"No driving enabled; start explicitly with -p arm:=true")<<std::endl;
         rclcpp::shutdown();return initial.arm?1:0;
     }
-    const auto owner="speed-"+std::to_string(getpid())+"-"+std::to_string(Clock::now().time_since_epoch().count());
+    const auto owner=controller_owner("speed");
     ets2_msgs::msg::DriveState::SharedPtr drive;
     ets2_msgs::msg::VehicleState::SharedPtr vehicle;
     Clock::time_point drive_time{},vehicle_time{};
@@ -87,38 +87,25 @@ int main(int argc,char** argv) {
     auto service=node->create_client<ets2_msgs::srv::DriveControl>("/ets2/drive/control");
     uint64_t epoch=0,sequence=0;int result=0;
     const auto axes=[&]() {return configuration.load()->axes();};
-    const auto control=[&](bool enabled) {
-        auto request=std::make_shared<ets2_msgs::srv::DriveControl::Request>();
-        request->owner=owner;request->arm=enabled;request->epoch=epoch;
-        request->axes=enabled?axes():0;
-        auto future=service->async_send_request(request);
-        const auto until=Clock::now()+1s;
-        while(Clock::now()<until && future.wait_for(0s)!=std::future_status::ready) {
-            rclcpp::spin_some(node);std::this_thread::sleep_for(2ms);
-        }
-        if(future.wait_for(0s)!=std::future_status::ready) throw std::runtime_error("DriveControl timed out");
-        const auto response=future.get();
-        if(!response->success) throw std::runtime_error(response->message);
-        if(enabled) epoch=response->epoch;
-    };
+    const auto control=[&](bool enabled) {epoch=request_drive_control(node,service,owner,enabled,epoch,enabled?axes():0);};
     try {
         const auto until=Clock::now()+10s;
-        while(!stopped && Clock::now()<until && !(drive && vehicle && (!lane || (pose_received && traffic_received && wheelbase>0)) && service->service_is_ready() && publisher->get_subscription_count())) {
+        while(!stopped() && Clock::now()<until && !(drive && vehicle && (!lane || (pose_received && traffic_received && wheelbase>0)) && service->service_is_ready() && publisher->get_subscription_count())) {
             rclcpp::spin_some(node);std::this_thread::sleep_for(10ms);
         }
-        if(stopped) throw std::runtime_error("Stopped before arm");
+        if(stopped()) throw std::runtime_error("Stopped before arm");
         if(!drive || !vehicle || (lane && (!pose_received || !traffic_received || wheelbase<=0)) || !service->service_is_ready() || !publisher->get_subscription_count()) throw std::runtime_error("Bridge discovery timed out");
         if(!drive->available || !drive->permitted || !drive->profile_supported || vehicle->paused) throw std::runtime_error("Game input is unavailable or paused");
         if(!axes()) throw std::runtime_error("Enable ACC or LCC explicitly before starting");
         if(axes()!=3 && !drive->independent_axes) throw std::runtime_error("Independent ACC/LCC requires the updated loader; restart the game");
         control(true);
         const auto first_window_until=Clock::now()+150ms;
-        while(!stopped && Clock::now()<first_window_until && !(drive->armed && drive->owner==owner && drive->epoch==epoch)) {
+        while(!stopped() && Clock::now()<first_window_until && !(drive->armed && drive->owner==owner && drive->epoch==epoch)) {
             rclcpp::spin_some(node);std::this_thread::sleep_for(2ms);
         }
         std::cout<<"Driving armed; owner="<<owner<<", epoch="<<epoch<<". Ctrl+C releases control."<<std::endl;
         auto report=Clock::now(),previous=report;double steering_integral=0,speed_integral=0,previous_speed=vehicle->speed_mps;
-        while(!stopped && rclcpp::ok()) {
+        while(!stopped() && rclcpp::ok()) {
             rclcpp::spin_some(node);const auto now=Clock::now();
             if(!drive->armed || drive->owner!=owner || drive->epoch!=epoch) throw std::runtime_error("Driving released: "+drive->reason);
             const auto settings=configuration.load();
@@ -169,7 +156,7 @@ int main(int argc,char** argv) {
             const auto error=speed_target-vehicle->speed_mps;
             ets2_msgs::msg::DriveCommand command;
             command.owner=owner;command.epoch=epoch;command.sequence=++sequence;
-            command.sent_steady_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            command.sent_steady_ns=steady_ns();
             command.axes=enabled_axes;
             command.steering=lcc?steering_target:0;
             if(lcc && settings->relative_steering) {

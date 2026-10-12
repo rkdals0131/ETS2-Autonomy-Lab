@@ -10,6 +10,8 @@ struct PhysicalInput {
     float x{},right_trigger{},left_trigger{};
     // A/Left, D/Right, W/Up, S/Down, in that order.
     std::array<bool,8> keys{};
+    // XInput wButtons; profiles read them as joy.bN (e.g. a custom modifier).
+    uint16_t buttons{};
 };
 class ManualInput {
 public:

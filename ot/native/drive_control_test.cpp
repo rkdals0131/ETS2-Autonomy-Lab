@@ -1,5 +1,6 @@
 #include "drive_control.hpp"
 #include "manual_input.hpp"
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
@@ -65,6 +66,29 @@ int main(int argc,char** argv) {
         input.x=.16001f;check(profile.evaluate(input).active);input.x=0;input.right_trigger=.03001f;check(profile.evaluate(input).active);
         input.right_trigger=0;input.left_trigger=.04001f;check(profile.evaluate(input).active);
         input={false};input.keys[4]=true;sample=profile.evaluate(input);check(sample.active && sample.values[1]==1);
+    }
+    if(argc>2) { // Live profile: pedals gate on a custom modifier, deadzones 0/0.
+        ManualInput profile{std::filesystem::path(argv[2])};PhysicalInput input{true};
+        auto sample=profile.evaluate(input);check(!sample.active && sample.values==std::array<float,3>{});
+        input.right_trigger=.001f;check(profile.evaluate(input).active); // Without a deadzone trigger noise is takeover.
+        input.right_trigger=.5f;sample=profile.evaluate(input);check(sample.active && sample.values[1]==.5f);
+        // Holding LB (joy.b5) freezes the game's throttle; the pull still counts as activity.
+        input.buttons=0x0100;input.right_trigger=.8f;sample=profile.evaluate(input);check(sample.active && sample.values[1]==.5f);
+        input.buttons=0;sample=profile.evaluate(input);check(sample.values[1]==.8f);
+        input={false};input.keys[6]=true;sample=profile.evaluate(input);check(sample.active && sample.values[2]==1);
+        // Doubled operators have no verified engine meaning and reject the profile.
+        const auto path=std::filesystem::temp_directory_path()/"ot_drive_operator_test.sii";
+        const auto loads=[&](const char* steering) {
+            {std::ofstream file(path);file<<"SiiNunit\n{\ninput_config : _nameless.t {\n"
+                " config_lines[0]: \"device keyboard `di8.keyboard`\"\n config_lines[1]: \"device joy `xinput.xinput_gamepad_1`\"\n"
+                " config_lines[2]: \"mix dsteering `"<<steering<<"`\"\n"
+                " config_lines[3]: \"mix steering `dsteering - semantical.steering?0`\"\n"
+                " config_lines[4]: \"mix forward `keyboard.w?0 + semantical.aforward?0`\"\n"
+                " config_lines[5]: \"mix backward `keyboard.s?0 + semantical.abackward?0`\"\n}\n}\n";}
+            try {ManualInput accepted{path};return true;} catch(const std::exception&) {return false;}
+        };
+        check(loads("keyboard.a?0 & (! keyboard.d?0)"));check(!loads("keyboard.a?0 && keyboard.d?0"));check(!loads("keyboard.a?0 || keyboard.d?0"));
+        std::filesystem::remove(path);
     }
     std::cout<<"Driving owner, epoch, expiry, takeover and SDK frame contracts passed\n";
 }

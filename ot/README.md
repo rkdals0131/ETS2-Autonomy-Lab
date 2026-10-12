@@ -1,6 +1,6 @@
 # ot — 게임 DLL과 개발 도구
 
-현재 core/상주 loader는 0.29.0입니다. 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
+저장소 core/상주 loader는 0.31.0입니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
 
 브리지는 카메라 30 Hz·라이다 10 Hz·표시용 JPEG 10 Hz를 요청합니다. FH4 private 프리셋은 슬롯 3·4·6·7을 센서 제출에 사용하며 native mirror 배열은 보존합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
 

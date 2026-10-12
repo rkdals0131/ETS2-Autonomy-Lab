@@ -42,7 +42,7 @@ private:
         const bool source_known=pad_result==ERROR_SUCCESS || pad_result==ERROR_DEVICE_NOT_CONNECTED;
         if(connection_sampled_ && connected_!=input.connected) control_.release(OtDriveReason::input_unavailable);
         connected_=input.connected;connection_sampled_=true;
-        if(input.connected) {const auto& pad=state.Gamepad;input.x=pad.sThumbLX/(pad.sThumbLX<0?32768.f:32767.f);input.right_trigger=pad.bRightTrigger/255.f;input.left_trigger=pad.bLeftTrigger/255.f;}
+        if(input.connected) {const auto& pad=state.Gamepad;input.x=pad.sThumbLX/(pad.sThumbLX<0?32768.f:32767.f);input.right_trigger=pad.bRightTrigger/255.f;input.left_trigger=pad.bLeftTrigger/255.f;input.buttons=pad.wButtons;}
         constexpr int keys[]={'A',VK_LEFT,'D',VK_RIGHT,'W',VK_UP,'S',VK_DOWN};
         DWORD foreground{};GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
         const bool in_game=foreground==GetCurrentProcessId();

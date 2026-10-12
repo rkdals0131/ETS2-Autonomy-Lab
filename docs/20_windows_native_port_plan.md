@@ -47,13 +47,19 @@
 
 ### W00. 프로필 파서·입력 보완 (S, 안전 선행)
 
-목표: A2를 풀어 arm이 되게 한다. 코드 변경은 게임 DLL(`ot/native`)이며 P0와 무관하게 먼저 한다.
+목표: A2를 풀어 arm이 되게 한다. 코드 변경은 상주 loader(`ot/native`)라 P0와 무관하며, 적용에는 loader 교체와 게임 재시작이 필요하다.
 
-- `ot/native/manual_input.cpp:Parser`: 단항 `!`, 이항 `&`·`&&`·`||` 추가. 우선순위는 `|`,`||` < `&`,`&&` < `+`,`-` < `*`,`/` < `?`, 단항 `!`·`-`는 원자에 붙임. `Impl::eval`에 `!`(`a==0?1:0`), `&`(`a!=0&&b!=0`)를 추가. 피연산자 중 하나라도 `nullopt`면 결과도 `nullopt`(기존 규칙 유지).
-- `ot/native/input_device.cpp:InputDevice::sample`: `PhysicalInput`에 `buttons`(XInput `wButtons`) 추가, `manual_input.cpp:Impl::eval`에 `joy.bN` 바인딩. △ SCS의 `joy.b1..b16`과 XInput 비트 대응은 미확인이므로 disarmed 상태에서 패드 버튼을 하나씩 눌러 `ot.cmd drive status`의 manual 값과 대조해 표를 만들고 `docs/11`에 기록.
-- `tests/fixtures/controls_xbox_cstm.sii`: 실제 프로필 형태(`no_cstm_mod`, `cstm_mod_*`, 데드존 0/0)의 두 번째 fixture. `drive_control_test`가 두 fixture 모두로 돌고, 휴지 상태 중립·b5 유지 시 페달 경로 변화를 검사.
-- `ets2_autonomy/drive_hold`(새 실행 파일, ≈60줄): arm 서비스 호출 → 고정 steering/throttle/brake를 50 Hz로 `sent_steady_ns`와 함께 발행 → SIGINT 또는 `--stop-event`로 disarm. W02의 명령 발행기(✔ `ros2 topic pub`은 `sent_steady_ns`를 매번 채우지 못해 `ets2_bridge`의 나이 검사에 걸린다).
-- 완료 기준: `ot.cmd version`에서 `drive.profile_supported=true`. [21](21_safety_checklist.md) #0(데드존 0/0 휴지 노이즈 30 s) 통과. 기존 fixture 테스트 변화 없음.
+구현(2026-10-12, core/loader 0.31.0, 게임 확인 전):
+- ✔ `manual_input.cpp:Parser`: 단항 `!`, 이항 `&`. 우선순위 `|` < `&` < `+`·`-` < `*`·`/` < `?`, 단항 `!`·`-`·`+`는 `?`까지 포함한 피연산자에 붙는다(`! x?0`은 `!(x?0)`). `&&`·`||`는 엔진 의미가 확인되지 않아 **지원하지 않고 프로필을 거절**한다(추측보다 fail closed). 조향·페달 closure에는 쓰이지 않는다.
+- ✔ `manual_input.cpp:Impl::eval`: `unbound`는 값 없음(`?` 기본값으로 감), 빈 mix(본문이 빈 `cstm_mod_2`–`cstm_mod_6`)는 0. 근거: 게임에서 패드 스로틀이 동작하려면 `(! cstm_mod_2)`가 1이어야 한다. `memory(c, v)`는 c가 0인 동안 마지막 값을 유지한다(LB를 누른 동안 게임 스로틀이 멈추는 것과 같음). v는 여전히 평가되므로 **LB+RT도 수동 개입으로 판정**해 소유권을 푼다(보수적).
+- ✔ `input_device.cpp:InputDevice::sample`: `PhysicalInput.buttons`=XInput `wButtons`. `joy.bN` 대응은 기본 Xbox 프로필의 기능 배치에서 추론한 값이다: b1 A, b2 B, b3 X, b4 Y, b5 LB, b6 RB, b9 LS, b10 RS, b11 Back, b12 Start. b7·b8은 엔진이 트리거 축에서 만드는 버튼이라 미지원. △ 게임에서 확인 전(아래 완료 기준).
+- ✔ `tests/fixtures/controls_xbox_cstm.sii`: 실제 프로필에서 조향·페달 closure와 상수만 뽑은 fixture(`no_cstm_mod`, 데드존 0/0). `drive_control_test`가 두 fixture로 돈다: 휴지 중립, 데드존 0에서 트리거 0.001도 개입, LB 유지 중 스로틀 값 유지·개입 판정, `&&`·`||` 거절. ✔ WSL g++ ASan/UBSan 통과, 실제 controls.sii로도 통과.
+- ✔ `ets2_autonomy/drive_hold`: arm → 고정 명령 50 Hz(`sent_steady_ns`) → Ctrl+C 또는 `--stop-event`(Windows)에서 disarm. DriveState reason 변화를 시뮬레이션 시각과 함께 출력. 종료 코드 0 disarm, 1 오류, 2 게임이 해제. ✔ WSL에서 모의 drive 엔드포인트로 50 Hz·명령 나이 < 1.2 ms·disarm·해제 경로 확인. GT 노드와 공유하는 `control/drive_session.hpp`(StopSignal·`request_drive_control`·`steady_ns`)로 GT 노드도 `--stop-event`를 받는다.
+
+남은 것(게임·MSVC 필요):
+- ✔ 2026-10-12 현재 이 PC에 MSVC Build Tools가 없다(10-10 빌드에 쓴 `C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools` 폴더가 없고 설치 기록만 남음). 재설치 후 `ot\build.cmd`로 loader 0.31.0을 빌드한다.
+- 설치: 게임 정상 종료 → `ot/dist/ot_loader.dll`을 `plugins/`에, `ot_core.dll`을 `plugins/ot_runtime/`에 → 게임 재시작.
+- 완료 기준: `ot.cmd version`에서 `drive.profile_supported=true`. disarmed 상태에서 LB를 누른 채 RT를 당겨 `drive status`의 `manual_throttle`이 유지되는지 보고 b5=LB를 확인. [21](21_safety_checklist.md) #0(데드존 0/0 휴지 노이즈 30 s) 통과.
 
 ### P0. 스파이크 (S)
 
