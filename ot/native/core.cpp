@@ -52,6 +52,7 @@ public:
     void initialize();
     bool shutdown() noexcept;
     void panic() noexcept;
+    void release_runtime(OtDriveReason reason,const char* message) noexcept;
     void event(scs_event_t event,const void* data);
     void value(const Channel& channel,const scs_value_t* value);
     json command(const json& request);
@@ -151,13 +152,18 @@ bool Runtime::shutdown() noexcept {
     return true;
 }
 void Runtime::panic() noexcept {
+    release_runtime(OtDriveReason::panic,"Panic: Tier 0; SDK remains active; render hook disable requested");
+}
+// F11, errors and lease expiry are panics. A controller returning its own lease
+// ends the session normally, so the drive release reads as a disconnect.
+void Runtime::release_runtime(OtDriveReason reason,const char* message) noexcept {
     try {
         std::lock_guard lock(control_);
-        if(input_host) input_host->release(input_host->context,OtDriveReason::panic);
+        if(input_host) input_host->release(input_host->context,reason);
         lease_.clear();lease_deadline_=0;
         tier_=0;observe_traffic_=false;
         if(render_probe_) render_probe_->disable();
-        log("Panic: Tier 0; SDK remains active; render hook disable requested");
+        log(message);
     } catch(...) {tier_=0;}
 }
 void Runtime::poll_lease() {
@@ -327,7 +333,7 @@ json Runtime::command(const json& request) {
                 throw std::runtime_error("Unknown lease action");
             lease_deadline_=GetTickCount64()+5000;
         }
-        if(action=="release") panic();
+        if(action=="release") release_runtime(OtDriveReason::disconnected,"Lease released: Tier 0; SDK remains active");
         return {{"active",action!="release"},{"expires_in_ms",5000}};
     }
     if(cmd=="ping") return {{"plugin","ot_core"},{"pid",GetCurrentProcessId()}};

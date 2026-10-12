@@ -4,7 +4,7 @@
 
 ## 사전 조건
 
-- W00 완료: `ot.cmd version`의 `drive.profile_supported`가 **true**. ✔ 2026-10-12 실측은 false("Unsupported control operator", 프로필의 `no_cstm_mod`·`joy.b5`를 파서가 못 읽음)라 이 상태에서는 arm이 거절된다([20 W00](20_windows_native_port_plan.md#w00-프로필-파서입력-보완-s-안전-선행)).
+- W00 완료: `ot.cmd version`의 `drive.profile_supported`가 **true**. ✔ 2026-10-12 0.30.0에서는 false("Unsupported control operator", 프로필의 `no_cstm_mod`·`joy.b5`를 파서가 못 읽음)였고 0.31.0 loader에서 true([20 W00](20_windows_native_port_plan.md#w00-프로필-파서입력-보완-s-안전-선행)).
 - W01 완료: 설치본 백업, `exe_sha256` 대조(✔ Steam은 현재 `AutoUpdateBehavior 0`).
 - 교통 없는 직선 고속도로, `uset g_traffic 0`. 트레일러 없음.
 - 런처 **입력·상태만**으로 시작하고 "차량 상태" 프로필 기록을 켠 상태에서 각 시험을 수행한다(✔ `apps/launcher/bag_recording.py:STATE_TOPICS`에 `/ets2/drive/state`, `/ets2/drive/command` 포함).
@@ -18,16 +18,24 @@
 | # | 조작 | 기대 `DriveState.reason` / axes | 근거(코드) | 일자 | core | 결과 | bag 경로 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | 3축 armed(`drive_hold`), 패드를 만지지 않고 30 s 유지, 데드존 0/0 | `armed`/`command` 유지, 해제 없음 | 휴지 노이즈 확인(W00 완료 기준) | 2026-10-12 | 0.31.0 | ✔ 30.3 s `command` 유지, 해제 없음, stop event로 `disarmed`(exit 0). 명령 1501개(50 Hz), 릴레이 명령 나이 p50 0.56·p99 0.89·최대 1.56 ms. 정차·주차브레이크, Windows 네이티브 릴레이(입력·상태만) | 기록 안 함 |
-| 1 | LCC armed 중 패드 좌우 조작 | `manual`, axes→0, 출력 3축 0 | `drive_control.hpp:DriveControl::frame`, `manual_input.cpp:ManualInput::evaluate` | | | | |
-| 2 | ACC armed 중 RT/LT 또는 W/S | `manual` | 동일 | | | | |
-| 3 | ACC만 armed(axes=2) 중 조향 조작 | 유지(해제 없음) | `drive_control.hpp:DriveControl::frame`의 `manual_axes_&axes_` | | | | |
-| 4 | F11 | `panic`, lease 취소, Tier 0 | `input_device.cpp:InputDevice::sample`(panic_down), `core.cpp:Runtime::panic` | | | | |
-| 5 | ESC pause → resume | `paused`; resume 후 재arm 없음 | `drive_control.hpp:DriveControl::paused`, `loader.cpp`(pause 이벤트) | | | | |
-| 6 | 제어 노드 정지(발행 중단, `drive_hold`를 kill) | ≤ 250 ms 내 `expired` | `drive_control.hpp:DriveControl::frame`(deadline) | | | | |
-| 7 | 릴레이 종료(런처 중지) | `disconnected` | `bridge/windows/main.cpp:DriveEnd`(소멸자가 `drive disconnect`), `core.cpp:Runtime::command`의 drive disconnect | | | | |
-| 8 | 패드 USB 분리 | `input_unavailable` | `input_device.cpp:InputDevice::sample`(connected 전이) | | | | |
+| 1 | LCC armed 중 패드 좌우 조작 | `manual`, axes→0, 출력 3축 0 | `drive_control.hpp:DriveControl::frame`, `manual_input.cpp:ManualInput::evaluate` | 2026-10-12 | 0.31.0 | ✔ axes=1 arm 약 20 s 뒤 스틱 조작에 `manual`(exit 2). 해제 프레임 `steering_manual` +0.19, 다음 프레임부터 applied +0.001→+0.003→+0.015→… 증가(게임 조향 속도 제한으로 완만) | `bridge/recordings/20261012-215141-1f6616d6/bag` |
+| 2 | ACC armed 중 RT/LT 또는 W/S | `manual` | 동일 | 2026-10-12 | 0.31.0 | ✔ axes=2 arm 10.5 s 뒤 RT에 `manual`(exit 2). 해제 프레임 `throttle_manual` 0.18, 다음 프레임부터 applied 0.088→0.217→0.419→… | 동일 |
+| 3 | ACC만 armed(axes=2) 중 조향 조작 | 유지(해제 없음) | `drive_control.hpp:DriveControl::frame`의 `manual_axes_&axes_` | 2026-10-12 | 0.31.0 | ✔ 33 s 동안 `steering_manual` −1.000…+1.000(페달 0)에도 `command` 유지, stop event로 `disarmed`(exit 0) | 동일 |
+| 4 | F11 | `panic`, lease 취소, Tier 0 | `input_device.cpp:InputDevice::sample`(panic_down), `core.cpp:Runtime::panic` | 2026-10-12 | 0.31.0 | ✔ `panic`(exit 2), Tier 0, render hook 0. 릴레이가 lease 상실로 스스로 끝나고 런처가 기록을 정상 종료(metadata.yaml 있음). △ 상태가 `panic`→`paused`(1표본, 30 ms)→`panic`으로 깜빡임, 원인 미확인 | `bridge/recordings/20261012-220053-eaf9d6bd/bag` |
+| 5 | ESC pause → resume | `paused`; resume 후 재arm 없음 | `drive_control.hpp:DriveControl::paused`, `loader.cpp`(pause 이벤트) | 2026-10-12 | 0.31.0 | ✔ `paused`(exit 2), pause부터 resume을 거쳐 36 s 동안 재arm 없음 | 동일 |
+| 6 | 제어 노드 정지(발행 중단, `drive_hold`를 kill) | ≤ 250 ms 내 `expired` | `drive_control.hpp:DriveControl::frame`(deadline) | 2026-10-12 | 0.31.0 | ✔ 마지막 명령 수신 234 ms 뒤 `expired`(bag 수신 시각 기준). 첫 시도는 kill 전에 끝남: 아래 "발견" 1 | 동일 |
+| 7 | 릴레이 종료(런처 중지) | `disconnected` | `bridge/windows/main.cpp:DriveEnd`(소멸자가 `drive disconnect`), `core.cpp:Runtime::command`의 drive disconnect, lease 반납 `core.cpp:Runtime::release_runtime` | 2026-10-12 | 0.31.1 | ✔ `disconnected` 뒤 165 ms에 Tier 0, 사유 유지(core 10 ms 폴링). bag에는 릴레이가 상태 발행을 멈춘 뒤라 전이가 없다. 0.31.0은 실패: 아래 "발견" 2 | `bridge/recordings/20261012-220911-19814b0c/bag` |
+| 8 | 패드 USB 분리 | `input_unavailable` | `input_device.cpp:InputDevice::sample`(connected 전이) | 2026-10-12 | 0.31.0 | ✔ `input_unavailable`(exit 2). 0.47 s 뒤 게임이 스스로 일시정지해 사유가 `paused`로 바뀜(해제 상태 유지) | `bridge/recordings/20261012-220053-eaf9d6bd/bag` |
 
 완료 기준: 8개 모두 기대 reason으로 전이하고, `/ets2/vehicle/actuation`의 applied 값이 다음 SDK 프레임부터 사람 입력을 따른다. 각 행의 bag 경로가 채워진다. 실패 항목은 [포팅 계획 §6](20_windows_native_port_plan.md#6-의존-그래프와-이어받는-작업)에 등록한다.
+
+✔ 2026-10-12 **W02 완료**(#7은 core 0.31.1). applied 추종은 `/ets2/drive/state`의 `*_applied`로 #1·#2에서 확인. Windows 네이티브 릴레이(입력·상태만). 런처 기록 세 개는 모두 metadata.yaml로 닫혔다.
+
+## 발견
+
+1. ✔ **발행기 publish 정지 330 ms.** #6 첫 시도에서 arm 1.5 s 뒤 kill 전에 `expired`가 났다. bag의 `sent_steady_ns`로 보면 seq 75는 seq 74보다 15 ms 뒤에 찍혔지만 342 ms 뒤에 도착했고, seq 76은 seq 75보다 328 ms 뒤에 찍혔다. 즉 `drive_hold` 안에서 seq 75의 publish 호출이 약 330 ms 막혔다. 같은 구간의 `/ets2/drive/state`·`/clock`·GNSS는 끊기지 않았다. 릴레이는 seq 75를 나이 초과로 버리고(`stale_commands` 1) core는 마지막 명령 233 ms 뒤 `expired`로 해제해 안전 경로는 설계대로 동작했다. △ 원인은 Fast DDS 쓰기 경로로 추정하며 미확인. 2026-10-12 시험 약 10회 중 1회. 자율주행 제어기가 같은 정지를 겪으면 200 ms 창에서 거짓 해제가 난다. 장시간 발행 jitter 측정이 남았다.
+2. ✔ **0.31.0은 릴레이 정상 종료를 `panic`으로 기록.** `DriveEnd`가 `disconnected`로 해제한 76 ms 뒤 lease 반납이 `Runtime::panic`을 불러 사유를 `panic`으로 덮었다. 해제 자체는 맞지만 기록이 틀리다. 0.31.1에서 lease 반납은 `Runtime::release_runtime(disconnected)`로 바꾸고 F11·오류·lease 만료는 `panic`으로 남겼다. 게임 실행 중 `loader unload` → core 교체 → `loader load`로 설치(7.5 s 공백, 운전 epoch 유지). 이전 DLL은 `ot/backup/2026-10-12-before-0.31.1/`.
+3. ✔ 해제 상태의 `reason`은 마지막 해제 사유가 아니라 이후 사건으로 바뀐다(#8의 `input_unavailable`→`paused`, #4의 깜빡임). 해제 사유는 armed→해제 전이 표본에서 읽는다.
 
 ## bag 확인 명령
 

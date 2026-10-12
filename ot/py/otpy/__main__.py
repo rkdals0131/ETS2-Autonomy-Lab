@@ -151,7 +151,7 @@ def main():
                 from .rig_layout import resolve_layout
                 settings = resolve_layout(settings, client)
                 # The core keeps capture state only while a lease holder sends
-                # heartbeats; releasing the lease panics back to Tier 0.
+                # heartbeats; releasing the lease drops back to Tier 0.
                 owner = uuid.uuid4().hex
                 def owned(command, **arguments):
                     return client.request(command, owner=owner, **arguments)

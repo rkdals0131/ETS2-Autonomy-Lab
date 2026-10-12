@@ -79,7 +79,7 @@
 - ✔ 테스트(`pixi run test`): `ros_endpoint_test`(게임 없이 발행·demand·arm·명령 나이·전달 — executor를 `rclcpp::init` 전에 만들던 버그를 잡음), degradation gtest, MSVC `tests/`(drive_control·topics·motion_sensors). 기록기 CTRL_C 종료(메시지 53개, metadata)와 원자적 모드 변경도 게임 없이 확인. 코드에서 `wsl|eth0|systemd|OTR1|wire_version` 0건.
 - 설계와 달라진 점: drive worker를 `main.cpp`의 Workers 대신 RosEndpoint 안의 전달 스레드로 두었다(ROS 수명과 함께 시작·종료). launch 파일은 두지 않았다.
 
-완료 기준(게임 필요, 남음): 런처 시작 한 번으로 Foxglove `ws://127.0.0.1:8765` 수신(JPEG 4·표시용 점군 3·TF·`/diagnostics`), 전체 점군 약 10 Hz·`queue_dropped` 0, 상태 bag 기록·재생(pause 중 `/clock` 정지), PresentMon frame time p50/p99·CPU/GPU busy 기록, GT baseline 회귀(약 453 m, 중심 오차 0.03–0.57 m; W00 선행), [21](21_safety_checklist.md) #6·#7, 명령 나이 p99 < 20 ms, 중지·창 닫기·릴레이 강제 종료에서 lease 해제·Tier 0 복귀.
+완료 기준(게임 필요, 남음): 런처 시작 한 번으로 Foxglove `ws://127.0.0.1:8765` 수신(JPEG 4·표시용 점군 3·TF·`/diagnostics`), 전체 점군 약 10 Hz·`queue_dropped` 0, 상태 bag 기록·재생(pause 중 `/clock` 정지), PresentMon frame time p50/p99·CPU/GPU busy 기록, GT baseline 회귀(약 453 m, 중심 오차 0.03–0.57 m; W00 선행), [21](21_safety_checklist.md) #6·#7(✔ 2026-10-12), 명령 나이 p99 < 20 ms, 중지·창 닫기·릴레이 강제 종료에서 lease 해제·Tier 0 복귀.
 
 ### P2. 스택 배치 (M)
 
@@ -167,7 +167,7 @@ graph TD
 | --- | --- | --- | --- |
 | W00 파서·입력 보완 | S | §2 | A2 해소. W02·P1 회귀의 선행 |
 | W01 업데이트 차단·백업 | S | [legacy/19 P0](legacy/19_real_stack_interface_plan.md#p0-보전과-안전), §3 결정 | ✔ 현재 `AutoUpdateBehavior 0`. 설치본 복사 + SHA 게이트 + (△) beta 고정 |
-| W02 armed 안전 시험 | S | [21](21_safety_checklist.md) | 발행기는 `drive_hold` |
+| W02 armed 안전 시험 | S | [21](21_safety_checklist.md) | ✔ 2026-10-12 완료(#7은 core 0.31.1). 남은 것: 발행기 publish 330 ms 정지 1회([21 발견 1](21_safety_checklist.md#발견))의 장시간 jitter 측정 |
 | W11 L1 조향 플랜트 식별 | M | [legacy/19 P2](legacy/19_real_stack_interface_plan.md#p2-스택-인터페이스adapter) | ROS 위치 무관 |
 | W12 L2 가상 EPS | M | 같은 절 | P2 `lib/virtual_eps` |
 | W20 오프셋 스키마 이전 | M | [legacy/19 P5](legacy/19_real_stack_interface_plan.md#p5-보류트리거가-생기면-수행) | 트리거: 게임 업데이트·ATS |
