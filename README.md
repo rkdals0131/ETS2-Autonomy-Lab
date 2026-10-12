@@ -14,7 +14,7 @@ ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 
 | 구성 | 구현 |
 | --- | --- |
-| 게임 | ETS2 1.61.1.1, DX11, core 0.32.0·상주 loader 0.31.0(2026-10-12, W00 파서·W02·센서 렌더 rider) |
+| 게임 | ETS2 1.61.1.1, DX11, 설치 core 0.32.0·상주 loader 0.31.0(2026-10-12, W00 파서·W02·센서 렌더 rider). 저장소 core 0.33.0(측정 도구·게임 미러 끄기)은 게임 확인 전 |
 | 운전 API | ✔ 0.31.0 loader가 custom modifier 프로필을 읽어 `profile_supported=true`, LB(`joy.b5`) 확인. Windows 네이티브 릴레이로 armed 안전 시험 9개(W02 #0–#8) 통과, 명령 나이 p99 0.89 ms([21](docs/21_safety_checklist.md)). 발행기 publish가 한 번 330 ms 막혀 거짓 `expired`가 난 일이 있어 장시간 jitter 측정이 남음 |
 | 카메라 | C_FN·C_FW 1280×720, C_RL·C_RR 960×544, 기본 30 Hz 요청 |
 | 배치 | FH4 4x2, stock 공통 캐빈·미러 외곽 기준의 캐빈 부착 |

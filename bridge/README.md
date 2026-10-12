@@ -18,6 +18,8 @@
 
 **CPU 배치**(기본 켬, `cpu_layout`)는 게임을 CPU 0이 속한 L3 묶음에 두고 게임 메인 스레드를 그 묶음의 두 번째 물리 코어에 혼자 둡니다. 릴레이·Foxglove 서버·기록기와 Foxglove 뷰어 앱(`Foxglove.exe`, BELOW_NORMAL)은 다른 L3 묶음으로 보냅니다. ETS2는 메인 스레드 하나가 병목이라, 같은 코어의 SMT 짝과 L3를 다른 일과 나누지 않게 하는 설정입니다. 이 머신(Ryzen 7 3700X)에서는 게임 CPU 0–7·메인 CPU 2, 나머지 CPU 8–15이며 정차 연속 A/B에서 프레임 CPU 시간이 5.9 ms 줄었습니다. 새 게임 스레드와 뒤늦게 연 뷰어 창은 5초마다 반영하고, **중지**하면 모두 되돌립니다. 런처가 비정상 종료되면 게임 재시작 전까지 배치가 남습니다. [성능](../docs/18_performance.md#cpu-병목-분석).
 
+**게임 미러 렌더 끄기**(기본 끔, `native_mirrors:false`)는 센서를 수집하는 동안 화면에 보이는 게임 미러의 렌더를 건너뜁니다. 게임 미러는 하나마다 장면 전체를 다시 그리므로 메인 스레드를 아낍니다. 화면의 미러는 마지막 장면에서 멈추니 직접 운전할 때는 켜 두지 않습니다. core 0.33.0이 필요하고 효과는 아직 게임에서 재지 않았습니다([계획 C10](../docs/26_cpu_optimization_plan.md#c10-게임-미러-렌더-끄기-s-구현-완료-게임-확인-남음)).
+
 다른 프로세스가 `127.0.0.1:8765`를 쓰고 있으면 런처가 시작을 거절합니다. 기존 Foxglove 서버를 종료한 뒤 시작합니다.
 
 ## 설정
@@ -31,6 +33,7 @@
 | camera_hz / lidar_hz | 기본 30 / 10. 라이다는 필요한 카메라 프레임에서만 gather·readback |
 | preview_hz / lidar_preview_stride | 표시용 JPEG 기본 10 Hz. 표시용 점군은 수평 빔 4개마다 1개, 모든 수직 링 유지. 자세(`camera_info`·TF)만 구독한 카메라도 이 주기로만 렌더 |
 | cpu_layout | 런처 CPU 배치, 기본 true. 다음 시작부터 적용 |
+| native_mirrors | 기본 true. false면 센서 실행 중 게임 미러(우리 슬롯이 아닌 미러) 렌더를 건너뜀. 화면 미러는 마지막 장면에서 멈춤. core 0.33.0 필요 |
 | capture_warmup | 기본 true. private 센서는 유휴 뒤 한 프레임 준비하고 다음 프레임에서 수집. false는 연속 렌더 비교용 |
 | imu_mount_base_m / gnss_mount_base_m | 섀시 고정 장착점, base_link 기준 m. 기본 [0,0,1] |
 | gnss_reference_lla | 시작 위치의 가상 기준 위도·경도(deg)·타원체 고도(m), 기본 [0,0,0] |

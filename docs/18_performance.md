@@ -101,6 +101,7 @@ core 0.31.1, `r_mirror_view_distance 400`. 이때는 자세 출력이 30 Hz로 �
 
 ### 측정 방법
 
+- 도구: `.\ot\ot.cmd perf <label> [--profile-hz 250]`(core 0.33.0). PresentMon 통계와 센서·게임 미러 렌더/초, 훅·SDK 콜백 시간, stream 누락, 교통 차량 수, 게임·뷰어·릴레이 CPU, 게임 창 전경 비율을 `research/live/<날짜>-perf/<label>.json`에 남깁니다. `ot.cmd perf_table <json...>`이 한 줄씩 비교합니다.
 - 재기 전에 확인합니다. 런처 phase, `tier`, 뷰어 연결, 게임 창 전경, `paused`.
 - 조건은 연달아 ABAB로 반복합니다. 교통 차량 수와 뷰어 프로세스 CPU를 함께 기록합니다. 수십 분 떨어진 측정끼리는 비교하지 않습니다.
 - 센서 렌더 수는 `camera_rig`의 `views[].applied` 증분, 훅 시간은 `hooks`의 timing, SDK 콜백은 `sdk_timing`으로 잽니다. `snapshot.frame_id`는 SDK 프레임(초당 60) 번호라 그 증분으로 나눈 값은 렌더 프레임당 값이 아닙니다. 렌더 프레임당 값은 PresentMon fps로 환산합니다.

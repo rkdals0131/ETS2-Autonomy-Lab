@@ -1,6 +1,6 @@
 # ot — 게임 DLL과 개발 도구
 
-저장소 core는 0.32.0, 상주 loader는 0.31.0입니다. 0.31.1(lease 반납을 `panic` 대신 `disconnected`로 기록)과 0.32.0(자세만 남은 카메라는 미리보기 주기로만 렌더, SDK 콜백 시간 `sdk_timing` 명령)은 core만 바뀌어 설치된 loader 0.31.0을 그대로 씁니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
+저장소 core는 0.33.0(게임 확인 전, 설치본은 0.32.0), 상주 loader는 0.31.0입니다. 0.31.1(lease 반납을 `panic` 대신 `disconnected`로 기록), 0.32.0(자세만 남은 카메라는 미리보기 주기로만 렌더, `sdk_timing`), 0.33.0(GT 메타데이터도 rider, 리그 `native_mirrors`, `main_profile`·`traffic` 명령)은 core만 바뀌어 설치된 loader 0.31.0을 그대로 씁니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
 
 브리지는 카메라 30 Hz·라이다 10 Hz·표시용 JPEG 10 Hz를 요청합니다. FH4 private 프리셋은 슬롯 3·4·6·7을 센서 제출에 사용하며 native mirror 배열은 보존합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
 
@@ -77,7 +77,7 @@ core는 Tier·render probe·camera rig·stream 변경과 운전 명령을 lease 
 
 카메라·차량 관측은 `render_sample.*`의 숫자 구조체로 전달합니다. SDK 스냅샷은 참조로 공유하고, 완성된 슬롯의 JSON은 전송 작업자가 생성합니다. `ros` 형식은 촬영 자세·시각·요청한 GT를 담고, `raw`·`raw+ros` stream과 진단 관측은 pass·이미지 연결·전체 SDK 진단도 유지합니다.
 
-`hooks`는 훅별 호출 시간, `sdk_timing`은 SDK channel·frame_start·frame_end 콜백의 누적·최대 QPC tick을 돌려줍니다. 둘 다 게임 메인 스레드 비용입니다([성능](../docs/18_performance.md#cpu-병목-분석)).
+`hooks`는 훅별 호출 시간, `sdk_timing`은 SDK channel·frame_start·frame_end 콜백의 누적·최대 QPC tick을 돌려줍니다. 둘 다 게임 메인 스레드 비용입니다. `main_profile`은 메인 스레드의 명령 포인터를 10–1000 Hz로 최대 120초 샘플해 모듈별 비중과 256바이트 단위 hot RVA를 돌려주고(샘플당 정지 평균 약 25 µs), `traffic`은 교통 차량 목록을 읽습니다. 둘 다 읽기 전용이라 lease가 필요 없습니다. 측정은 `.\ot\ot.cmd perf <label> --profile-hz 250`으로 PresentMon과 이 카운터들을 한 JSON(`research/live/<날짜>-perf/`)에 남기고 `perf_table`로 비교합니다([성능](../docs/18_performance.md#cpu-병목-분석), [계획](../docs/26_cpu_optimization_plan.md)).
 
 SDK frame_end는 물리 결과 이후이며 렌더 보간·장면 준비가 뒤따릅니다. 센서 묶음은 실제 pass Present ID를 기준으로 맞춥니다. [좌표·시각](../docs/04_sensors_and_data.md), [렌더 구조](../docs/12_dx11_mirror_render_path.md).
 
