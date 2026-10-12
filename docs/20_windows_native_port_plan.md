@@ -68,7 +68,7 @@
 
 2026-10-12에 게임 없이 할 수 있는 Windows 확인을 마쳤다: ✔ pixi 환경과 `pixi.lock`, VS 2022로 네이티브 빌드, foxglove-bridge DLL 경로 우회, rosbag2는 CTRL_C로만 MCAP을 마무리, 명령 시계 원점(C++ `steady_clock`·Python `perf_counter_ns` 동일, `time.monotonic`은 35.5 ms 어긋남), DDS 탐색. 사용자가 WSL을 이미 제거해 WSL 대비 A/B는 할 수 없으므로, 남은 게임 확인(Foxglove 수신·전체 점군·bag·frame time)은 P1 완료 기준으로 옮겼다. P0용으로 바꾼 TCP 수신기는 P1에서 삭제됐다. 기록은 [22](22_p0_spike_runbook.md).
 
-### P1. 릴레이를 ROS 노드로 접기 (M) — ✔ 코드 완료 2026-10-12, 게임 시험 남음
+### P1. 릴레이를 ROS 노드로 접기 (M) — ✔ 코드 완료 2026-10-12, 게임 시험 일부 남음
 
 설계는 [23](23_relay_node_design.md). 구현:
 - ✔ `bridge/windows/ros_endpoint.*`: GenericPublisher(기존 QoS 규칙), 200 ms 구독 수 → demand, `/ets2/capture`, `/ets2/drive/control`(서비스 콜백에서 core 동기 호출), `/ets2/drive/command`(검증·`max_command_age_ms` 나이 검사 → 최신 슬롯 → 전용 전달 스레드가 200 ms 유효창을 붙여 core로). `Packet.data`에서 `SerializedMessage`로 한 번 복사. `/ets2/overlay/path`는 P3.
@@ -80,6 +80,26 @@
 - 설계와 달라진 점: drive worker를 `main.cpp`의 Workers 대신 RosEndpoint 안의 전달 스레드로 두었다(ROS 수명과 함께 시작·종료). launch 파일은 두지 않았다.
 
 완료 기준(게임 필요, 남음): 런처 시작 한 번으로 Foxglove `ws://127.0.0.1:8765` 수신(JPEG 4·표시용 점군 3·TF·`/diagnostics`), 전체 점군 약 10 Hz·`queue_dropped` 0, 상태 bag 기록·재생(pause 중 `/clock` 정지), PresentMon frame time p50/p99·CPU/GPU busy 기록, GT baseline 회귀(약 453 m, 중심 오차 0.03–0.57 m; W00 선행), [21](21_safety_checklist.md) #6·#7(✔ 2026-10-12), 명령 나이 p99 < 20 ms, 중지·창 닫기·릴레이 강제 종료에서 lease 해제·Tier 0 복귀.
+
+
+게임 시험 결과(2026-10-12, core 0.31.1, 주행 중, snowymoon 안티앨리어싱 끔, 측정 원본은 로컬 `research/live/2026-10-12-p1-sensor/`):
+
+- ✔ Foxglove에서 센서 표시(사용자 육안). ✔ [21](21_safety_checklist.md) W02 #0–#8, 명령 나이 p99 0.89–1.03 ms.
+- ✔ 전체 점군 L_F·L_PL·L_PR 약 10.0 Hz(200 s, 각 1872개, 원시 구독). ✔ `ets2_sensor_degradation`의 `/sensing/imu/imu_raw`가 원본 IMU와 같은 주기(7951/8099).
+- **✘ `queue_dropped` 0 미달**: 릴레이 13.5분에 누적 20(전체 점군 구독 200 s 동안 5). `main.cpp`의 read/send 큐가 꽉 찰 때 센다. 같은 실행의 `send_elapsed` 최대 326.7 ms. △ [21 발견 1](21_safety_checklist.md#발견)의 `drive_hold` publish 330 ms 정지와 같은 크기라 Fast DDS(SHM 전용 프로필 `bridge/config/fastdds.xml`) 쓰기 경로가 가끔 막히는 것으로 추정. 원인 조사가 남음.
+- ✔ 상태 bag 기록: 런처 기록 4개 모두 metadata.yaml로 닫힘(F11로 끝난 실행 포함). 재생(pause 중 `/clock` 정지)은 남음.
+- ✔ lease 해제: 런처 중지·창 닫기는 `disconnected`·Tier 0·훅 0, 릴레이 강제 종료는 5.17 s 뒤 lease 만료로 Tier 0(`panic`).
+- PresentMon(각 180 s, 장면이 같지 않아 비교는 거칠다):
+
+| 조건 | fps | frame time p50 / p99 ms | CPU busy p50 ms | GPU busy p50 ms |
+| --- | --- | --- | --- | --- |
+| 브리지 끔 | 77.4 | 15.3 / 21.4 | 15.0 | 6.2 |
+| 센서 켬, Foxglove 표시만 | 38.2 | 25.2 / 47.9 | 24.9 | 10.1 |
+| 센서 켬 + 전체 점군·degradation 구독 | 47.7 | 23.0 / 36.0 | 22.7 | 9.2 |
+| 참고: 2026-10-09 이전 릴레이 전체 센서(60 s) | 46.4 | 20.8 / 38.2 | 20.6 | 5.7 |
+
+  CPU 바운드이며 센서를 켜면 프레임당 CPU busy가 약 8–10 ms 는다. 네이티브 릴레이 전체 센서 수치는 이전 릴레이와 비슷하다. [22 §6](22_p0_spike_runbook.md)의 같은 정차 장면 A/B는 아직 하지 않았다.
+- 남음: GT baseline 회귀, bag 재생, `queue_dropped` 원인, 정차 장면 A/B.
 
 ### P2. 스택 배치 (M)
 
