@@ -4,7 +4,7 @@
 #include <stdexcept>
 
 namespace ot {
-namespace {constexpr uint8_t pose_product=32;}
+namespace {constexpr uint8_t rider_products=16|32;} // GT metadata and pose
 CaptureStream::CaptureStream(uint32_t mask,const CaptureOptions& options,double hz,double duration,
         const std::atomic<uint64_t>& presents,uint64_t session,Transport& publisher):
     options_(options),hz_(hz),duration_(duration),presents_(presents),session_(session),publisher_(publisher),
@@ -151,10 +151,12 @@ void CaptureStream::run() noexcept {
                             auto options=options_;options.products=options.outputs[camera_indices_[i]];
                             if(!lidar_due) options.products&=~uint8_t{8};
                             if(!preview_due) options.products&=~uint8_t{64};
-                            // Pose rides along with renders made for another output.
-                            // Alone (camera_info without images) it follows the
-                            // preview rate instead of forcing a render every tick.
-                            if(options.products==pose_product && !preview_due) options.products=0;
+                            // GT metadata and pose ride along with renders made for
+                            // another output. Alone (camera_info or GT objects
+                            // without images) they follow the preview rate instead
+                            // of forcing a render on every camera tick.
+                            const bool riders_only=options.products && !(options.products&~rider_products);
+                            if(riders_only && !preview_due) options.products=0;
                             options.exposure=options.auto_exposure?exposure_[camera_indices_[i]]:nullptr;
                             options.lidar_pattern=options.lidar()?options.lidar_patterns[camera_indices_[i]]:nullptr;
                             if(options.selective && !options.products) continue;
@@ -163,7 +165,7 @@ void CaptureStream::run() noexcept {
                             available->cameras[i]->arm(options);mask|=1u<<camera_indices_[i];
                             if(!options.selective || (options.products&16)) vehicle_mask|=1u<<camera_indices_[i];
                             armed_lidar|=options.lidar();
-                            armed_preview|=(options.products&64)!=0 || options.products==pose_product;
+                            armed_preview|=(options.products&64)!=0 || (riders_only && options.products);
                         }
                         if(armed_lidar && options_.lidar_hz>0)
                             next_lidar=(std::floor(elapsed*options_.lidar_hz)+1)/options_.lidar_hz;

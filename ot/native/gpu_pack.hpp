@@ -72,6 +72,10 @@ private:
     Com<ID3D11Fence> fence_;
     std::unique_ptr<Handle> fence_handle_;
     uint64_t fence_value_=0,fence_id_=0;
+    // Per-device facts for seal(); looked up once instead of every capture.
+    Com<ID3D11DeviceContext4> context4_;
+    ID3D11DeviceContext* context4_source_=nullptr;
+    LUID adapter_{};
     struct LidarWork {
         std::shared_ptr<const LidarPattern> pattern;
         Com<ID3D11Buffer> beams,output,staging,constants;

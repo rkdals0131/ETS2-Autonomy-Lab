@@ -69,6 +69,7 @@ void ExposureState::update(ID3D11DeviceContext1* context,ID3D11ShaderResourceVie
 void GpuPack::release_gpu() {
     exposure_staging_.Reset();
     fence_handle_.reset();fence_.Reset();fence_value_=0;awaiting_reader_=false;
+    context4_.Reset();context4_source_=nullptr;adapter_={};
     lidar_=LidarWork{};
     for(auto& image:images) image.staging.Reset();
     for(auto& work:work_) work=Work{};
@@ -294,16 +295,20 @@ json GpuPack::seal(ID3D11DeviceContext* context) {
         auto handle=std::make_unique<Handle>();
         check(fence_->CreateSharedHandle(nullptr,GENERIC_ALL,nullptr,&handle->h),"CreateSharedHandle(fence)");
         fence_handle_=std::move(handle);fence_id_=qpc_now();
+        Com<IDXGIDevice> dxgi;Com<IDXGIAdapter> adapter;DXGI_ADAPTER_DESC description{};
+        check(device_.As(&dxgi),"QueryInterface(DXGI device)");check(dxgi->GetAdapter(&adapter),"GetAdapter");
+        check(adapter->GetDesc(&description),"GetAdapterDesc");
+        adapter_=description.AdapterLuid;
     }
-    Com<ID3D11DeviceContext4> context4;check(context->QueryInterface(IID_PPV_ARGS(&context4)),"QueryInterface(Context4)");
+    if(context4_source_!=context) {
+        context4_.Reset();check(context->QueryInterface(IID_PPV_ARGS(&context4_)),"QueryInterface(Context4)");
+        context4_source_=context;
+    }
     fence_value_+=2;
-    check(context4->Signal(fence_.Get(),fence_value_-1),"Signal(pack ready)");
+    check(context4_->Signal(fence_.Get(),fence_value_-1),"Signal(pack ready)");
     awaiting_reader_=true;
-    Com<IDXGIDevice> dxgi;Com<IDXGIAdapter> adapter;DXGI_ADAPTER_DESC description{};
-    check(device_.As(&dxgi),"QueryInterface(DXGI device)");check(dxgi->GetAdapter(&adapter),"GetAdapter");
-    check(adapter->GetDesc(&description),"GetAdapterDesc");
     return {{"pid",GetCurrentProcessId()},{"id",fence_id_},{"handle",reinterpret_cast<uintptr_t>(fence_handle_->h)},
-        {"ready",fence_value_-1},{"released",fence_value_},{"adapter_low",description.AdapterLuid.LowPart},{"adapter_high",description.AdapterLuid.HighPart}};
+        {"ready",fence_value_-1},{"released",fence_value_},{"adapter_low",adapter_.LowPart},{"adapter_high",adapter_.HighPart}};
 }
 bool GpuPack::collect(ID3D11DeviceContext* context) {
     if(color_copied_ && exposure_) {

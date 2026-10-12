@@ -14,9 +14,20 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("loader", help="Resident loader control; module changes run at SDK frame end").add_argument(
         "action", choices=("status", "load", "unload", "reload"), default="status", nargs="?")
-    for name in ("ping", "version", "hooks", "frames", "schema", "snapshot", "state", "panic", "dump", "reload_permissions", "truck_config"):
+    for name in ("ping", "version", "hooks", "frames", "schema", "snapshot", "state", "panic", "dump", "reload_permissions", "truck_config",
+                 "sdk_timing", "traffic"):
         sub.add_parser(name)
     sub.add_parser("read").add_argument("field")
+    profile = sub.add_parser("main_profile", help="Sample the game main thread's instruction pointer; read-only, bounded")
+    profile.add_argument("action", choices=("start", "status", "stop"), default="status", nargs="?")
+    profile.add_argument("--hz", type=float, default=250.0)
+    profile.add_argument("--seconds", type=float, default=20.0)
+    perf = sub.add_parser("perf", help="One labeled performance sample (PresentMon + core counters); read-only")
+    perf.add_argument("label", help="File name for <out>/<label>.csv/.json; alternate A/B labels, e.g. A1 B1 A2 B2")
+    perf.add_argument("--seconds", type=float, default=30.0)
+    perf.add_argument("--profile-hz", type=float, default=0.0, help="Also sample the main thread at this rate (e.g. 250)")
+    perf.add_argument("--out", help="Directory; default research/live/<today>-perf")
+    sub.add_parser("perf_table", help="One line per saved perf sample").add_argument("files", nargs="+")
     # Changing tier, render_probe, camera_rig or stream requires the bridge lease;
     # from this CLI only their status forms, camera_rig apply and panic work alone.
     sub.add_parser("tier", help="Show the tier; setting it requires the bridge lease").add_argument(
@@ -121,6 +132,20 @@ def main():
                         print(json.dumps(value, ensure_ascii=False), file=output, flush=True)
                     time.sleep(1 / args.hz)
             return 0
+        elif args.command == "perf":
+            from .perf import line, sample
+            summary = sample(client, args.label, args.seconds, args.out, args.profile_hz)
+            print(line(summary))
+            for entry in (summary.get("main_profile") or {}).get("modules", [])[:8]:
+                print(f"    {entry['share']:6.1%}  {entry['module']}")
+            return 0
+        elif args.command == "perf_table":
+            from .perf import table
+            print(table(args.files))
+            return 0
+        elif args.command == "main_profile":
+            options = {"hz": args.hz, "seconds": args.seconds} if args.action == "start" else {}
+            result = client.request("main_profile", action=args.action, **options)
         elif args.command == "read":
             result = client.read(args.field)
         elif args.command == "tier":

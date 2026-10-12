@@ -44,7 +44,7 @@ private:
         float hfov{},vfov{};
         std::array<uint32_t,2> resolution{};
     };
-    struct Configuration { std::array<View,9> views;uint32_t mask=0;bool ego_full_model=false,private_outputs=false,capture_warmup=false; };
+    struct Configuration { std::array<View,9> views;uint32_t mask=0;bool ego_full_model=false,private_outputs=false,capture_warmup=false,native_mirrors=true; };
     std::atomic<uint64_t> last_render_frame_{0};
     std::atomic<uint32_t> last_render_mask_{0};
     struct Array {uintptr_t vtable=0,data=0;uint64_t size=0,capacity=0;};
@@ -66,6 +66,10 @@ private:
     std::atomic<std::shared_ptr<const Configuration>> prepared_configuration_;
     std::atomic<uint32_t> in_flight_{0};
     std::array<std::atomic<uint64_t>,9> applied_{};
+    // Engine-selected renders of the mirrors this rig does not own, and the
+    // selections dropped while native_mirrors is off.
+    std::array<std::atomic<uint64_t>,9> native_applied_{};
+    std::atomic<uint64_t> native_suppressed_{0};
     std::atomic<uint64_t> unavailable_{0};
     std::atomic<uint64_t> ego_parts_applied_{0};
 };

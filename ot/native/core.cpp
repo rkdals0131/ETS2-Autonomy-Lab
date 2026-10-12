@@ -3,6 +3,7 @@
 #include "../include/mount_layout.hpp"
 #include "build_identity.hpp"
 #include "render_probe.hpp"
+#include "thread_sampler.hpp"
 #include "module_api.hpp"
 #include <scssdk_telemetry.h>
 #include <array>
@@ -61,6 +62,7 @@ public:
     static void SCSAPIFUNC event_callback(scs_event_t event,const void* data,scs_context_t context) noexcept {
         auto& self=*static_cast<Runtime*>(context);
         const auto start=qpc_now();
+        if(event==SCS_TELEMETRY_EVENT_frame_start) self.main_thread_.store(GetCurrentThreadId(),std::memory_order_relaxed);
         try {self.event(event,data);} catch(const std::exception& e) {self.panic();log(std::string("SDK event error: ")+e.what());}
         catch(...) {self.panic();}
         auto& timing=event==SCS_TELEMETRY_EVENT_frame_end?self.frame_end_timing_:
@@ -84,6 +86,7 @@ public:
         json snapshot() const {return {{"samples",count.load()},{"total_ticks",total.load()},{"max_ticks",maximum.load()}};}
     };
     CallbackTiming channel_timing_,frame_start_timing_,frame_end_timing_,other_event_timing_;
+    std::atomic<DWORD> main_thread_{0}; // The game thread that runs SDK frames, render and present.
 private:
     json engine_snapshot();
     json snapshot() const;
@@ -105,6 +108,7 @@ private:
     std::atomic<std::shared_ptr<const json>> latest_;
     std::unique_ptr<Transport> transport_;
     std::unique_ptr<RenderProbe> render_probe_;
+    ThreadSampler sampler_;
 };
 
 void Runtime::initialize() {
@@ -147,6 +151,7 @@ void Runtime::initialize() {
 }
 bool Runtime::shutdown() noexcept {
     if(input_host) input_host->release(input_host->context,OtDriveReason::unloaded);
+    sampler_.stop();
     tier_=0;
     for(auto event:events_) api_.unregister_from_event(event);
     events_.clear();
@@ -411,6 +416,27 @@ json Runtime::command(const json& request) {
     }
     if(cmd=="reload_permissions") return reload_permissions();
     if(cmd=="hooks") return render_probe_->status();
+    if(cmd=="traffic") {
+        // Read-only count for performance runs (scene load changes with traffic).
+        // Guarded reads from this pipe thread; needs the pinned executable.
+        if(!gate_ok_ || !allow_tier1_) throw std::runtime_error("Traffic reads require the version gate and allow_tier1");
+        return read_world_traffic(schema_);
+    }
+    if(cmd=="main_profile") {
+        // Read-only observation, so the bridge's lease owner is not required;
+        // runs are bounded and the target is suspended only for each sample.
+        const auto action=request.value("action",std::string("status"));
+        if(action=="start") {
+            const auto thread=main_thread_.load();
+            if(!thread) throw std::runtime_error("No SDK frame has run yet");
+            const double hz=request.value("hz",250.0),seconds=request.value("seconds",20.0);
+            if(!std::isfinite(hz) || hz<10 || hz>1000 || !std::isfinite(seconds) || seconds<=0 || seconds>120)
+                throw std::runtime_error("Profile hz must be 10-1000 and seconds 0-120");
+            sampler_.start(thread,hz,seconds);
+        } else if(action=="stop") sampler_.stop();
+        else if(action!="status") throw std::runtime_error("Unknown main_profile action");
+        return sampler_.status();
+    }
     if(cmd=="sdk_timing") return {{"qpc_frequency",qpc_frequency()},{"channel",channel_timing_.snapshot()},
         {"frame_start",frame_start_timing_.snapshot()},{"frame_end",frame_end_timing_.snapshot()},{"other_events",other_event_timing_.snapshot()}};
     if(cmd=="frames") return render_probe_->frames(request.value("after_id",uint64_t(0)));

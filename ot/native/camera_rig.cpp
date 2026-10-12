@@ -1,5 +1,6 @@
 #include "camera_rig.hpp"
 #include "../include/geometry.hpp"
+#include <bit>
 #include <cmath>
 #include <stdexcept>
 #include <cstdio>
@@ -51,6 +52,7 @@ json CameraRig::configure(const json& request) {
     config->ego_full_model=request.value("ego_full_model",false);
     config->private_outputs=request.value("private_outputs",false);
     config->capture_warmup=request.value("capture_warmup",false);
+    config->native_mirrors=request.value("native_mirrors",true);
     last_render_mask_=0;
     for(const auto& item:request.at("views")) {
         const int slot=item.at("slot").get<int>();
@@ -89,7 +91,7 @@ json CameraRig::configure(const json& request) {
 json CameraRig::status() {
     auto config=configuration_.load();json views=json::array();
     for(size_t slot=0;slot<9;++slot) {
-        json view={{"slot",slot},{"applied",applied_[slot].load()}};
+        json view={{"slot",slot},{"applied",applied_[slot].load()},{"native_applied",native_applied_[slot].load()}};
         if(config && config->views[slot].enabled) {
             const auto& v=config->views[slot];
             view.update({{"basis",v.basis==Basis::world?"world":v.basis==Basis::cabin?"cabin":"chassis"},{"position",v.position},
@@ -102,11 +104,18 @@ json CameraRig::status() {
         {"ego_full_model",config && config->ego_full_model},{"ego_parts_applied",ego_parts_applied_.load()},
         {"private_outputs",config && config->private_outputs},{"private_ready",private_ready_.load()},
         {"capture_warmup",config && config->capture_warmup},
+        {"native_mirrors",!config || config->native_mirrors},{"native_suppressed",native_suppressed_.load()},
         {"in_flight",in_flight()},{"pending_graphs",graphs_.load()},{"unavailable",unavailable_.load()},{"views",views},
         {"source","private submission copy; persistent mirror fields unchanged"}};
 }
 void CameraRig::select(safetyhook::Context& context,uint32_t capture_mask,uint32_t warmup_mask,uint64_t present_id) noexcept {
     if(auto config=configuration_.load()) {
+        // Native mirrors cost a full scene render each, every frame they are
+        // on screen. Clearing their bits matches the engine's own off-screen
+        // skip; their textures keep the last image.
+        const auto native=uint64_t(0x1FF&~config->mask);
+        if(!config->native_mirrors && (context.r12&native)) {++native_suppressed_;context.r12&=~native;}
+        for(auto bits=context.r12&native;bits;bits&=bits-1) ++native_applied_[std::countr_zero(bits)];
         // This hook runs after native camera updates. Register-only array
         // redirection leaves the engine's owning arrays and HUD aliases intact.
         if(config->private_outputs) {

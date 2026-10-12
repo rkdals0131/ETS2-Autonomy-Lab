@@ -162,7 +162,8 @@ class Controller:
         threading.Thread(target=read, daemon=True).start()
         return process
 
-    def _start(self, duration, camera_hz=None, lidar_hz=None, preview_hz=None, input_only=False, cpu_placement=None):
+    def _start(self, duration, camera_hz=None, lidar_hz=None, preview_hz=None, input_only=False, cpu_placement=None,
+               mirrors_off=None):
         if self.desired or self.relay:
             return
         if not shutil.which("ros2"):
@@ -188,6 +189,9 @@ class Controller:
         settings.update(camera_hz=camera_hz, lidar_hz=lidar_hz, preview_hz=preview_hz)
         if cpu_placement is not None and bool(cpu_placement) != settings.get("cpu_layout", True):
             settings["cpu_layout"] = bool(cpu_placement)
+            changed = True
+        if mirrors_off is not None and (not mirrors_off) != settings.get("native_mirrors", True):
+            settings["native_mirrors"] = not mirrors_off
             changed = True
         if changed:
             temporary = self.config.with_name(self.config.name + ".tmp")
@@ -434,9 +438,11 @@ class Controller:
                         self._stop()
                     elif action == "restart":
                         self._stop()
-                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False), values.get("cpu_layout"))
+                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False), values.get("cpu_layout"),
+                                    values.get("mirrors_off"))
                     elif action == "start":
-                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False), values.get("cpu_layout"))
+                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False), values.get("cpu_layout"),
+                                    values.get("mirrors_off"))
                     elif action in ("drive_start", "drive_stop"):
                         self._drive(action, values.get("speed_kmh", 30), values.get("acc", True), values.get("lcc", True))
                     elif action in ("record_start", "record_stop"):
@@ -498,6 +504,7 @@ def show_window(controller):
     preview_hz = tk.StringVar(value="10")
     input_only = tk.BooleanVar(value=False)
     cpu_placement = tk.BooleanVar(value=True)
+    mirrors_off = tk.BooleanVar(value=False)
     try:
         settings = json.loads(controller.config.read_text(encoding="utf-8"))
         duration.set(str(settings["duration_s"]))
@@ -505,10 +512,12 @@ def show_window(controller):
         lidar_hz.set(str(settings.get("lidar_hz", 10)))
         preview_hz.set(str(settings.get("preview_hz", 10)))
         cpu_placement.set(bool(settings.get("cpu_layout", True)))
+        mirrors_off.set(not settings.get("native_mirrors", True))
     except (OSError, ValueError, KeyError):
         pass
     def request(action):
-        controller.request(action, duration=duration.get(), camera_hz=camera_hz.get(), lidar_hz=lidar_hz.get(), preview_hz=preview_hz.get(), input_only=input_only.get(), cpu_layout=cpu_placement.get())
+        controller.request(action, duration=duration.get(), camera_hz=camera_hz.get(), lidar_hz=lidar_hz.get(), preview_hz=preview_hz.get(), input_only=input_only.get(), cpu_layout=cpu_placement.get(),
+                           mirrors_off=mirrors_off.get())
     start = ttk.Button(actions, text="시작", command=lambda: request("start"))
     start.pack(side="left")
     stop = ttk.Button(actions, text="중지", command=lambda: request("stop"))
@@ -529,6 +538,8 @@ def show_window(controller):
     ttk.Checkbutton(frame, text="입력·상태만 (다음 시작에 적용, 센서 설정 유지)", variable=input_only).pack(anchor="w", pady=(8, 0))
     ttk.Checkbutton(frame, text="CPU 배치: 게임 메인 스레드에 코어 하나, 릴레이·Foxglove 뷰어는 다른 L3 묶음 (다음 시작에 적용)",
                     variable=cpu_placement).pack(anchor="w")
+    ttk.Checkbutton(frame, text="게임 미러 렌더 끄기: 센서 실행 중 화면의 미러가 마지막 장면에서 멈춤, 메인 스레드 절약 (다음 시작에 적용)",
+                    variable=mirrors_off).pack(anchor="w")
     driving_box = ttk.LabelFrame(frame, text="GT 주행 보조", padding=8)
     driving_box.pack(fill="x", pady=(8, 0))
     driving_controls = ttk.Frame(driving_box)
