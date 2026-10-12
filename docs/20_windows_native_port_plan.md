@@ -86,8 +86,8 @@
 
 - ✔ Foxglove에서 센서 표시(사용자 육안). ✔ [21](21_safety_checklist.md) W02 #0–#8, 명령 나이 p99 0.89–1.03 ms.
 - ✔ 전체 점군 L_F·L_PL·L_PR 약 10.0 Hz(200 s, 각 1872개, 원시 구독). ✔ `ets2_sensor_degradation`의 `/sensing/imu/imu_raw`가 원본 IMU와 같은 주기(7951/8099).
-- **✘ `queue_dropped` 0 미달**: 릴레이 13.5분에 누적 20(전체 점군 구독 200 s 동안 5). `main.cpp`의 read/send 큐가 꽉 찰 때 센다. 같은 실행의 `send_elapsed` 최대 326.7 ms. △ [21 발견 1](21_safety_checklist.md#발견)의 `drive_hold` publish 330 ms 정지와 같은 크기라 Fast DDS(SHM 전용 프로필 `bridge/config/fastdds.xml`) 쓰기 경로가 가끔 막히는 것으로 추정. 원인 조사가 남음.
-- ✔ 상태 bag 기록: 런처 기록 4개 모두 metadata.yaml로 닫힘(F11로 끝난 실행 포함). 재생(pause 중 `/clock` 정지)은 남음.
+- **✘ `queue_dropped` 0 미달**: 릴레이 13.5분에 누적 20(전체 점군 구독 200 s 동안 5). `main.cpp`의 read/send 큐가 꽉 찰 때 센다. 같은 실행의 `send_elapsed` 최대 326.7 ms. △ [21 발견 1](21_safety_checklist.md#발견)의 `drive_hold` publish 330 ms 정지와 같은 크기라 Fast DDS(SHM 전용 프로필 `bridge/config/fastdds.xml`) 쓰기 경로가 가끔 막히는 것으로 추정. 원인 조사가 남음. 게임 없는 재현(구독자 강제 종료·일시정지, 탐색, bag 기록기)은 최대 약 20 ms라 330 ms를 재현하지 못했다([21 발견 1](21_safety_checklist.md#발견)). 릴레이가 50 ms를 넘는 발행을 `slow_publishes`로 기록하게 했다.
+- ✔ 상태 bag 기록: 런처 기록 4개 모두 metadata.yaml로 닫힘(F11로 끝난 실행 포함). ✔ 2026-10-13 재생: W02 bag `20261012-220053-eaf9d6bd`의 78–103 s를 `ros2 bag play`로 재생하자 일시정지 5 s 동안 `/clock`이 1625.185 s에 멈춘 채 약 50 Hz로 계속 왔고, 재개 뒤 벽시계와 같은 속도로 진행했다. bag 전체의 일시정지 3구간 모두 값이 멈췄고 역행은 0.
 - ✔ lease 해제: 런처 중지·창 닫기는 `disconnected`·Tier 0·훅 0, 릴레이 강제 종료는 5.17 s 뒤 lease 만료로 Tier 0(`panic`).
 - PresentMon(각 180 s, 장면이 같지 않아 비교는 거칠다):
 
@@ -100,7 +100,7 @@
 
   CPU 바운드이며 센서를 켜면 프레임당 CPU busy가 약 8–10 ms 는다. 네이티브 릴레이 전체 센서 수치는 이전 릴레이와 비슷하다. [22 §6](22_p0_spike_runbook.md)의 같은 정차 장면 A/B는 아직 하지 않았다.
 - ✔ 같은 날 정차 장면 CPU 분석([18](18_performance.md#cpu-병목-분석)): 게임 메인 스레드 하나가 병목이고, Foxglove 뷰어 경쟁이 프레임당 16 ms를 더한다. core 0.32.0(자세 rider, 센서 렌더 −33%)과 런처 CPU 배치(−5.9 ms)를 넣었다. 다음 작업은 [26 CPU 최적화 계획](26_cpu_optimization_plan.md).
-- 남음: GT baseline 회귀, bag 재생, `queue_dropped` 원인, 정차 장면 A/B([26](26_cpu_optimization_plan.md) C0 프로토콜로).
+- 남음: GT baseline 회귀, `queue_dropped` 원인(`slow_publishes`로 시점 확인), 정차 장면 A/B([26](26_cpu_optimization_plan.md) C0 프로토콜로).
 
 ### P2. 스택 배치 (M)
 

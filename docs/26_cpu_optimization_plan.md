@@ -34,7 +34,7 @@
   - PresentMon fps·p50·p99·CPU/GPU busy
   - 센서 렌더/초, `hooks`·`sdk_timing` 증분, stream 카운터
   - 교통 차량 수, 뷰어 프로세스 CPU, 게임 창 전경 여부
-- 메인 스레드 샘플러를 만듭니다. core 안의 worker가 250 Hz로 메인 스레드를 잠깐 멈추고(`SuspendThread`·`GetThreadContext`) RIP의 모듈을 셉니다: `eurotrucks2.exe`·`d3d11.dll`·`nvwgf2umx.dll`·`ot_core.dll`·`ntdll`/`kernel*`. pipe 명령으로 켜고 끄며 기본은 끔입니다. 관리자 권한이 있으면 WPR(ETW) 샘플링으로 대신할 수 있습니다.
+- 메인 스레드 샘플러(`main_profile`): core 안의 worker가 메인 스레드를 잠깐 멈추고(`SuspendThread`·`GetThreadContext`) RIP의 모듈을 셉니다. `eurotrucks2.exe`·`d3d11.dll`·`nvwgf2umx.dll`·`ot_core.dll`·`ntdll`/`kernel*` 비중으로 엔진·D3D·드라이버·우리 코드를 나눕니다. 요청한 시간만 돌고 기본은 끔입니다. 관리자 권한이 있으면 WPR(ETW) 샘플링으로 교차 확인할 수 있습니다.
 - 완료 기준: 같은 조건 ABAB 3회의 fps 편차 ±3% 이내. 메인 스레드 모듈별 비중 표(브리지 끔·센서 켬). Tier 1·2 `sdk_timing`.
 
 ### C1. 준비 렌더 줄이기 (M–L, 연구, 게임)

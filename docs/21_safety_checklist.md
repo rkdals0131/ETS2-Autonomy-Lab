@@ -34,6 +34,7 @@
 ## 발견
 
 1. ✔ **발행기 publish 정지 330 ms.** #6 첫 시도에서 arm 1.5 s 뒤 kill 전에 `expired`가 났다. bag의 `sent_steady_ns`로 보면 seq 75는 seq 74보다 15 ms 뒤에 찍혔지만 342 ms 뒤에 도착했고, seq 76은 seq 75보다 328 ms 뒤에 찍혔다. 즉 `drive_hold` 안에서 seq 75의 publish 호출이 약 330 ms 막혔다. 같은 구간의 `/ets2/drive/state`·`/clock`·GNSS는 끊기지 않았다. 릴레이는 seq 75를 나이 초과로 버리고(`stale_commands` 1) core는 마지막 명령 233 ms 뒤 `expired`로 해제해 안전 경로는 설계대로 동작했다. △ 원인은 Fast DDS 쓰기 경로로 추정하며 미확인. 2026-10-12 시험 약 10회 중 1회. 자율주행 제어기가 같은 정지를 겪으면 200 ms 창에서 거짓 해제가 난다. 장시간 발행 jitter 측정이 남았다.
+   - 2026-10-13 게임 없는 재현 시도(같은 `fastdds.xml`, rclpy 발행기 50 Hz·대용량 10 Hz): 구독자 강제 종료는 4회 모두 1.3–3.0 s 뒤 발행 한 번이 약 20 ms 막혔다(토픽 16개여도 한 번). 구독자 25 s 일시정지, ros2 CLI 5회, bag 기록기의 19개 토픽 구독은 최대 4.9 ms. 330 ms는 재현하지 못했다. 릴레이는 이제 토픽 하나의 발행이 50 ms를 넘으면 시각·토픽·잠금 대기·발행 시간을 상태 보고 `slow_publishes`에 남기고 런처 "발행" 줄에 횟수를 보인다. 다음 게임 세션에서 그 시각을 구독자 접속·종료와 맞춰 본다.
 2. ✔ **0.31.0은 릴레이 정상 종료를 `panic`으로 기록.** `DriveEnd`가 `disconnected`로 해제한 76 ms 뒤 lease 반납이 `Runtime::panic`을 불러 사유를 `panic`으로 덮었다. 해제 자체는 맞지만 기록이 틀리다. 0.31.1에서 lease 반납은 `Runtime::release_runtime(disconnected)`로 바꾸고 F11·오류·lease 만료는 `panic`으로 남겼다. 게임 실행 중 `loader unload` → core 교체 → `loader load`로 설치(7.5 s 공백, 운전 epoch 유지). 이전 DLL은 `ot/backup/2026-10-12-before-0.31.1/`.
 3. ✔ 해제 상태의 `reason`은 마지막 해제 사유가 아니라 이후 사건으로 바뀐다(#8의 `input_unavailable`→`paused`, #4의 깜빡임). 해제 사유는 armed→해제 전이 표본에서 읽는다.
 
