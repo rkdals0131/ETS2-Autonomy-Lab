@@ -1,4 +1,8 @@
-"""Windows control window for one owned relay + WSL ROS/Foxglove session."""
+"""Windows control window for one owned relay, Foxglove server, GT drive and recorder.
+
+Run inside the pixi environment (`pixi run launcher`): every child inherits the
+activated ROS 2 environment and the shared DDS profile.
+"""
 from collections import deque
 import ctypes as C
 from ctypes import wintypes as W
@@ -7,6 +11,8 @@ import math
 import os
 from pathlib import Path
 import queue
+import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -16,9 +22,11 @@ import uuid
 APP_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_ROOT.parents[1]
 BRIDGE_ROOT = PROJECT_ROOT / "bridge"
+RELAY = PROJECT_ROOT / "ros2" / "install" / "lib" / "ets2_relay" / "ets2_relay.exe"
+FOXGLOVE_PORT = 8765
 sys.path.insert(0, str(PROJECT_ROOT / "ot" / "py"))
 from otpy.client import Client, LoaderClient
-import session
+from bag_recording import BagRecording
 
 K = C.WinDLL("kernel32", use_last_error=True)
 for name, result, args in [
@@ -65,6 +73,30 @@ class Job:
             self.handle = None
 
 
+class StopEvent:
+    """Named manual-reset event a child waits on (relay, --stop-event of ROS nodes)."""
+    def __init__(self, role):
+        self.name = f"Local\\ETS2AutonomyLab.Stop.{role}.{uuid.uuid4().hex}"
+        self.handle = K.CreateEventW(None, True, False, self.name)
+        if not self.handle:
+            raise C.WinError(C.get_last_error())
+
+    def set(self):
+        if self.handle:
+            K.SetEvent(self.handle)
+
+    def close(self):
+        if self.handle:
+            K.CloseHandle(self.handle)
+            self.handle = None
+
+
+def foxglove_listening():
+    with socket.socket() as probe:
+        probe.settimeout(0.2)
+        return probe.connect_ex(("127.0.0.1", FOXGLOVE_PORT)) == 0
+
+
 class Controller:
     """All state transitions run on one worker; snapshots report observed state."""
     def __init__(self, config=BRIDGE_ROOT / "config" / "bridge.local.json"):
@@ -81,16 +113,17 @@ class Controller:
         self.commands, self.lines = queue.Queue(), queue.Queue()
         self.lock = threading.Lock()
         self.logs = deque(maxlen=80)
-        self.state = {"phase": "stopped", "message": "시작을 누르면 WSL과 Windows 브리지를 연결합니다.",
-                      "game": "확인 중", "config": str(self.config), "wsl": {}, "relay": {},
+        self.state = {"phase": "stopped", "message": "시작을 누르면 게임 릴레이와 Foxglove 서버를 띄웁니다.",
+                      "game": "확인 중", "config": str(self.config), "relay": {}, "foxglove": False,
                       "recording": {"phase": "idle"}, "recording_error": ""}
-        self.relay = self.wsl = self.job = self.stop_event = None
-        self.unit = None
-        self.distro = "Ubuntu"
+        self.relay = self.foxglove = self.drive = self.provider = self.job = None
+        self.relay_stop = self.drive_stop_event = None
+        self.recording = None
+        self.mode_change = None
         self.desired = False
         self.input_only = False
-        self.provider = None
         self.drive_request = None
+        self.last_relay = 0.0
         self.closed = threading.Event()
         self.worker = threading.Thread(target=self._loop, daemon=False)
         self.worker.start()
@@ -110,20 +143,10 @@ class Controller:
         with self.lock:
             self.logs.append(line)
 
-    def wsl_exec(self, *command):
-        return ["wsl.exe", "-d", self.distro, "--cd", "/", "--exec", *command]
-
-    def linux_paths(self, *paths):
-        result = subprocess.run(self.wsl_exec("/bin/sh", "-c",
-                                 'for p do wslpath -a "$p" || exit; done', "ets2-launcher", *map(str, paths)),
-                                capture_output=True, text=True, encoding="utf-8", timeout=30,
-                                creationflags=subprocess.CREATE_NO_WINDOW, check=True)
-        return result.stdout.strip().splitlines()
-
-    def spawn(self, command, source):
-        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    def spawn(self, command, source, extra_flags=0):
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                                   bufsize=1, creationflags=subprocess.CREATE_NO_WINDOW)
+                                   bufsize=1, creationflags=subprocess.CREATE_NO_WINDOW | extra_flags)
         self.job.add(process)
         def read():
             with process.stdout:
@@ -133,14 +156,15 @@ class Controller:
         return process
 
     def _start(self, duration, camera_hz=None, lidar_hz=None, preview_hz=None, input_only=False):
-        if self.desired or self.wsl or self.relay:
+        if self.desired or self.relay:
             return
-        if self.unit:
-            raise RuntimeError("이전 WSL 실행의 종료 확인이 필요합니다. 중지를 다시 눌러 주세요.")
+        if not shutil.which("ros2"):
+            raise RuntimeError("ROS 2 환경이 없습니다. apps/launch.cmd(pixi run launcher)로 실행해 주세요.")
+        if not RELAY.is_file():
+            raise RuntimeError("릴레이가 빌드되지 않았습니다. 저장소에서 pixi run build를 먼저 실행해 주세요.")
         if not self.config.is_file():
             raise RuntimeError("bridge/configure.py를 먼저 실행해 로컬 설정을 만들어 주세요.")
         settings = json.loads(self.config.read_text(encoding="utf-8"))
-        self.distro = str(settings.get("wsl_distro", "Ubuntu"))
         changed = any(value is not None for value in (duration, camera_hz, lidar_hz, preview_hz))
         if duration is not None:
             duration = float(duration)
@@ -165,27 +189,41 @@ class Controller:
         duration = float(settings.get("duration_s", 60))
         if not math.isfinite(duration) or duration <= 0:
             raise ValueError("duration_s must be positive")
-        client = Client(timeout=0.5)
-        if client.tier()["tier"] != 0:
+        if Client(timeout=0.5).tier()["tier"] != 0:
             raise RuntimeError("다른 수집 또는 리그가 실행 중입니다. 기존 작업을 먼저 중지해 주세요.")
-        if not (BRIDGE_ROOT / "dist" / "ets2_relay.exe").is_file():
-            raise RuntimeError("bridge/build.cmd를 먼저 실행해 주세요.")
+        if foxglove_listening():
+            raise RuntimeError(f"127.0.0.1:{FOXGLOVE_PORT}을 이미 다른 프로세스가 쓰고 있습니다. 기존 Foxglove 서버를 먼저 종료해 주세요.")
         self.desired = True
         self.input_only = bool(input_only)
         self.started = time.monotonic()
-        self.last_wsl = self.last_relay = self.last_heartbeat = 0.0
         self.job = Job()
-        self.update(phase="starting", message=f"{self.distro}의 ROS·Foxglove 서버를 시작합니다.",
-                    wsl={}, relay={}, duration_s=duration)
-        bridge, app, config = self.linux_paths(BRIDGE_ROOT, APP_ROOT, self.config)
-        self.unit = "ets2-launcher-" + uuid.uuid4().hex
-        command = session.command(self.unit, config, bridge + '/ros-env.sh', app, duration)
-        self.wsl = self.spawn(self.wsl_exec(*command), "wsl")
-        self.started = time.monotonic()
-        self.update(wsl_pid=self.wsl.pid, unit=self.unit)
+        self.recording = BagRecording(self.config, self.job)
+        self.update(phase="starting", message="Foxglove 서버와 게임 릴레이를 시작합니다.", relay={}, foxglove=False,
+                    duration_s=duration)
+        self.foxglove = self.spawn(["ros2", "run", "foxglove_bridge", "foxglove_bridge", "--ros-args",
+                                    "--params-file", str(BRIDGE_ROOT / "config" / "foxglove.yaml"),
+                                    "-p", "address:=127.0.0.1", "-p", f"port:={FOXGLOVE_PORT}"], "foxglove")
+        self.relay_stop = StopEvent("relay")
+        command = [str(RELAY), str(self.config), self.relay_stop.name]
+        if self.input_only:
+            command.append("--input-only")
+        self.relay = self.spawn(command, "relay")
+        self.last_relay = time.monotonic()
+        self.update(foxglove_pid=self.foxglove.pid, relay_pid=self.relay.pid,
+                    phase="connecting", message="게임 릴레이의 첫 상태 보고를 기다립니다.")
 
-    def _signal_wsl(self, action, **values):
-        session.send(self.wsl, action, **values)
+    def _release_drive(self, timeout=3):
+        """Disarm through the GT node's stop event; kill only if it does not exit."""
+        if self.drive and self.drive.poll() is None:
+            self.drive_stop_event.set()
+            try:
+                self.drive.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self.drive.kill()  # The core then releases on the 200 ms command window.
+                self.drive.wait(timeout=3)
+        if self.drive_stop_event:
+            self.drive_stop_event.close()
+        self.drive = self.drive_stop_event = None
 
     def _drive(self, action, speed_kmh=30, acc=True, lcc=True):
         if action == "drive_stop":
@@ -193,7 +231,7 @@ class Controller:
                 self.provider.terminate()
                 self.provider.wait(timeout=3)
             self.provider = self.drive_request = None
-            self._signal_wsl("drive_stop")
+            self._release_drive()
             return
         if self.snapshot()["phase"] != "running" or not self.input_only:
             raise RuntimeError("입력·상태만으로 브리지를 시작한 뒤 GT 주행을 눌러 주세요.")
@@ -206,8 +244,8 @@ class Controller:
         if self.provider:
             self.drive_request.update(speed_mps=speed, acc=bool(acc), lcc=bool(lcc))
             return
-        if self.snapshot()["wsl"].get("drive_pid"):
-            self._signal_wsl("drive_update", speed_mps=speed, acc=bool(acc), lcc=bool(lcc))
+        if self.drive and self.drive.poll() is None:
+            self._set_drive_mode(speed, bool(acc), bool(lcc))
             return
         dotnet = PROJECT_ROOT / "research" / "tools" / "dotnet10" / "dotnet.exe"
         provider = BRIDGE_ROOT / "build" / "map_lane_provider" / "Release" / "net10.0" / "map_lane_provider.dll"
@@ -216,29 +254,44 @@ class Controller:
         output = BRIDGE_ROOT / "recordings" / "gt-path" / "current-lane.json"
         output.parent.mkdir(parents=True, exist_ok=True)
         game = Path(LoaderClient(timeout=2).status()["module_path"]).parents[4]
-        path, = self.linux_paths(output)
-        self.drive_request = {"path": path, "speed_mps": speed, "acc": bool(acc), "lcc": bool(lcc)}
+        self.drive_request = {"path": str(output), "speed_mps": speed, "acc": bool(acc), "lcc": bool(lcc)}
         self.provider = self.spawn([str(dotnet), str(provider), "--game", str(game), "--out", str(output), "--distance-m", "1000"], "lane")
         self.update(message="현재 도로의 실제 차로 기준선을 준비합니다.")
 
-    def _record(self, action, profile="state"):
-        if action == "record_start" and self.snapshot()["phase"] != "running":
-            self.update(recording_error="브리지 연결 후 기록을 시작해 주세요.")
-            return
-        self.update(recording_error="")
-        self._signal_wsl(action, profile=profile)
+    def _start_drive(self, request):
+        self.drive_stop_event = StopEvent("drive")
+        self.drive = self.spawn(["ros2", "run", "ets2_autonomy", "drive_speed", "--stop-event", self.drive_stop_event.name,
+                                 "--ros-args", "-p", "arm:=true", "-p", "path_file:=" + request["path"],
+                                 "-p", "acc_enabled:=" + str(request["acc"]).lower(),
+                                 "-p", "lcc_enabled:=" + str(request["lcc"]).lower(),
+                                 "-p", "target_speed_mps:=" + str(float(request["speed_mps"]))], "drive")
+        self.update(message="GT 주행을 시작합니다. 게임 창으로 돌아가세요.")
 
-    def _start_relay(self):
-        name = "Local\\ETS2AutonomyLab.Stop." + uuid.uuid4().hex
-        self.stop_event = K.CreateEventW(None, True, False, name)
-        if not self.stop_event:
-            raise C.WinError(C.get_last_error())
-        command = [str(BRIDGE_ROOT / "dist" / "ets2_relay.exe"), str(self.config), name]
-        if self.input_only:
-            command.append("--input-only")
-        self.relay = self.spawn(command, "relay")
-        self.last_relay = time.monotonic()
-        self.update(phase="connecting", message="게임과 ROS 사이의 실제 응답을 기다립니다.", relay_pid=self.relay.pid)
+    def _set_drive_mode(self, speed, acc, lcc):
+        """One atomic parameter change keeps the owner and epoch (no re-arm)."""
+        if self.mode_change and self.mode_change.poll() is None:
+            raise RuntimeError("이전 모드 변경 응답을 기다리고 있습니다.")
+        def value(kind, field, data):
+            return "{type: %d, %s: %s}" % (kind, field, data)
+        request = "{parameters: [%s]}" % ", ".join([
+            "{name: target_speed_mps, value: %s}" % value(3, "double_value", repr(float(speed))),
+            "{name: acc_enabled, value: %s}" % value(1, "bool_value", str(acc).lower()),
+            "{name: lcc_enabled, value: %s}" % value(1, "bool_value", str(lcc).lower())])
+        self.mode_change = self.spawn(["ros2", "service", "call", "/ets2_drive_speed/set_parameters_atomically",
+                                       "rcl_interfaces/srv/SetParametersAtomically", request], "mode")
+
+    def _record(self, action, profile="state"):
+        if action == "record_start":
+            if self.snapshot()["phase"] != "running" or not self.recording:
+                self.update(recording_error="브리지 연결 후 기록을 시작해 주세요.")
+                return
+            self.update(recording_error="")
+            try:
+                self.recording.start(profile)
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                self.update(recording_error=str(error))
+        elif self.recording:
+            self.recording.stop()
 
     def _stop(self, phase="stopped", message="중지됨"):
         self.desired = False
@@ -246,95 +299,57 @@ class Controller:
         self.update(phase="stopping", message="수집 해제와 프로세스 종료를 확인합니다.")
         errors = []
         try:
-            if self.stop_event:
-                K.SetEvent(self.stop_event)
+            if self.recording:
+                self.recording.close()
+                self.update(recording=self.recording.poll())
+            self._release_drive()
+            if self.relay_stop:
+                self.relay_stop.set()
             if self.relay:
                 try:
                     self.relay.wait(timeout=7)
                 except subprocess.TimeoutExpired:
                     self.relay.kill()
                     self.relay.wait(timeout=3)
-                    # The game's existing lease expires five seconds after its last heartbeat.
+                    # The game's lease expires five seconds after its last heartbeat.
                     time.sleep(5.1)
-            try:
-                self._signal_wsl("stop")
-            except (OSError, ValueError):
-                pass
-            if self.wsl:
-                try:
-                    self.wsl.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    pass
-            if self.unit:
-                subprocess.run(self.wsl_exec("systemctl", "--user", "stop", self.unit), capture_output=True, timeout=15,
-                                        creationflags=subprocess.CREATE_NO_WINDOW)
-                check = subprocess.run(self.wsl_exec("systemctl", "--user", "show", self.unit,
-                                                     "-p", "ActiveState", "-p", "MainPID"),
-                                       capture_output=True, text=True, timeout=10,
-                                       creationflags=subprocess.CREATE_NO_WINDOW)
-                properties = dict(line.split("=", 1) for line in check.stdout.splitlines() if "=" in line)
-                if check.returncode or properties.get("MainPID") != "0" or properties.get("ActiveState") not in ("inactive", "failed"):
-                    errors.append("WSL 종료 확인 실패: " + self.unit)
-                else:
-                    self.unit = None
-            # Preserve the recorder's final counts/path before releasing the WSL process.
-            while not self.lines.empty():
-                source, pid, line = self.lines.get()
-                if source == "wsl" and self.wsl and pid == self.wsl.pid:
-                    try:
-                        value = json.loads(line)
-                        if value.get("type") == "recording_status":
-                            self.update(recording=value["recording"])
-                    except ValueError:
-                        pass
         except Exception as error:
             errors.append(str(error))
         finally:
             if self.job:
-                self.job.close()
-            for process in (self.relay, self.wsl, self.provider):
+                self.job.close()  # Foxglove, provider and anything left in the job end here.
+            for process in (self.relay, self.foxglove, self.provider, self.mode_change):
                 if process:
                     try:
                         process.wait(timeout=3)
                     except subprocess.TimeoutExpired:
                         errors.append(f"PID {process.pid} 종료 확인 실패")
-                    process.stdin.close()
-            if self.stop_event:
-                K.CloseHandle(self.stop_event)
-            self.relay = self.wsl = self.job = self.stop_event = self.provider = None
-        self.update(phase="error" if errors else phase,
-                    message="; ".join(errors) if errors else message, relay_pid=None, wsl_pid=None, unit=self.unit)
+            if self.relay_stop:
+                self.relay_stop.close()
+            self.relay = self.foxglove = self.provider = self.mode_change = self.job = self.relay_stop = None
+        self.update(phase="error" if errors else phase, foxglove=False,
+                    message="; ".join(errors) if errors else message, relay_pid=None, foxglove_pid=None)
 
     def _observe(self):
         now = time.monotonic()
         while not self.lines.empty():
             source, pid, line = self.lines.get()
-            process = self.wsl if source == "wsl" else (self.provider if source == "lane" else self.relay)
+            process = {"relay": self.relay, "foxglove": self.foxglove, "lane": self.provider,
+                       "drive": self.drive, "mode": self.mode_change}.get(source)
             if not process or process.pid != pid:
                 continue
-            try:
-                data = json.loads(line)
-            except ValueError:
-                self.log(source + ": " + line)
-                continue
-            if source == "wsl" and data.get("type") == "session_error":
-                raise RuntimeError(data["error"])
-            if source == "wsl" and data.get("type") == "recording_error":
-                self.update(recording_error=data["error"])
-            if source == "wsl" and data.get("type") == "drive_error":
-                self.update(message=data["error"])
-            if source == "wsl" and data.get("type") == "recording_status":
-                self.update(recording=data["recording"])
-            if source == "wsl" and data.get("type") == "session_status":
-                self.last_wsl = now
-                self.update(wsl=data, recording=data.get("recording", {"phase": "idle"}))
-                if self.relay and not data["listeners_ready"]:
-                    raise RuntimeError("ROS 또는 Foxglove 서버 연결이 내려갔습니다.")
-                if data["listeners_ready"] and not self.relay:
-                    self._start_relay()
-            elif source == "relay" and "sent_bundles" in data:
-                self.last_relay = now
-                self.update(relay=data)
+            if source == "relay":
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    data = None
+                if isinstance(data, dict) and "sent_bundles" in data:
+                    self.last_relay = now
+                    self.update(relay=data)
+                    continue
+            if source == "mode" and "successful=False" in line:
+                self.update(message="GT 모드 변경 거절: " + line)
+            self.log(source + ": " + line)
         if self.provider and self.provider.poll() is not None:
             code = self.provider.returncode
             self.provider = None
@@ -342,15 +357,16 @@ class Controller:
             if code:
                 raise RuntimeError("현재 도로의 GT 차로 생성 실패: 로그를 확인해 주세요.")
             if request:
-                self._signal_wsl("drive_start", **request)
-                self.update(message="GT 주행을 시작합니다. 게임 창으로 돌아가세요.")
+                self._start_drive(request)
+        if self.drive and self.drive.poll() is not None:
+            self.log(f"drive: GT 주행 종료 (code={self.drive.returncode})")
+            self._release_drive()
+        if self.recording:
+            self.update(recording=self.recording.poll())
         if not self.desired:
             return
-        if now - self.last_heartbeat > 1:
-            self._signal_wsl("heartbeat")
-            self.last_heartbeat = now
-        if self.wsl and self.wsl.poll() is not None:
-            raise RuntimeError("WSL 세션이 종료됐습니다. 로그를 확인한 뒤 다시 시작해 주세요.")
+        if self.foxglove and self.foxglove.poll() is not None:
+            raise RuntimeError(f"Foxglove 서버가 종료됐습니다 (code={self.foxglove.returncode}). 로그를 확인해 주세요.")
         if self.relay and self.relay.poll() is not None:
             code = self.relay.returncode
             self._stop("stopped" if code == 0 else "error",
@@ -358,21 +374,16 @@ class Controller:
                        ("현재 차량과 센서 보정이 다릅니다. 차량에 맞는 rig를 선택하거나 ‘입력·상태만’을 선택하고 시작하세요." if code == 2 else
                         "릴레이 종료: F11·게임 연결·아래 로그를 확인해 주세요. 자동 재시작은 멈췄습니다."))
             return
-        if not self.relay and now - self.started > 35:
-            raise TimeoutError("WSL 서버 준비 시간이 초과됐습니다.")
-        if self.last_wsl and now - self.last_wsl > 6:
-            raise TimeoutError("WSL 상태 응답이 끊겼습니다.")
-        if self.relay:
-            snapshot = self.snapshot()
-            relay, wsl = snapshot["relay"], snapshot["wsl"]
-            ack, age = relay.get("ros_ack_age_ms"), wsl.get("state_age_s")
-            connected = now - self.last_relay < 3 and ack is not None and ack < 3000 and age is not None and age < 3
-            if connected:
-                label = "게임 일시정지" if wsl.get("paused") else (
-                    "센서 구독 대기" if relay.get("demand_topics", 0) <= 2 and relay.get("sent_bundles", 0) == 0 else "연결됨")
-                self.update(phase="running", message=label + " · ROS 수신 확인")
-            else:
-                self.update(phase="connecting", message="연결 응답 대기 · 현재 수신이 확인되지 않습니다.")
+        foxglove = foxglove_listening()
+        relay = self.snapshot()["relay"]
+        if now - self.last_relay < 3 and relay:
+            label = "게임 일시정지" if relay.get("paused") else (
+                "센서 구독 대기" if relay.get("demand_topics", 0) <= 2 and relay.get("sent_bundles", 0) == 0 else "연결됨")
+            self.update(phase="running", foxglove=foxglove, message=label + ("" if foxglove else " · Foxglove 서버 시작 중"))
+        else:
+            if now - self.started > 35:
+                raise TimeoutError("게임 릴레이의 상태 보고가 없습니다. 게임과 로그를 확인해 주세요.")
+            self.update(phase="connecting", foxglove=foxglove, message="게임 릴레이의 상태 보고를 기다립니다.")
 
     def _loop(self):
         last_game = 0.0
@@ -419,6 +430,14 @@ class Controller:
         self.worker.join()
         K.CloseHandle(self.show)
         K.CloseHandle(self.mutex)
+
+
+def observed_drive(relay, age):
+    """A stale observation never presents an armed axis as enabled."""
+    drive = relay.get("drive") if relay else None
+    if not drive or age >= 2:
+        return 0, "게임 상태 응답 대기"
+    return (drive.get("axes", 0) if drive.get("armed") else 0), drive.get("reason", "")
 
 
 def show_window(controller):
@@ -496,7 +515,7 @@ def show_window(controller):
                                  state="readonly", width=23)
     profile_entry.pack(side="left", padx=(0, 8))
     record_start = ttk.Button(recording_actions, text="기록 시작",
-        command=lambda: controller.request("record_start", profile=profiles[record_profile.get()]))
+                              command=lambda: controller.request("record_start", profile=profiles[record_profile.get()]))
     record_start.pack(side="left")
     record_stop = ttk.Button(recording_actions, text="기록 종료", command=lambda: controller.request("record_stop"))
     record_stop.pack(side="left", padx=6)
@@ -512,11 +531,11 @@ def show_window(controller):
     rows = {}
     grid = ttk.Frame(frame)
     grid.pack(fill="x")
-    for index, key in enumerate(("게임 SDK", "Windows 릴레이", "WSL ROS / Foxglove", "전송 / ROS 수신", "수집 상태", "Foxglove 주소")):
+    for index, key in enumerate(("게임 SDK", "Windows 릴레이", "Foxglove 서버", "발행", "수집 상태", "Foxglove 주소")):
         ttk.Label(grid, text=key, width=22).grid(row=index, column=0, sticky="w", pady=4)
         rows[key] = ttk.Label(grid, text="—")
         rows[key].grid(row=index, column=1, sticky="w")
-    endpoint = ""
+    endpoint = f"ws://127.0.0.1:{FOXGLOVE_PORT}"
     def copy_address():
         window.clipboard_clear()
         window.clipboard_append(endpoint)
@@ -533,7 +552,7 @@ def show_window(controller):
         controller.request("close")
     window.protocol("WM_DELETE_WINDOW", close)
     def refresh():
-        nonlocal endpoint, last_logs, recording_path
+        nonlocal last_logs, recording_path
         if controller.closed.is_set():
             window.destroy()
             return
@@ -544,17 +563,17 @@ def show_window(controller):
         state = controller.snapshot()
         phase = state["phase"]
         active = phase in ("starting", "connecting", "running", "stopping")
-        start.config(state="disabled" if active or closing or state.get("unit") else "normal")
-        stop.config(state="normal" if (active or state.get("unit")) and phase != "stopping" and not closing else "disabled")
+        start.config(state="disabled" if active or closing else "normal")
+        stop.config(state="normal" if active and phase != "stopping" and not closing else "disabled")
         restart.config(state="normal" if phase in ("running", "connecting") and not closing else "disabled")
         duration_entry.config(state="disabled" if active else "normal")
         for entry in rate_entries:
             entry.config(state="disabled" if active else "normal")
         summary.config(text=state["message"])
-        relay, wsl = state["relay"], state["wsl"]
+        relay = state["relay"]
         drive_start.config(state="normal" if phase == "running" and not closing else "disabled")
         drive_stop.config(state="normal" if phase == "running" and not closing else "disabled")
-        mask, reason = session.observed_drive(wsl, controller.last_wsl if wsl else time.monotonic())
+        mask, reason = observed_drive(relay, time.monotonic() - controller.last_relay)
         drive_status.config(text=f"실제 상태: ACC {'켜짐' if mask & 2 else '꺼짐'} · LCC {'켜짐' if mask & 1 else '꺼짐'} · {reason}")
         recording = state["recording"]
         record_phase = recording.get("phase", "idle")
@@ -577,12 +596,14 @@ def show_window(controller):
         recording_text.config(text=record_label)
         rows["게임 SDK"].config(text=state["game"])
         rows["Windows 릴레이"].config(text=f"PID {state['relay_pid']}" if state.get("relay_pid") else "중지됨")
-        rows["WSL ROS / Foxglove"].config(text=f"{controller.distro} · ROS PID {wsl.get('ros_pid', '—')}" if state.get("wsl_pid") else "중지됨")
-        rows["전송 / ROS 수신"].config(text=f"{relay.get('sent_bundles', 0)} / {relay.get('ros_received_bundles', 0)} 묶음 · 큐 누락 {relay.get('queue_dropped', 0)}")
+        rows["Foxglove 서버"].config(text=(f"PID {state['foxglove_pid']} · " + ("대기 중" if state.get("foxglove") else "시작 중"))
+                                     if state.get("foxglove_pid") else "중지됨")
+        commands = relay.get("drive_commands") or {}
+        rows["발행"].config(text=f"{relay.get('sent_bundles', 0)} 묶음 · 큐 누락 {relay.get('queue_dropped', 0)}"
+                               f" · 명령 {commands.get('forwarded_commands', 0)} (지연 폐기 {commands.get('stale_commands', 0)})")
         rows["수집 상태"].config(text=("활성" if relay.get("capture_active") else "대기") if phase == "running" else
-                              ("연결 확인 중" if active else "중지됨"))
-        endpoint = "ws://" + wsl["ip"] + ":8765" if state.get("wsl_pid") and wsl.get("ip") else ""
-        rows["Foxglove 주소"].config(text=endpoint or "—")
+                                ("연결 확인 중" if active else "중지됨"))
+        rows["Foxglove 주소"].config(text=endpoint if state.get("foxglove") else "—")
         text = "\n".join(state["logs"])
         if text != last_logs:
             log.config(state="normal")

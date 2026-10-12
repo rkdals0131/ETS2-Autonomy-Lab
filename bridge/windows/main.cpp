@@ -160,13 +160,16 @@ int main(int argc,char** argv) {
             }
             if(ticks()-report>=1000) {
                 // The launcher reads this line; ACC/LCC ownership comes from the same SDK sample.
-                json drive=nullptr;
-                if(const auto sample=source.latest();sample && sample->telemetry.contains("drive")) {
-                    const auto& d=sample->telemetry.at("drive");
-                    drive={{"armed",d.value("armed",false)},{"axes",d.value("axes",0u)},{"reason",d.value("reason",std::string{})}};
+                json drive=nullptr,paused=nullptr;
+                if(const auto sample=source.latest()) {
+                    paused=sample->telemetry.value("paused",false);
+                    if(sample->telemetry.contains("drive")) {
+                        const auto& d=sample->telemetry.at("drive");
+                        drive={{"armed",d.value("armed",false)},{"axes",d.value("axes",0u)},{"reason",d.value("reason",std::string{})}};
+                    }
                 }
                 std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
-                {"session",session},{"capture_active",capture_active.load()},{"demand_topics",requested->size()},{"drive",drive},
+                {"session",session},{"capture_active",capture_active.load()},{"demand_topics",requested->size()},{"paused",paused},{"drive",drive},
                 {"diagnostic_sensor_stage",sensor_stage},{"consumed_bundles",consumed.load()},
                 {"encoded_bundles",encoded.load()},{"encoded_bytes",encoded_bytes.load()},
                 {"camera_hz",camera_hz},{"lidar_hz",lidar_hz},

@@ -3,14 +3,12 @@ from datetime import datetime
 import json
 from pathlib import Path
 import shutil
-import signal
 import subprocess
+import sys
 import time
 import uuid
 
 import yaml
-
-from processes import signal_group
 
 
 STATE_TOPICS = [
@@ -18,11 +16,26 @@ STATE_TOPICS = [
     "/ets2/ground_truth/ego/pose", "/ets2/imu/data_raw", "/ets2/wheels/state",
     "/ets2/wheels/odometry", "/ets2/gnss/fix", "/ets2/sensors/config", "/diagnostics",
 ]
+# rosbag2 closes its MCAP (metadata.yaml, index) only on CTRL_C; CTRL_BREAK and
+# termination leave the file unfinished (docs/22 §6). CTRL_C reaches a process
+# only through its console, so the recorder gets its own hidden console and a
+# helper attaches to it to send the event.
+_CTRL_C = ("import ctypes,sys;k=ctypes.WinDLL('kernel32');k.FreeConsole();"
+           "k.AttachConsole(int(sys.argv[1])) or sys.exit(1);k.SetConsoleCtrlHandler(None,True);"
+           "sys.exit(0 if k.GenerateConsoleCtrlEvent(0,0) else 1)")
+
+
+def _hidden_console():
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = 0  # SW_HIDE
+    return startup
 
 
 class BagRecording:
-    def __init__(self, config):
+    def __init__(self, config, job=None):
         self.config = Path(config)
+        self.job = job
         self.process = None
         self.directory = None
         self.stop_at = None
@@ -33,13 +46,11 @@ class BagRecording:
             return  # A repeated start never creates a second recorder.
         if profile not in ("state", "sensors"):
             raise ValueError("Unknown recording profile")
-        settings = json.loads(self.config.read_text())
+        settings = json.loads(self.config.read_text(encoding="utf-8"))
         selected = settings.get("sensor_recording_root" if profile == "sensors" else "recording_root")
         if profile == "sensors" and not selected:
             raise ValueError("영상·라이다 기록은 설정의 sensor_recording_root에 저장 폴더를 지정해 주세요.")
         if selected:
-            if len(selected) > 2 and selected[1] == ":":
-                selected = subprocess.check_output(["wslpath", "-u", selected], text=True, timeout=5).strip()
             root = Path(selected).expanduser().resolve()
             if not root.is_dir():
                 raise FileNotFoundError("기록 저장 폴더를 찾을 수 없습니다: " + str(root))
@@ -70,7 +81,9 @@ class BagRecording:
         try:
             with (self.directory / "recorder.log").open("w") as log:
                 self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                                start_new_session=True)
+                                                creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=_hidden_console())
+            if self.job:
+                self.job.add(self.process)
         except OSError:
             self.status["phase"] = "error"
             raise
@@ -81,7 +94,9 @@ class BagRecording:
             return
         self.stop_at = time.monotonic()
         self.status["phase"] = "stopping"
-        signal_group(self.process, signal.SIGINT)
+        if self.process.poll() is None:
+            subprocess.run([sys.executable, "-c", _CTRL_C, str(self.process.pid)],
+                           creationflags=subprocess.CREATE_NO_WINDOW, timeout=10)
 
     def poll(self):
         try:
@@ -99,7 +114,7 @@ class BagRecording:
         code = self.process.poll()
         if code is None:
             if self.stop_at is not None and time.monotonic() - self.stop_at > 8:
-                signal_group(self.process, signal.SIGKILL)
+                self.process.kill()
                 self.process.wait(timeout=2)
                 self.status["error"] = "기록기 정상 종료 시간 초과. bag 복구가 필요할 수 있습니다."
                 return self.poll()

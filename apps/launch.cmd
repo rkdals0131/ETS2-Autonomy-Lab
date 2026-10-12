@@ -1,21 +1,19 @@
 @echo off
 setlocal
+rem Opens the launcher in the pixi ROS 2 environment (pixi.toml).
+rem --host-only [config] [stop-event] runs the relay node alone in this console.
+where pixi >nul 2>nul || (echo pixi not found: winget install prefix-dev.pixi, then pixi run build & exit /b 1)
+pushd "%~dp0.."
 if "%~1"=="--host-only" goto host
-if exist "%~dp0..\ot\.venv\Scripts\pythonw.exe" (
-  start "" "%~dp0..\ot\.venv\Scripts\pythonw.exe" "%~dp0launcher\launcher.py" %*
-) else (
-  start "" pyw -3.13 "%~dp0launcher\launcher.py" %*
-)
-exit /b
+pixi run launcher
+set "CODE=%errorlevel%"
+popd
+exit /b %CODE%
 
 :host
-if "%~2"=="" (
-  "%~dp0..\bridge\dist\ets2_relay.exe" "%~dp0..\bridge\config\bridge.local.json"
-) else (
-  if "%~3"=="" (
-    "%~dp0..\bridge\dist\ets2_relay.exe" "%~2"
-  ) else (
-    "%~dp0..\bridge\dist\ets2_relay.exe" "%~2" "%~3"
-  )
-)
-exit /b %errorlevel%
+set "CONFIG=%~2"
+if "%CONFIG%"=="" set "CONFIG=bridge\config\bridge.local.json"
+if "%~3"=="" (pixi run relay "%CONFIG%") else (pixi run relay "%CONFIG%" "%~3")
+set "CODE=%errorlevel%"
+popd
+exit /b %CODE%
