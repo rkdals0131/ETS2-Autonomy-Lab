@@ -1,6 +1,6 @@
 # 유로파일럿 — ETS2 자율주행 연구
 
-ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치하고 ROS 2 Jazzy로 실시간 전달합니다. IMU·바퀴·휠 오도메트리·가상 GNSS도 연결돼 있습니다. Phase 1 목표는 고속도로 ACC·차로 유지·사각지대 감시입니다. 상주 입력 장치와 core 0.29.0을 설치했고, 실제 지도 차로·GT 위치를 쓰는 속도 PI/경로 추종으로 FH4 약453m 자동 주행을 확인했습니다. 이 GT 주행은 연결 확인용 baseline으로 동결했고, 다음 단계는 Autoware 메시지로 실차 스택을 붙이는 [인터페이스 계획](docs/19_real_stack_interface_plan.md)입니다.
+ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치하고 ROS 2 Jazzy로 실시간 전달합니다. IMU·바퀴·휠 오도메트리·가상 GNSS도 연결돼 있습니다. Phase 1 목표는 고속도로 ACC·차로 유지·사각지대 감시입니다. 상주 입력 장치와 core 0.29.0을 설치했고, 실제 지도 차로·GT 위치를 쓰는 속도 PI/경로 추종으로 FH4 약453m 자동 주행을 확인했습니다. 이 GT 주행은 연결 확인용 baseline으로 동결했고, 목표는 게임 GT 없이 센서만으로 달리는 것입니다. 실행 환경을 WSL에서 Windows 네이티브 ROS 2로 옮기는 [포팅 계획](docs/20_windows_native_port_plan.md)이 다음 단계입니다.
 
 ## 실행
 
@@ -12,11 +12,12 @@ ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 
 Linux에서는 `apps/launch.sh`로 ROS 실행·상태·중지·보조·기록을 관리하고 Windows의 `apps/launch.cmd --host-only`로 릴레이만 연결할 수 있습니다. [두 모드 사용법](apps/README.md).
 
-## 현재 상태 — 2026-10-10
+## 현재 상태 — 2026-10-12
 
 | 구성 | 구현 |
 | --- | --- |
-| 게임 | ETS2 1.61.1.1, DX11, core 0.29.0 / 상주 loader 0.29.0 |
+| 게임 | ETS2 1.61.1.1, DX11, core 0.30.0(✔ 2026-10-12 `version`) / 상주 loader 0.29.0(△) |
+| 운전 API | ✔ `profile_supported=false`: 현재 프로필의 `no_cstm_mod`·`joy.b5`를 파서가 못 읽어 arm 거절. [W00](docs/20_windows_native_port_plan.md)이 선행 |
 | 카메라 | C_FN·C_FW 1280×720, C_RL·C_RR 960×544, 기본 30 Hz 요청 |
 | 배치 | FH4 4x2, stock 공통 캐빈·미러 외곽 기준의 캐빈 부착 |
 | 출력 | RGB8, 미터 광축 깊이, CameraInfo, JPEG, TF, 차량 GT |
@@ -36,7 +37,7 @@ Linux에서는 `apps/launch.sh`로 ROS 실행·상태·중지·보조·기록을
 
 평상시에는 필요한 인지용 축소 RGB와 JPEG·표시용 라이다를 구독합니다. JPEG 기본 주기는 10 Hz이며 인지용 영상은 카메라 주기를 따릅니다. Foxglove의 기존 점군 패널은 `/ets2/lidar/{name}/preview/points`를 선택해야 표시용 점군을 사용합니다. 원본 RGB·depth는 구독할 때 pack·readback·전송하며, 라이다용 깊이는 GPU에서 사용합니다.
 
-상태 센서 계산·렌더 수집·ROS 직렬화·통신 수명을 분리했습니다. 영상 수집을 꺼도 IMU·휠·GNSS가 유지되고, TCP 재연결에도 오도메트리·가상 GNSS 기준점이 이어집니다. 런처의 **입력·상태만**으로 현재 SDK 바퀴 기준의 상태·입력을 실행할 수 있습니다. 센서 기본 프리셋은 FH4이며 다른 차량에는 해당 외형의 보정이 필요합니다. [런처 GT 자동 주행](bridge/README.md#gt-도로-자동-주행), [현재 구조](docs/03_system_design.md), [진행 상태](docs/13_game_operating_table.md).
+상태 센서 계산·렌더 수집·ROS 직렬화·통신 수명을 분리했습니다. 영상 수집을 꺼도 IMU·휠·GNSS가 유지되고, TCP 재연결에도 오도메트리·가상 GNSS 기준점이 이어집니다. 런처의 **입력·상태만**으로 현재 SDK 바퀴 기준의 상태·입력을 실행할 수 있습니다. 센서 기본 프리셋은 FH4이며 다른 차량에는 해당 외형의 보정이 필요합니다. [런처 GT 자동 주행](bridge/README.md#gt-도로-자동-주행), [현재 구조](docs/03_system_design.md), [진행 이력](docs/legacy/13_game_operating_table.md).
 
 ## 소스와 실행 위치
 
@@ -44,21 +45,23 @@ Linux에서는 `apps/launch.sh`로 ROS 실행·상태·중지·보조·기록을
 | --- | --- |
 | ot/ | Windows 게임 어댑터: 상주 loader, SDK 입력·관측, 엔진 hook, 센서 리그·GPU 자원, Python API |
 | bridge/ | Windows 릴레이·TCP/CDR 계약, 로컬 설정·기록 |
-| [ros2/src](ros2/README.md) | ROS 메시지·전송 패키지와 GT 자동주행 패키지. WSL에서 빌드·실행 |
+| [ros2/src](ros2/README.md) | ROS 메시지·전송 패키지와 GT 자동주행 패키지. 현재 WSL에서 빌드·실행하며 포팅 P1 이후 Windows pixi 환경 |
 | [apps/launcher](apps/launcher/README.md) | Windows UI와 Windows/WSL 실행·기록 프로세스 관리 |
 | research/ | 분석 도구·원본 자료. 현재 지도 provider가 쓰는 로컬 .NET/TruckLib 의존성도 보존 |
 
-현재 편집 원본은 Windows 저장소 하나이며 WSL은 `/mnt/c`로 같은 파일을 읽습니다. `~/ets2-ros`는 빌드·설치 결과를 보관합니다. 인지·위치 추정·계획·FSM·고급 제어는 아직 구현하지 않았으며 다음 모듈 경계는 [시스템 설계](docs/03_system_design.md)에 정리했습니다.
+현재 편집 원본은 Windows 저장소 하나이며 WSL은 `/mnt/c`로 같은 파일을 읽고 `~/ets2-ros`에 빌드 결과를 둡니다. 이 WSL 경로는 [포팅 계획](docs/20_windows_native_port_plan.md) P1까지만 유지합니다. 인지·위치 추정·계획·FSM·고급 제어는 아직 구현하지 않았으며 다음 모듈 경계는 [시스템 구조](docs/03_system_design.md)에 정리했습니다.
 
 ## 문서
 
 | 목적 | 문서 |
 | --- | --- |
 | 사용·설치 | [브리지와 런처](bridge/README.md), [DLL 개발 도구](ot/README.md) |
-| 범위·진행 | [요구사항](docs/01_requirements_and_decisions.md), [마일스톤](docs/13_game_operating_table.md), [남은 작업](docs/08_open_questions.md) |
+| 범위·결정 | [요구사항과 결정](docs/01_requirements_and_decisions.md) |
 | 설계 | [구조](docs/03_system_design.md), [좌표·시각·데이터](docs/04_sensors_and_data.md), [FH4 센서 리그](docs/14_phase1_highway_sensors.md) |
-| 센서·ROS | [라이다](docs/15_virtual_sensors.md), [ROS 계약](docs/16_ros2_bridge.md), [센서 확장](docs/17_sensor_expansion.md) |
-| 다음 개발 | [실차 스택 인터페이스 계획](docs/19_real_stack_interface_plan.md), [성능 진단](docs/18_performance.md), [인지·제어](docs/07_learning_and_control.md) |
+| 센서·ROS | [라이다](docs/15_virtual_sensors.md), [ROS 토픽 계약](docs/16_ros2_bridge.md), [센서 확장](docs/17_sensor_expansion.md) |
+| 다음 개발 | [Windows 네이티브 포팅 계획](docs/20_windows_native_port_plan.md), [성능 진단](docs/18_performance.md) |
+| 포팅 상세 | [안전 체크리스트](docs/21_safety_checklist.md), [P0 실행서](docs/22_p0_spike_runbook.md), [릴레이 노드](docs/23_relay_node_design.md), [HUD 데칼](docs/24_hud_overlay_design.md), [센서 스택](docs/25_sensor_stack_design.md) |
+| 레거시 | [옮긴 문서와 이유](docs/legacy/README.md): 마일스톤 표, Autoware adapter 계획, GT 폐루프 순서 |
 | 엔진 참조 | [설치 분석](docs/10_installed_game_static_analysis.md), [SDK·물리 상태](docs/11_idle_memory_and_telemetry.md), [DX11·가시성](docs/12_dx11_mirror_render_path.md) |
 | 시행착오 | [해결 과정과 재발 조건](docs/history/lessons.md) |
 

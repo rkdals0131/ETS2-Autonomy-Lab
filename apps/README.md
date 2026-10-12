@@ -1,5 +1,7 @@
 # 실행 진입점
 
+> 이 문서는 WSL Ubuntu 기준의 현재 절차입니다. [Windows 네이티브 포팅 계획](../docs/20_windows_native_port_plan.md) P1이 끝나면 pixi 환경 절차로 바뀝니다.
+
 ## Windows 전체 모드
 
 `apps/launch.cmd`를 열고 **시작**을 누릅니다. 기존 UI가 Windows 릴레이와 WSL ROS/Foxglove·GT 주행·기록을 함께 관리합니다.

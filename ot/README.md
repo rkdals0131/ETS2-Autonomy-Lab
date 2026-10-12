@@ -94,4 +94,4 @@ SDK frame_end는 물리 결과 이후이며 렌더 보간·장면 준비가 뒤�
 
 RenderDoc 캡처는 일반 hook 실행과 분리합니다. Steam이 새 프로세스를 만들면 RenderDoc 로딩 여부를 확인하고 스크립트는 RenderDoc의 Python 환경에서 실행합니다.
 
-[현재 진행](../docs/13_game_operating_table.md), [성능](../docs/18_performance.md), [중요한 시행착오](../docs/history/lessons.md).
+[포팅 계획](../docs/20_windows_native_port_plan.md), [성능](../docs/18_performance.md), [중요한 시행착오](../docs/history/lessons.md).

@@ -13,6 +13,6 @@
 | 입력·플랜트 | 입력 API와 GT 속도 PI·경로 추종 구현, 동적 응답 미식별 | 실제 armed 해제·근접 앞차 감속 확인, 응답 식별과 추종 개선 |
 | 조향 기하 | 바퀴별 실제 각도·위치·조향 축 확보 | 좌우 선회에서 Ackermann·속도별 응답 대조, 운전석 휠 타각 원본 확인 |
 | 원본 고해상도 비용 | 원본 RGB-D 구독 시 고해상도 pack·readback·전송 | 원본 필요량에 맞춘 주행 부하 측정 |
-| 미리보기 브리지 CPU 비용 | 0.26.1 전경·Foxglove 종료: full_30 62.46 / display 66.00 FPS | Foxglove 표시와 실제 주행 비용을 [같은 조건으로 측정](18_performance.md) |
+| 미리보기 브리지 CPU 비용 | 0.26.1 전경·Foxglove 종료: full_30 62.46 / display 66.00 FPS | Foxglove 표시와 실제 주행 비용을 [같은 조건으로 측정](../18_performance.md) |
 
-[구조 정리](03_system_design.md), [차량 보정](14_phase1_highway_sensors.md), [측정 모델](17_sensor_expansion.md), [플랜트·제어](07_learning_and_control.md), [성능](18_performance.md).
+[구조 정리](03_system_design.md), [차량 보정](../14_phase1_highway_sensors.md), [측정 모델](../17_sensor_expansion.md), [플랜트·제어](07_learning_and_control.md), [성능](../18_performance.md).

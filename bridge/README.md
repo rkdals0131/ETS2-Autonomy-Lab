@@ -1,5 +1,7 @@
 # 유로파일럿 브리지와 런처
 
+> 이 문서는 WSL Ubuntu 기준의 현재 절차입니다. [Windows 네이티브 포팅 계획](../docs/20_windows_native_port_plan.md) P1이 끝나면 pixi 환경 절차로 바뀝니다.
+
 ## 실행
 
 게임을 Steam의 **DirectX11 (64-bit)**로 실행한 뒤 [apps/launch.cmd](../apps/launch.cmd)를 엽니다. Linux 관리 모드는 [apps 사용법](../apps/README.md)을 따릅니다.

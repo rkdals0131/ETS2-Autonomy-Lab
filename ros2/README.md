@@ -1,5 +1,7 @@
 # ROS 소스
 
+> 이 문서는 WSL Ubuntu 기준의 현재 절차입니다. [Windows 네이티브 포팅 계획](../docs/20_windows_native_port_plan.md) P1이 끝나면 pixi 환경 절차로 바뀝니다.
+
 | 패키지 | 현재 책임 |
 | --- | --- |
 | src/ets2_msgs | 센서·차량 상태·운전 명령과 서비스 계약 |
@@ -39,4 +41,4 @@ ros2 launch ets2_bridge bridge.launch.py config:="$REPO/bridge/config/bridge.loc
 
 스택이 보는 센서는 `ros2 launch ets2_sensor_degradation sensor_degradation.launch.py`가 만듭니다. IMU `/sensing/imu/imu_raw`, GNSS `/sensing/gnss/nav_sat_fix`, 바퀴 `/sensing/wheels/state`, 라이다 `/sensing/lidar/<L_F|L_PL|L_PR>/points`이며, 값은 [config/degradation.yaml](src/ets2_sensor_degradation/config/degradation.yaml)에서 바꿉니다. stamp는 측정 시각 그대로이고, 지연은 `use_sim_time`의 `/clock` 기준으로 늦게 발행해서 줍니다. 출력에 구독자가 있을 때만 해당 `/ets2` 입력을 구독하므로, 쓰지 않는 라이다의 렌더 수요를 만들지 않습니다. bag 재생에도 같은 노드를 사용합니다(bag의 `/clock`을 그대로 재생하고 `--clock`은 쓰지 않음).
 
-GT baseline은 `ros2 run ets2_autonomy drive_speed`로 실행합니다. 노드명은 `/ets2_drive_speed`입니다. 실제 운전은 [ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행)을 따릅니다. 인지·위치 추정·FSM·목적지 경로 계획은 아직 없으며 [다음 모듈 경계](../docs/03_system_design.md#ros-개발과-다음-스택)에 따라 이 패키지부터 확장합니다.
+GT baseline은 `ros2 run ets2_autonomy drive_speed`로 실행합니다. 노드명은 `/ets2_drive_speed`입니다. 실제 운전은 [ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행)을 따릅니다. 인지·위치 추정·FSM·목적지 경로 계획은 아직 없으며 [다음 모듈 경계](../docs/03_system_design.md#다음-모듈-경계)에 따라 이 패키지부터 확장합니다.

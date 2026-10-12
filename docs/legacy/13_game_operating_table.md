@@ -26,7 +26,7 @@
 3. 상대 조향 플랜트를 식별하고 가상 EPS로 바퀴각 명령을 받습니다. 실차와 같은 메시지만 쓰는 소비자로 폐루프를 확인합니다(W11–W13).
 4. 센서 잡음·지연·드롭은 ROS 쪽 노드에서 적용하고, 골든 패킷 테스트와 GitHub Actions로 회귀를 막습니다(W14–W19).
 
-성능 진단은 [A–G 비용 분해](18_performance.md)에 따릅니다. 센서의 세부 현실성 개선은 폐루프 개발과 함께 진행합니다.
+성능 진단은 [A–G 비용 분해](../18_performance.md)에 따릅니다. 센서의 세부 현실성 개선은 폐루프 개발과 함께 진행합니다.
 
 ## 구현 위치
 
@@ -38,4 +38,4 @@
 - 현재 리그: `ot/presets/phase1-highway-fh4-private.json`
 - 라이다 패턴: `ot/presets/phase1-lidar-private.json`
 
-현재 사용법은 [브리지](../bridge/README.md)와 [DLL](../ot/README.md), 중요한 실패와 해결은 [시행착오](history/lessons.md)에 있습니다.
+현재 사용법은 [브리지](../../bridge/README.md)와 [DLL](../../ot/README.md), 중요한 실패와 해결은 [시행착오](../history/lessons.md)에 있습니다.
