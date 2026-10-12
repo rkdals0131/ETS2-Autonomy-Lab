@@ -108,7 +108,7 @@ int main(int argc,char** argv) {
                     }
                 }
                 if(ticks()-diagnostic_time>=1000) {add_diagnostics(packet,{{"stamp_us",last_stamp},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
-                    {"queue_dropped",dropped.load()},{"capture_active",capture_active.load()},{"drive_commands",ros.diagnostics()},
+                    {"queue_dropped",dropped.load()},{"capture_active",capture_active.load()},{"drive_commands",ros.diagnostics()},{"slow_publishes",ros.publish_stats()},
                     {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}});diagnostic_time=ticks();}
                 if(!packet.data.empty()) ros.publish(packet);
                 std::this_thread::sleep_for(2ms);}
@@ -173,7 +173,7 @@ int main(int argc,char** argv) {
                 {"diagnostic_sensor_stage",sensor_stage},{"consumed_bundles",consumed.load()},
                 {"encoded_bundles",encoded.load()},{"encoded_bytes",encoded_bytes.load()},
                 {"camera_hz",camera_hz},{"lidar_hz",lidar_hz},
-                {"queue_dropped",dropped.load()},{"drive_commands",ros.diagnostics()},
+                {"queue_dropped",dropped.load()},{"drive_commands",ros.diagnostics()},{"slow_publishes",ros.publish_stats()},
                 {"copy_elapsed",copy_time.snapshot()},{"encode_elapsed",encode_time.snapshot()},{"send_elapsed",send_time.snapshot()}}.dump()<<std::endl;report=ticks();}
             std::this_thread::sleep_for(20ms);
         }

@@ -5,8 +5,10 @@
 #include <ets2_msgs/msg/drive_command.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <cmath>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <optional>
 #include <unordered_map>
 
@@ -31,6 +33,9 @@ struct RosEndpoint::Impl {
     std::optional<json> drive_request;uint64_t drive_sent_ns=0;bool stopping=false;
     Latency command_age;
     std::atomic<uint64_t> stale{0},rejected{0},forwarded{0};
+    // Publishes that took 50 ms or more, newest 16 with wall time, to line
+    // up with subscriber joins/exits when send_elapsed spikes.
+    std::mutex slow_mutex;std::deque<json> slow;std::atomic<uint64_t> slow_count{0};
     // Created after rclcpp::init: an executor takes the default context when constructed.
     std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor;
     std::jthread spin,forward;
@@ -143,12 +148,27 @@ void RosEndpoint::publish(const Packet& packet) {
         if(found==impl_->publishers.end() || length<4 || offset>packet.data.size() || length>packet.data.size()-offset)
             throw std::runtime_error("Relay produced an invalid message range for "+topic);
         auto& entry=*found->second;
+        const auto queued=std::chrono::steady_clock::now();
         std::lock_guard lock(entry.mutex);
+        const auto begin=std::chrono::steady_clock::now();
         entry.message.reserve(length);
         auto& raw=entry.message.get_rcl_serialized_message();
         std::memcpy(raw.buffer,packet.data.data()+offset,length);raw.buffer_length=length;
         entry.publisher->publish(entry.message);
+        const auto end=std::chrono::steady_clock::now();
+        if(end-queued>=std::chrono::milliseconds(50)) {
+            const auto ms=[](auto d){return std::chrono::duration<double,std::milli>(d).count();};
+            const auto wall=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            std::lock_guard slow_lock(impl_->slow_mutex);
+            impl_->slow.push_back({{"wall_ms",wall},{"topic",topic},{"wait_ms",ms(begin-queued)},{"publish_ms",ms(end-begin)},{"bytes",length}});
+            if(impl_->slow.size()>16) impl_->slow.pop_front();
+            ++impl_->slow_count;
+        }
     }
+}
+json RosEndpoint::publish_stats() {
+    std::lock_guard lock(impl_->slow_mutex);
+    return {{"count",impl_->slow_count.load()},{"recent",json(impl_->slow)}};
 }
 std::shared_ptr<const Demand> RosEndpoint::demand() const {return impl_->demand.load();}
 bool RosEndpoint::capture_wanted() const {return impl_->capture.load();}

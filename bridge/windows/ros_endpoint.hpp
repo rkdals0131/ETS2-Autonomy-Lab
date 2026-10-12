@@ -20,6 +20,8 @@ public:
     bool capture_wanted() const;
     // Sender-stamp age of forwarded commands (p50/p95/p99/max ms) and drops.
     json diagnostics();
+    // Count and newest records of publishes that took 50 ms or more.
+    json publish_stats();
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

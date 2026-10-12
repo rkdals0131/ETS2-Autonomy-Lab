@@ -658,6 +658,7 @@ def show_window(controller):
                                      if state.get("foxglove_pid") else "중지됨")
         commands = relay.get("drive_commands") or {}
         put(rows["발행"], text=f"{relay.get('sent_bundles', 0)} 묶음 · 큐 누락 {relay.get('queue_dropped', 0)}"
+                               f" · 50 ms 넘은 발행 {(relay.get('slow_publishes') or {}).get('count', 0)}"
                                f" · 명령 {commands.get('forwarded_commands', 0)} (지연 폐기 {commands.get('stale_commands', 0)})")
         put(rows["수집 상태"], text=("활성" if relay.get("capture_active") else "대기") if phase == "running" else
                                 ("연결 확인 중" if active else "중지됨"))
