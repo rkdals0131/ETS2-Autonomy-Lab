@@ -99,7 +99,8 @@
 | 참고: 2026-10-09 이전 릴레이 전체 센서(60 s) | 46.4 | 20.8 / 38.2 | 20.6 | 5.7 |
 
   CPU 바운드이며 센서를 켜면 프레임당 CPU busy가 약 8–10 ms 는다. 네이티브 릴레이 전체 센서 수치는 이전 릴레이와 비슷하다. [22 §6](22_p0_spike_runbook.md)의 같은 정차 장면 A/B는 아직 하지 않았다.
-- 남음: GT baseline 회귀, bag 재생, `queue_dropped` 원인, 정차 장면 A/B.
+- ✔ 같은 날 정차 장면 CPU 분석([18](18_performance.md#cpu-병목-분석)): 게임 메인 스레드 하나가 병목이고, Foxglove 뷰어 경쟁이 프레임당 16 ms를 더한다. core 0.32.0(자세 rider, 센서 렌더 −33%)과 런처 CPU 배치(−5.9 ms)를 넣었다. 다음 작업은 [26 CPU 최적화 계획](26_cpu_optimization_plan.md).
+- 남음: GT baseline 회귀, bag 재생, `queue_dropped` 원인, 정차 장면 A/B([26](26_cpu_optimization_plan.md) C0 프로토콜로).
 
 ### P2. 스택 배치 (M)
 

@@ -16,6 +16,8 @@
 
 **입력·상태만**을 체크하면 이번 실행만 센서 슬롯을 비워 FH4에서도 상태·운전 API를 연결합니다. 기존 센서 설정은 유지하며, 체크를 풀고 다시 시작하면 원래 슬롯을 사용합니다.
 
+**CPU 배치**(기본 켬, `cpu_layout`)는 게임을 CPU 0이 속한 L3 묶음에 두고 게임 메인 스레드를 그 묶음의 두 번째 물리 코어에 혼자 둡니다. 릴레이·Foxglove 서버·기록기와 Foxglove 뷰어 앱(`Foxglove.exe`, BELOW_NORMAL)은 다른 L3 묶음으로 보냅니다. ETS2는 메인 스레드 하나가 병목이라, 같은 코어의 SMT 짝과 L3를 다른 일과 나누지 않게 하는 설정입니다. 이 머신(Ryzen 7 3700X)에서는 게임 CPU 0–7·메인 CPU 2, 나머지 CPU 8–15이며 정차 연속 A/B에서 프레임 CPU 시간이 5.9 ms 줄었습니다. 새 게임 스레드와 뒤늦게 연 뷰어 창은 5초마다 반영하고, **중지**하면 모두 되돌립니다. 런처가 비정상 종료되면 게임 재시작 전까지 배치가 남습니다. [성능](../docs/18_performance.md#cpu-병목-분석).
+
 다른 프로세스가 `127.0.0.1:8765`를 쓰고 있으면 런처가 시작을 거절합니다. 기존 Foxglove 서버를 종료한 뒤 시작합니다.
 
 ## 설정
@@ -27,7 +29,8 @@
 | rig / lidar / slots | 센서 프리셋과 슬롯. 현재 private 프리셋·[3,4,6,7]. []는 SDK 바퀴 기준의 상태·입력만 실행하며 카메라 장착 보정을 사용하지 않음 |
 | duration_s | 실행 제한 시간 |
 | camera_hz / lidar_hz | 기본 30 / 10. 라이다는 필요한 카메라 프레임에서만 gather·readback |
-| preview_hz / lidar_preview_stride | 표시용 JPEG 기본 10 Hz. 표시용 점군은 수평 빔 4개마다 1개, 모든 수직 링 유지 |
+| preview_hz / lidar_preview_stride | 표시용 JPEG 기본 10 Hz. 표시용 점군은 수평 빔 4개마다 1개, 모든 수직 링 유지. 자세(`camera_info`·TF)만 구독한 카메라도 이 주기로만 렌더 |
+| cpu_layout | 런처 CPU 배치, 기본 true. 다음 시작부터 적용 |
 | capture_warmup | 기본 true. private 센서는 유휴 뒤 한 프레임 준비하고 다음 프레임에서 수집. false는 연속 렌더 비교용 |
 | imu_mount_base_m / gnss_mount_base_m | 섀시 고정 장착점, base_link 기준 m. 기본 [0,0,1] |
 | gnss_reference_lla | 시작 위치의 가상 기준 위도·경도(deg)·타원체 고도(m), 기본 [0,0,0] |
@@ -216,6 +219,7 @@ pixi run relay bridge/config/bridge.local.json            # 또는 apps\launch.c
 센서 카메라는 게임의 미러 슬롯으로 메인 화면과 같은 deferred 파이프라인을 한 번 더 렌더합니다. 게임 렌더러를 가로채는 모드는 이 추가 pass를 메인 화면으로 볼 수 있습니다.
 
 - **snowymoon.io 조명 모드**(`bin/win_x64/dxgi.dll` 프록시): ✔ 2026-10-12, 센서 수집 중 안티앨리어싱(TAA/DLSS)을 켜면 메인 화면이 센서 렌더 주기로 한 프레임씩 깨집니다. 안티앨리어싱을 끄거나 브리지를 끄면 정상입니다. △ 시간 누적 AA 히스토리가 센서 카메라 프레임으로 오염되는 것으로 보이며, AA를 끄면 snowymoon 효과 대부분도 함께 빠집니다.
+- **`r_mirror_view_distance`**: 게임 미러와 센서 뷰 모두의 시야거리라 메인 스레드 비용을 크게 좌우합니다. ✔ 2026-10-12 정차·뷰어 켬에서 400 → 250 m로 CPU busy 57.4 → 43.2 ms. 전방 라이다 최대 거리에 맞춰 **250**을 권장합니다(콘솔 `uset r_mirror_view_distance 250`, 종료 시 `config.cfg`에 저장).
 - 권장: 센서를 수집하는 개발·기록 세션에서는 snowymoon을 끕니다. 센서 RGB의 조명이 모드 설정에 따라 바뀌면 인지 데이터가 달라지기 때문입니다. **입력·상태만** 실행은 렌더 hook을 켜지 않으므로 해당하지 않습니다.
 
 ## 운영 구조

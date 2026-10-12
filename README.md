@@ -14,7 +14,7 @@ ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 
 | 구성 | 구현 |
 | --- | --- |
-| 게임 | ETS2 1.61.1.1, DX11, core 0.31.1·상주 loader 0.31.0(2026-10-12, W00 파서·W02) |
+| 게임 | ETS2 1.61.1.1, DX11, core 0.32.0·상주 loader 0.31.0(2026-10-12, W00 파서·W02·센서 렌더 rider) |
 | 운전 API | ✔ 0.31.0 loader가 custom modifier 프로필을 읽어 `profile_supported=true`, LB(`joy.b5`) 확인. Windows 네이티브 릴레이로 armed 안전 시험 9개(W02 #0–#8) 통과, 명령 나이 p99 0.89 ms([21](docs/21_safety_checklist.md)). 발행기 publish가 한 번 330 ms 막혀 거짓 `expired`가 난 일이 있어 장시간 jitter 측정이 남음 |
 | 카메라 | C_FN·C_FW 1280×720, C_RL·C_RR 960×544, 기본 30 Hz 요청 |
 | 배치 | FH4 4x2, stock 공통 캐빈·미러 외곽 기준의 캐빈 부착 |
@@ -26,6 +26,7 @@ ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 | 조작 명령 | GT 차로 생성·속도 PI·경로 추종·앞차 목표 제한(연결 확인용 baseline, 동결), 단일 owner·200 ms 만료·수동 개입 해제 |
 | 기록 | 런처에서 차량 상태 / 영상·라이다 기록 시작·종료, MCAP 재생·일시정지 시계 정합 확인 |
 | 복구 | 수집 소유권·lease, F11, 기능 DLL 교체, 연결 단절 복구 |
+| 성능 | ✔ 게임 메인 스레드 하나가 병목(CPU 바운드). 0.32.0 센서 렌더 −33%, 런처 CPU 배치 −13.6%(정차 연속 A/B), `r_mirror_view_distance 250` 권장([18](docs/18_performance.md#cpu-병목-분석), [계획](docs/26_cpu_optimization_plan.md)) |
 
 센서는 슬롯 3·4·6·7의 전용 camera/drawable과 출력을 사용합니다. 현재 FH4의 기본 미러 0·1·2·5는 유지됩니다. stock 캐빈·미러의 공통 외곽에서 장착점을 정하고 4뷰·라이다 3개 ROS 수신을 확인했습니다. 아래 이미지는 이전 FH5 장착 수정의 기록입니다.
 
@@ -57,7 +58,7 @@ ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 | 범위·결정 | [요구사항과 결정](docs/01_requirements_and_decisions.md) |
 | 설계 | [구조](docs/03_system_design.md), [좌표·시각·데이터](docs/04_sensors_and_data.md), [FH4 센서 리그](docs/14_phase1_highway_sensors.md) |
 | 센서·ROS | [라이다](docs/15_virtual_sensors.md), [ROS 토픽 계약](docs/16_ros2_bridge.md), [센서 확장](docs/17_sensor_expansion.md) |
-| 다음 개발 | [Windows 네이티브 계획](docs/20_windows_native_port_plan.md), [성능 진단](docs/18_performance.md) |
+| 다음 개발 | [Windows 네이티브 계획](docs/20_windows_native_port_plan.md), [성능 진단](docs/18_performance.md), [CPU 최적화 계획](docs/26_cpu_optimization_plan.md) |
 | 포팅 상세 | [안전 체크리스트](docs/21_safety_checklist.md), [P0 실행서](docs/22_p0_spike_runbook.md), [릴레이 노드](docs/23_relay_node_design.md), [HUD 데칼](docs/24_hud_overlay_design.md), [센서 스택](docs/25_sensor_stack_design.md) |
 | 레거시 | [옮긴 문서와 이유](docs/legacy/README.md): 마일스톤 표, Autoware adapter 계획, GT 폐루프 순서 |
 | 엔진 참조 | [설치 분석](docs/10_installed_game_static_analysis.md), [SDK·물리 상태](docs/11_idle_memory_and_telemetry.md), [DX11·가시성](docs/12_dx11_mirror_render_path.md) |
