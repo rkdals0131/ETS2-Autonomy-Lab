@@ -127,3 +127,16 @@
 3. 결과로 C1 조사 범위와 C4 운영 권장을 정합니다.
 4. C6 뷰별 거리 조사. 샘플러 결과에 따라 C7 시험 여부를 정합니다.
 5. C8·C9는 P2 요구와 남은 비용을 보고 정합니다.
+
+## 6. 다음 게임 세션 진행
+
+같은 주차 위치에서 정차, snowymoon 안티앨리어싱 끔, `r_mirror_view_distance 250`, 브라우저 등 무거운 앱은 닫습니다. 측정은 모두 `.\ot\ot.cmd perf <label> [--profile-hz 250]`(30 s)이고, 조건을 바꾼 뒤 10 s 기다렸다 잽니다. 결과는 `ot.cmd perf_table research\live\<날짜>-perf\*.json`으로 봅니다.
+
+1. core 0.33.0 설치(런처 중지 상태): `ot.cmd loader unload` → 이전 `plugins/ot_runtime/ot_core.dll`을 `ot/backup/<날짜>-before-0.33.0/`에 복사 → `ot/dist/ot_core.dll` 복사·해시 확인 → `ot.cmd loader load` → `ot.cmd version`이 0.33.0. 릴레이도 새로 빌드한 것을 씁니다.
+2. 브리지 끔 기준과 분포: `off-1 --profile-hz 250`.
+3. 런처 시작, Foxglove 뷰어 연결: `view-1 --profile-hz 250`. 분포에서 `eurotrucks2.exe`·`d3d11.dll`·`nvwgf2umx.dll`·`ot_core.dll` 비중을 C7 판단에 씁니다.
+4. C10 게임 미러: 체크박스와 **재시작**으로 켬/끔을 바꿔 `mirror-on-1`·`mirror-off-1`·`mirror-on-2`·`mirror-off-2`·`mirror-on-3`·`mirror-off-3`. 끈 동안 화면 미러가 멈추는지, 다시 켜면 돌아오는지 눈으로 확인합니다.
+5. C3 CPU 배치: 같은 방식으로 `layout-on-*`·`layout-off-*` 3쌍.
+6. C1 준비 렌더 비용: `bridge/config/bridge.local.json`에 `"capture_warmup": false`를 넣고 재시작해 `warmup-off-*`, 지우고 `warmup-on-*` 3쌍. 끈 동안 나무·가로등 결함은 감수하고, 끝나면 반드시 되돌립니다.
+7. C4 뷰어: 뷰어 창 보임·최소화를 번갈아 `viewer-shown-*`·`viewer-min-*` 3쌍.
+8. 각 단계의 `slow_publishes.recent`와 런처 "발행" 줄을 함께 기록합니다(330 ms 정지 추적).
