@@ -61,7 +61,8 @@
 - ✔ 게임 종료 상태에서 `ot_loader.dll`(plugins/)과 `ot_core.dll`(plugins/ot_runtime/) 교체, 해시 일치. 이전 DLL은 `ot/backup/2026-10-12-before-0.31.0/`. 설치된 `ot_config.json`은 그대로.
 
 남은 것(게임 필요):
-- 완료 기준: `ot.cmd version`에서 `drive.profile_supported=true`. disarmed 상태에서 LB를 누른 채 RT를 당겨 `drive status`의 `manual_throttle`이 유지되는지 보고 b5=LB를 확인. [21](21_safety_checklist.md) #0(데드존 0/0 휴지 노이즈 30 s) 통과.
+- 완료 기준(✔ 2026-10-12 게임에서 모두 통과, **W00 완료**): `version`의 `drive.profile_supported=true`(loader·core 0.31.0). disarmed에서 LB를 누른 채 RT를 0.91까지 당기는 동안 `manual_throttle`이 0.00 유지(118 표본), LB를 놓으면 RT를 따름 → b5=LB와 `memory` 유지 해석 확인. [21](21_safety_checklist.md) #0 통과(30.3 s 해제 없음).
+- ✔ 관찰: 키보드 WASD·방향키는 `GetAsyncKeyState`로 읽으므로 게임 창이 아니어도 수동 개입으로 잡힌다(보수적). armed 중에는 다른 창에서 타이핑하지 않는다([21](21_safety_checklist.md) 사전 조건).
 
 ### P0. 스파이크 (S) — P1에 흡수
 
