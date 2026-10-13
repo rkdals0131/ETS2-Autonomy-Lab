@@ -119,6 +119,7 @@
 | HAGS | Microsoft가 큰 변화 없다고 함 |
 | 해상도 축소 | GPU busy가 CPU보다 훨씬 짧음 |
 | D3D11 deferred context | 엔진이 immediate context로 제출. 우리 호출은 카메라당 수십 개뿐 |
+| iceoryx2·rmw_iceoryx2로 ROS 전송 교체 | 게임 메인 스레드를 줄이지 못함. ✔ ROS 경로는 릴레이 약 0.3코어·Foxglove 서버 약 0.1코어이고 발행 p50 0.2 ms(2026-10-12). 게임→릴레이는 이미 공유 메모리 ring과 공유 GPU 텍스처. rmw_iceoryx2는 alpha(rolling 대상, graph·service·QoS 미완)라 foxglove_bridge·릴레이 서비스·bag이 깨질 수 있음. 다시 볼 조건: 발행 멈춤이 DDS 원인으로 확인되고 Fast DDS 설정으로 못 고칠 때, 또는 ROS 없는 Windows 네이티브 구조로 갈 때 |
 
 ## 5. 순서
 
