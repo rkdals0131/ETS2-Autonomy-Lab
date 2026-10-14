@@ -231,4 +231,4 @@ pixi run relay bridge/config/bridge.local.json            # 또는 apps\launch.c
 
 [센서 프리셋](../docs/14_phase1_highway_sensors.md), [성능과 운영 구성](../docs/18_performance.md), [주요 시행착오](../docs/history/lessons.md).
 
-현재 센서 기본은 `phase1-highway-fh4-private.json`입니다. `bridge/configure.py`의 새 설정과 이 머신의 `bridge.local.json`도 FH4를 선택합니다. ACC/LCC만 쓸 때는 **입력·상태만**을 선택합니다. 다른 차량을 센서 모드로 요청하면 보정 불일치 이유를 표시하고 종료하며 자동으로 재시도하지 않습니다. [FH4 장착점과 확인 범위](../docs/14_phase1_highway_sensors.md).
+현재 센서 기본은 `phase1-highway-fh4-private.json`이고 `bridge/configure.py`의 새 설정도 FH4를 선택합니다. Scania S(`vehicle.scania.s_2016`)에서는 `rig`를 `../../ot/presets/phase1-highway-scania-s-private.json`으로 바꿉니다. ACC/LCC만 쓸 때는 **입력·상태만**을 선택합니다. 다른 차량을 센서 모드로 요청하면 보정 불일치 이유를 표시하고 종료하며 자동으로 재시도하지 않습니다. [차량별 장착점과 확인 범위](../docs/14_phase1_highway_sensors.md).

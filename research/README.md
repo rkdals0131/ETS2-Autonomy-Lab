@@ -10,6 +10,7 @@ ETS2 1.61.1.1의 설치 파일·SDK·엔진 분석 원본입니다. 현재 해�
 | findings/archive_inventory.csv, binary_summary.json, ets2la_* | 아카이브·PE·패턴·주소 조사 |
 | extracted/ | 정의·UI·재질·셰이더·차량 메시 선택 추출 |
 | extracted/fh5-mount-models/, live/2026-10-08-camera-rig/ | FH5 로케이터·표면 마운트·SDK와 모델 좌표 정렬 |
+| extracted/scania-s-mount-models/, scania-s-mount-pix/, live/2026-10-14-scania/ | Scania S 캐빈·미러·선바이저 원본과 ConverterPIX 변환, SDK 트럭 구성·native 미러 위치, 장착 확인 영상 |
 | tools/ | SCS packer·Extractor·ConverterPIX·RenderDoc·Ghidra |
 | ghidra/ | 실행 파일 Ghidra 프로젝트(`projects/`, Git 제외)와 조회 스크립트 `ghidra.py`·`scripts/`([27](../docs/27_main_thread_parallel_research.md#ghidra-영구-프로젝트)) |
 | live/2026-10-08-render-path/ | 카메라·물리·가시성 disassembly와 표본 |
