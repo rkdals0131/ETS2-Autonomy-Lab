@@ -430,10 +430,12 @@ json Runtime::command(const json& request) {
             const auto thread=main_thread_.load();
             if(!thread) throw std::runtime_error("No SDK frame has run yet");
             const double hz=request.value("hz",250.0),seconds=request.value("seconds",20.0);
-            if(!std::isfinite(hz) || hz<10 || hz>1000 || !std::isfinite(seconds) || seconds<=0 || seconds>120)
-                throw std::runtime_error("Profile hz must be 10-1000 and seconds 0-120");
-            sampler_.start(thread,hz,seconds);
-        } else if(action=="stop") sampler_.stop();
+            const auto depth=request.value("depth",0);
+            if(!std::isfinite(hz) || hz<10 || hz>1000 || !std::isfinite(seconds) || seconds<=0 || seconds>120 || depth<0 || depth>64)
+                throw std::runtime_error("Profile hz must be 10-1000, seconds 0-120 and depth 0-64");
+            sampler_.start(thread,hz,seconds,static_cast<unsigned>(depth));
+        } else if(action=="stacks") return sampler_.stacks(request.value("offset",size_t(0)));
+        else if(action=="stop") sampler_.stop();
         else if(action!="status") throw std::runtime_error("Unknown main_profile action");
         return sampler_.status();
     }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(ot_core VERSION 0.33.0 LANGUAGES C CXX)
+project(ot_core VERSION 0.34.0 LANGUAGES C CXX)
 if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "ot_core requires MSVC x64 on Windows")
 endif()
@@ -70,7 +70,7 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/gather_lidar.hp
   COMMAND "${OT_FXC}" /nologo /Ges /O3 /T cs_5_0 /E main /Vn ot_gather_lidar
     /Fh "${CMAKE_CURRENT_BINARY_DIR}/generated/gather_lidar.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/native/gather_lidar.hlsl"
   DEPENDS native/gather_lidar.hlsl VERBATIM)
-add_library(ot_core SHARED native/core.cpp native/platform.cpp native/transport.cpp native/vehicle.cpp native/render_probe.cpp native/camera_rig.cpp native/gpu_capture.cpp native/gpu_pack.cpp native/capture_stream.cpp native/pass_commands.cpp native/render_sample.cpp native/thread_sampler.cpp native/ot_core.def
+add_library(ot_core SHARED native/core.cpp native/platform.cpp native/transport.cpp native/vehicle.cpp native/render_probe.cpp native/camera_rig.cpp native/gpu_capture.cpp native/gpu_pack.cpp native/capture_stream.cpp native/pass_commands.cpp native/render_sample.cpp native/thread_sampler.cpp native/stack_unwind.cpp native/ot_core.def
   "${CMAKE_CURRENT_BINARY_DIR}/generated/pack_depth.hpp" "${CMAKE_CURRENT_BINARY_DIR}/generated/pack_color.hpp" "${CMAKE_CURRENT_BINARY_DIR}/generated/gather_lidar.hpp" "${CMAKE_CURRENT_BINARY_DIR}/generated/auto_exposure.hpp")
 target_include_directories(ot_core PRIVATE "${SCS_SDK}" vendor "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(ot_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
@@ -94,11 +94,16 @@ target_compile_definitions(ot_ipc PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(ot_ipc PRIVATE /W4 /EHsc /utf-8 /guard:cf)
 target_link_options(ot_ipc PRIVATE /guard:cf /DYNAMICBASE /NXCOMPAT)
 set_target_properties(ot_ipc PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/dist")
-add_executable(ot_sampler_test EXCLUDE_FROM_ALL native/thread_sampler_test.cpp native/thread_sampler.cpp native/platform.cpp)
+add_executable(ot_sampler_test EXCLUDE_FROM_ALL native/thread_sampler_test.cpp native/thread_sampler.cpp native/stack_unwind.cpp native/platform.cpp)
 target_compile_definitions(ot_sampler_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 target_compile_options(ot_sampler_test PRIVATE /W4 /EHsc /utf-8 /permissive-)
 target_include_directories(ot_sampler_test PRIVATE vendor)
 target_link_libraries(ot_sampler_test PRIVATE bcrypt advapi32 dbghelp psapi)
+add_executable(ot_unwind_test EXCLUDE_FROM_ALL native/stack_unwind_test.cpp native/stack_unwind.cpp native/platform.cpp)
+target_compile_definitions(ot_unwind_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+target_compile_options(ot_unwind_test PRIVATE /W4 /EHsc /utf-8 /permissive-)
+target_include_directories(ot_unwind_test PRIVATE vendor)
+target_link_libraries(ot_unwind_test PRIVATE bcrypt advapi32 dbghelp psapi)
 add_executable(ot_drive_test EXCLUDE_FROM_ALL native/drive_control_test.cpp native/manual_input.cpp)
 target_compile_definitions(ot_drive_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(ot_drive_test PRIVATE /W4 /EHsc /utf-8 /permissive-)
