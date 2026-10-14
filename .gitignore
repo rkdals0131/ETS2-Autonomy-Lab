@@ -62,3 +62,8 @@ venv/
 *.pem
 *.key
 *.pfx
+
+# Ghidra databases and logs of the game executable (keep scripts)
+/research/ghidra/projects/
+/research/ghidra/logs/
+/research/ghidra/out/

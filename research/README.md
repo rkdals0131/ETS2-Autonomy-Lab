@@ -10,7 +10,8 @@ ETS2 1.61.1.1의 설치 파일·SDK·엔진 분석 원본입니다. 현재 해�
 | findings/archive_inventory.csv, binary_summary.json, ets2la_* | 아카이브·PE·패턴·주소 조사 |
 | extracted/ | 정의·UI·재질·셰이더·차량 메시 선택 추출 |
 | extracted/fh5-mount-models/, live/2026-10-08-camera-rig/ | FH5 로케이터·표면 마운트·SDK와 모델 좌표 정렬 |
-| tools/ | SCS packer·Extractor·ConverterPIX·RenderDoc |
+| tools/ | SCS packer·Extractor·ConverterPIX·RenderDoc·Ghidra |
+| ghidra/ | 실행 파일 Ghidra 프로젝트(`projects/`, Git 제외)와 조회 스크립트 `ghidra.py`·`scripts/`([27](../docs/27_main_thread_parallel_research.md#ghidra-영구-프로젝트)) |
 | live/2026-10-08-render-path/ | 카메라·물리·가시성 disassembly와 표본 |
 | live/2026-10-08-renderdoc/, live/2026-10-08-render-probe/ | frame3160 GPU 상수·깊이 복원, DLL 모델·픽셀 정합 |
 | live/2026-10-09-side-artifact/ | 하우징 가림의 on/off 비교·메시 교차·수정 영상 |
@@ -23,6 +24,7 @@ ETS2 1.61.1.1의 설치 파일·SDK·엔진 분석 원본입니다. 현재 해�
 - [SDK 1.15 ZIP](https://download.eurotrucksimulator2.com/scs_sdk_1_15.zip), 취득 SHA256 `77504f14d2ac1405ba70ee3a97351662adbb39c0cf9d3a085423f01d37bc28ec`.
 - [SCS packer 1.55+](https://download.eurotrucksimulator2.com/scs_packer_1_55.zip), 취득 SHA256 `82f716a0261d1fd1582f2df30f536612a52ac267c74f1fd3c0f93115bf49d1ce`.
 - [Extractor 2026-07-29](https://github.com/sk-zk/Extractor/releases/tag/2026-07-29), asset digest 대조 기록 `findings/extractor_download.json`.
+- [Ghidra 12.1.4](https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.1.4_build), `ghidra_12.1.4_PUBLIC_20260921.zip` 취득 SHA256 `ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db`(릴리스 공지 값과 일치). JDK 21 이상이 필요하고 이 머신은 JDK 23을 씁니다.
 - [ConverterPIX 3cd4e73a86d0](https://github.com/mwl4/ConverterPIX/tree/3cd4e73a86d0c6bd28e117664c50a36cabeccf38), 실행 파일 Git blob 대조·SHA256·LICENSE는 `tools/converterpix-3cd4e73a86d0/`의 취득 기록에 있습니다.
 
 `inspect_renderdoc_capture.py`는 RenderDoc의 Python Scripting에서 실행합니다. 외부 읽기 도구 `read_live_memory.py`·`read_render_memory.py`는 해당 게임 빌드의 짧은 관측에 사용합니다. 실시간 수집·DLL 교체는 [ot 도구](../ot/README.md), 현재 지도 provider는 `tools/dotnet10`과 `sources/TruckLib` 계열의 고정 소스를 사용합니다. 제품 의존성은 [THIRD_PARTY](../ot/THIRD_PARTY.md)에 있습니다.
