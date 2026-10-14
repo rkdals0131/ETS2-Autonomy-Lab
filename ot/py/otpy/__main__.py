@@ -5,6 +5,7 @@ import math
 import sys
 import time
 import uuid
+from pathlib import Path
 from . import Client, LoaderClient, StateReader
 
 
@@ -19,15 +20,23 @@ def main():
         sub.add_parser(name)
     sub.add_parser("read").add_argument("field")
     profile = sub.add_parser("main_profile", help="Sample the game main thread's instruction pointer; read-only, bounded")
-    profile.add_argument("action", choices=("start", "status", "stop"), default="status", nargs="?")
+    profile.add_argument("action", choices=("start", "status", "stop", "stacks"), default="status", nargs="?")
     profile.add_argument("--hz", type=float, default=250.0)
     profile.add_argument("--seconds", type=float, default=20.0)
+    profile.add_argument("--depth", type=int, default=48, help="Call-stack frames per sample with start; 0 records only RIP")
+    profile.add_argument("--out", help="With stacks: write the finished run's stacks here for ot.cmd hotspots")
     perf = sub.add_parser("perf", help="One labeled performance sample (PresentMon + core counters); read-only")
     perf.add_argument("label", help="File name for <out>/<label>.csv/.json; alternate A/B labels, e.g. A1 B1 A2 B2")
     perf.add_argument("--seconds", type=float, default=30.0)
     perf.add_argument("--profile-hz", type=float, default=0.0, help="Also sample the main thread at this rate (e.g. 250)")
+    perf.add_argument("--profile-depth", type=int, default=48, help="Call-stack frames per main-thread sample; 0 records only RIP")
     perf.add_argument("--out", help="Directory; default research/live/<today>-perf")
     sub.add_parser("perf_table", help="One line per saved perf sample").add_argument("files", nargs="+")
+    spots = sub.add_parser("hotspots", help="Main-thread time per function from saved perf stacks (offline)")
+    spots.add_argument("files", nargs="+", help="<label>.json or <label>.stacks.json; several are merged")
+    spots.add_argument("--top", type=int, default=40)
+    spots.add_argument("--focus", help="Callers and callees of one function, e.g. eurotrucks2.exe+0x2B1B40")
+    spots.add_argument("--folded", help="Also write root-first folded stacks for speedscope.app")
     # Changing tier, render_probe, camera_rig or stream requires the bridge lease;
     # from this CLI only their status forms, camera_rig apply and panic work alone.
     sub.add_parser("tier", help="Show the tier; setting it requires the bridge lease").add_argument(
@@ -134,17 +143,52 @@ def main():
             return 0
         elif args.command == "perf":
             from .perf import line, sample
-            summary = sample(client, args.label, args.seconds, args.out, args.profile_hz)
+            summary = sample(client, args.label, args.seconds, args.out, args.profile_hz, args.profile_depth)
             print(line(summary))
-            for entry in (summary.get("main_profile") or {}).get("modules", [])[:8]:
+            profile = summary.get("main_profile") or {}
+            if profile:
+                ends = profile.get("stack_end") or {}
+                print(f"  main thread {profile.get('thread_id')}: {profile.get('samples')} samples, "
+                      f"pause {profile.get('suspend_us_mean', 0):.0f}/{profile.get('suspend_us_max', 0):.0f} us mean/max, "
+                      f"{profile.get('stack_frames_mean', 0):.1f} frames, ends "
+                      + " ".join(f"{k} {v}" for k, v in ends.items()) + (f", error {profile['error']}" if profile.get("error") else ""))
+            for entry in profile.get("modules", [])[:8]:
                 print(f"    {entry['share']:6.1%}  {entry['module']}")
+            print(f"  game threads {summary.get('thread_count')}, busiest:")
+            for thread in summary.get("threads", [])[:10]:
+                main = " (main)" if thread["tid"] == summary.get("main_thread_id") else ""
+                print(f"    {thread['cores']:5.2f} cores  {thread['tid']}{main} {thread['name']} {thread['start']}")
             return 0
         elif args.command == "perf_table":
             from .perf import table
             print(table(args.files))
             return 0
+        elif args.command == "hotspots":
+            from .hotspots import report
+            focus = None
+            if args.focus:
+                image, plus, rva = args.focus.partition("+")
+                try:
+                    focus = (image.lower(), int(rva, 16))
+                except ValueError:
+                    plus = ""
+                if not plus or not image:
+                    parser.error("--focus takes <image>+<hex RVA>, e.g. eurotrucks2.exe+0x2B1A30")
+            print(report(args.files, args.top, focus, args.folded))
+            return 0
         elif args.command == "main_profile":
-            options = {"hz": args.hz, "seconds": args.seconds} if args.action == "start" else {}
+            if args.action == "stacks":
+                if not args.out:
+                    parser.error("main_profile stacks requires --out")
+                from .perf import fetch_stacks
+                status = client.request("main_profile")
+                stacks = {"label": Path(args.out).name.removesuffix(".stacks.json"), "hz": status.get("hz"),
+                          "elapsed_s": status.get("elapsed_s"), "fps": 0.0, **fetch_stacks(client)}
+                Path(args.out).write_text(json.dumps(stacks, separators=(",", ":")), encoding="utf-8")
+                print(f"{len(stacks['stacks'])} distinct stacks of {stacks['samples']} samples -> {args.out} "
+                      "(no PresentMon frames: hotspots shows shares, not ms/frame)")
+                return 0
+            options = {"hz": args.hz, "seconds": args.seconds, "depth": args.depth} if args.action == "start" else {}
             result = client.request("main_profile", action=args.action, **options)
         elif args.command == "read":
             result = client.read(args.field)
