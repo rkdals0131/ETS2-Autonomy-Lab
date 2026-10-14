@@ -1,6 +1,6 @@
 # ot — 게임 DLL과 개발 도구
 
-저장소·설치본 core는 0.35.0(2026-10-15 설치, 렌더 패스 미루기 `parallel_passes`), 상주 loader는 0.31.0입니다. 0.31.1(lease 반납을 `panic` 대신 `disconnected`로 기록), 0.32.0(자세만 남은 카메라는 미리보기 주기로만 렌더, `sdk_timing`), 0.33.0(GT 메타데이터도 rider, 리그 `native_mirrors`, `main_profile`·`traffic` 명령), 0.34.0(`main_profile` 호출 스택), 0.34.1(`main_profile`의 `thread_id`로 다른 게임 스레드 샘플), 0.35.0(`parallel_passes`)은 core만 바뀌어 설치된 loader 0.31.0을 그대로 씁니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
+저장소·설치본 core는 0.36.0(2026-10-15, 렌더 패스 미루기·worker 기록 `parallel_passes`), 상주 loader는 0.31.0입니다. 0.31.1(lease 반납을 `panic` 대신 `disconnected`로 기록), 0.32.0(자세만 남은 카메라는 미리보기 주기로만 렌더, `sdk_timing`), 0.33.0(GT 메타데이터도 rider, 리그 `native_mirrors`, `main_profile`·`traffic` 명령), 0.34.0(`main_profile` 호출 스택), 0.34.1(`main_profile`의 `thread_id`로 다른 게임 스레드 샘플), 0.35.0(`parallel_passes` defer), 0.36.0(`parallel`·`alternate`)은 core만 바뀌어 설치된 loader 0.31.0을 그대로 씁니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
 
 브리지는 카메라 30 Hz·라이다 10 Hz·표시용 JPEG 10 Hz를 요청합니다. FH4·Scania S private 프리셋은 슬롯 3·4·6·7을 센서 제출에 사용하며 native mirror 배열은 보존합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
 
@@ -39,7 +39,7 @@ x64 MSVC Build Tools, CMake·Ninja, 공식 SCS SDK가 필요합니다. 기계별
 
 먼저 브리지를 중지한 뒤 기능 DLL을 교체합니다. 로더는 남아 있고 기존 FFB 플러그인은 유지됩니다. `loader reload`는 파일 교체 없이 기능 모듈을 재초기화합니다. F11은 내부 접근·리그·수집을 해제하고 SDK 수신을 유지합니다.
 
-## 렌더 패스 미루기 (M3a)
+## 렌더 패스 미루기와 worker 기록 (M3a·M3b)
 
 ```powershell
 .\ot\ot.cmd parallel_passes defer   # 타입 1 패스를 패스 반복 끝(0x227B1F)에서 원래 순서로 기록
@@ -47,7 +47,17 @@ x64 MSVC Build Tools, CMake·Ninja, 공식 SCS SDK가 필요합니다. 기계별
 .\ot\ot.cmd parallel_passes off
 ```
 
-렌더 패스 병렬 기록의 첫 단계입니다. 아직 메인 스레드에서 직렬로 기록하므로 성능 이득은 없고, 미루기·splice·패스별 카운터를 확인하는 용도입니다. 설치된 `ot_config.json`에 `allow_parallel_passes`(저장소 기본값 false), `allow_tier1`, `singleplayer_research`가 필요합니다. 브리지 lease와 무관하게 켜고 끄며, F11·lease 종료·권한 재읽기에서 꺼집니다. 끄기는 미룬 패스가 있는 프레임이 합류를 마칠 때까지 기다렸다가 훅을 내립니다. 일시정지 프레임과 장치가 바뀐 프레임은 원래 경로로 기록합니다. `perf` 표본에 이 상태의 증가분이 함께 저장됩니다.
+렌더 패스 병렬 기록([docs/28](../docs/28_render_pass_parallel_prototype.md))의 첫 단계입니다. defer는 메인 스레드에서 직렬로 기록하므로 성능 이득은 없고, 미루기·splice·패스별 카운터를 확인하는 용도입니다.
+
+M3b는 미룬 패스를 엔진 작업 관리자(`parallel_loop_task_t`)로 worker에 나눕니다. 아직 한 번에 한 패스만 기록하므로 이득은 없고, worker 스레드에서 렌더 기록이 도는지를 확인하는 단계입니다.
+
+```powershell
+.\ot\ot.cmd parallel_passes parallel --order ticket --accept-foreign-hooks   # 원래 순서로 한 번에 한 패스(스레드 전환만 검증)
+.\ot\ot.cmd parallel_passes alternate --order ticket --accept-foreign-hooks  # 프레임마다 defer와 parallel을 번갈아 키별 명령 요약 비교
+.\ot\ot.cmd parallel_passes parallel --order free                           # 순서 자유 + 락 하나(외부 패치 없는 .text에서만)
+```
+
+`--order`는 필수입니다. 외부 코드 패치가 기록 경로에 있으면(status `gate.workers_allowed`가 false) worker 모드는 거절되고, `order=ticket`만 `--accept-foreign-hooks`로 예외를 둡니다. 큐에 같은 패스 객체가 두 번 있으면 그 프레임은 직렬로 기록합니다. alternate는 각 패스 본체를 요약해 이웃한 다른 모드 프레임(교차)과 두 프레임 전 같은 모드(기준선)를 비교하고, 교차 불일치율이 기준선의 두 배와 기준선+1%p를 모두 넘으면 꺼집니다. status의 `parallel`(순서 대기·패스 보유 시간, 스레드별 패스 수)과 `alternate`(비교 수·불일치율·처음 어긋난 키)가 결과입니다. 설치된 `ot_config.json`에 `allow_parallel_passes`(저장소 기본값 false), `allow_tier1`, `singleplayer_research`가 필요합니다. 브리지 lease와 무관하게 켜고 끄며, F11·lease 종료·권한 재읽기에서 꺼집니다. 끄기는 미룬 패스가 있는 프레임이 합류를 마칠 때까지 기다렸다가 훅을 내립니다. 일시정지 프레임과 장치가 바뀐 프레임은 원래 경로로 기록합니다. `perf` 표본에 이 상태의 증가분이 함께 저장됩니다.
 
 켤 때 게임 `.text`를 exe 파일(현재 베이스로 `.reloc` 적용)과 비교해 다른 구간을 우리 훅, `ot_config.json`의 `accepted_text_patches`(`[{"rva": "0x…", "size": n}]`), 외부로 나눠 status의 `gate`에 냅니다. 기록 경로 함수(`fields.json`의 `render_parallel.closure_rvas`)와 우리 훅 자리의 앞 32바이트는 켜져 있는 동안 1초마다 다시 비교하고, 바뀌면 off로 내려갑니다. 외부 패치가 있어도 defer는 켭니다. 메인 스레드에서 원래 순서로 기록하기 때문이며, snowymoon `dxgi.dll`과 함께 2,200프레임을 확인했습니다. 외부 패치가 있으면 `gate.workers_allowed`가 false가 되고, worker 기록(M3b 이후)은 이 값을 따릅니다.
 

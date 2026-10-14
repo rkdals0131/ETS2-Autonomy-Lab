@@ -58,9 +58,15 @@ def main():
     probe.add_argument("--mode", dest="hook_mode", choices=("observe", "rig"), default="observe",
                        help="observe: capture hooks; rig: only the four camera placement hooks")
     probe.add_argument("--frames", action="store_true", help="With rig mode: also observe Present intervals")
-    passes = sub.add_parser("parallel_passes", help="docs/28 M3a: defer type 1 render passes to the end of the pass "
-                            "loop on the main thread; F11 returns to off")
-    passes.add_argument("mode", choices=("status", "off", "defer"), default="status", nargs="?")
+    passes = sub.add_parser("parallel_passes", help="docs/28: defer type 1 render passes to the end of the pass loop "
+                            "(defer, main thread), record them on engine workers (parallel) or alternate the two per "
+                            "frame (alternate); F11 returns to off")
+    passes.add_argument("mode", choices=("status", "off", "defer", "parallel", "alternate"), default="status", nargs="?")
+    passes.add_argument("--order", choices=("ticket", "free"),
+                        help="parallel/alternate (required): ticket = one pass at a time in the original order; free = any order under one lock")
+    passes.add_argument("--executors", type=int, default=0, help="Executors including the main thread; 0 = engine workers + 1")
+    passes.add_argument("--accept-foreign-hooks", action="store_true",
+                        help="order=ticket only: run although foreign code patches are in the recording path")
     rig = sub.add_parser("camera_rig", help="Place cameras in slots 0-8; +X right, +Y up, -Z forward")
     rig.add_argument("mode", choices=("status", "apply", "off"), default="status", nargs="?")
     rig.add_argument("--config", help="JSON containing views with slot, basis, position, quaternion_wxyz and FOVs")
@@ -230,7 +236,14 @@ def main():
                 options["vehicle_metadata"] = True
             result = client.request("render_probe", **options)
         elif args.command == "parallel_passes":
-            result = client.request("parallel_passes", **({} if args.mode == "status" else {"mode": args.mode}))
+            options = {} if args.mode == "status" else {"mode": args.mode}
+            if args.mode in ("parallel", "alternate"):
+                if not args.order:
+                    parser.error("parallel and alternate require --order ticket|free")
+                options.update(order=args.order, executors=args.executors, accept_foreign_hooks=args.accept_foreign_hooks)
+            elif args.order or args.executors or args.accept_foreign_hooks:
+                parser.error("--order, --executors and --accept-foreign-hooks apply to parallel and alternate")
+            result = client.request("parallel_passes", **options)
         elif args.command == "camera_rig":
             if (args.rig_only or args.frames) and args.mode != "apply":
                 parser.error("--rig-only and --frames require camera_rig apply")

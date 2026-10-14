@@ -183,7 +183,7 @@ def counters(client):
               "stream": {k: stream.get(k) for k in ("armed", "completed", "published", "queue_dropped", "gpu_ring_busy",
                                                       "same_frame_skipped", "failed", "canceled") if k in stream},
               # docs/28 M3a: counters difference over the sample; keys are cumulative.
-              "parallel_passes": {k: passes.get(k) for k in ("requested_mode", "frames", "passes", "join", "defer_frame_mean",
+              "parallel_passes": {k: passes.get(k) for k in ("requested_mode", "frames", "passes", "join", "defer_frame_mean", "parallel", "alternate",
                                                              "keys", "key_count", "off_reason", "error", "game_folder_dxgi")
                                   if k in passes}}
     placement = (snapshot.get("sdk") or {}).get("truck.world.placement")
