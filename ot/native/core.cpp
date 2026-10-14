@@ -3,6 +3,7 @@
 #include "../include/mount_layout.hpp"
 #include "build_identity.hpp"
 #include "render_probe.hpp"
+#include "parallel_passes.hpp"
 #include "thread_sampler.hpp"
 #include "module_api.hpp"
 #include <scssdk_telemetry.h>
@@ -95,7 +96,7 @@ private:
     std::atomic<std::shared_ptr<const json>> truck_config_;
     std::atomic<std::shared_ptr<const json>> registered_;
     std::string executable_hash_,gate_error_;
-    bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,allow_camera_rig_=false,paused_=true;
+    bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,allow_camera_rig_=false,allow_parallel_passes_=false,paused_=true;
     std::mutex control_;
     std::string lease_;
     uint64_t lease_deadline_=0;
@@ -108,6 +109,7 @@ private:
     std::atomic<std::shared_ptr<const json>> latest_;
     std::unique_ptr<Transport> transport_;
     std::unique_ptr<RenderProbe> render_probe_;
+    std::unique_ptr<ParallelPasses> parallel_passes_;
     ThreadSampler sampler_;
 };
 
@@ -121,7 +123,9 @@ void Runtime::initialize() {
     allow_tier1_=config_.value("allow_tier1",false) && config_.value("singleplayer_research",false);
     allow_render_probe_=config_.value("allow_render_probe",false);
     allow_camera_rig_=config_.value("allow_camera_rig",false);
+    allow_parallel_passes_=config_.value("allow_parallel_passes",false);
     render_probe_=std::make_unique<RenderProbe>();
+    parallel_passes_=std::make_unique<ParallelPasses>();
     try {executable_hash_=sha256_file(module_path(nullptr)); gate_ok_=executable_hash_==OT_GAME_SHA256;}
     catch(const std::exception& e) {gate_error_=e.what();}
     if(!gate_ok_) log("Version gate closed; SDK-only. Observed hash="+executable_hash_+" "+gate_error_);
@@ -160,6 +164,13 @@ bool Runtime::shutdown() noexcept {
         channel.registration=SCS_RESULT_not_found;
     }
     if(transport_) transport_->stop();
+    if(parallel_passes_) {
+        if(parallel_passes_->close()) parallel_passes_.reset();
+        else {
+            log("ot_core stopped but parallel_passes hooks are retained; DLL release refused");
+            return false;
+        }
+    }
     if(render_probe_) {
         if(render_probe_->close()) render_probe_.reset();
         else {
@@ -184,6 +195,7 @@ void Runtime::release_runtime(OtDriveReason reason,const char* message) noexcept
         if(input_host) input_host->release(input_host->context,reason);
         lease_.clear();lease_deadline_=0;
         tier_=0;observe_traffic_=false;
+        if(parallel_passes_) parallel_passes_->disable();
         if(render_probe_) render_probe_->disable();
         log(message);
     } catch(...) {tier_=0;}
@@ -272,11 +284,13 @@ void Runtime::event(scs_event_t event,const void* data) {
         if(render_probe_) render_probe_->sdk_frame(stored);
         if(transport_) transport_->publish(stored->dump(),frame_);
     }
+    // SDK events run on the game's main thread, which also records render passes.
+    if(parallel_passes_) parallel_passes_->sdk_frame(GetCurrentThreadId(),paused_);
 }
 json Runtime::reload_permissions() {
     // Only the pipe worker calls this after initialization. Engine callbacks
     // consume the atomic tier; permissions never grant a higher tier implicitly.
-    panic();allow_tier1_=false;allow_render_probe_=false;allow_camera_rig_=false;
+    panic();allow_tier1_=false;allow_render_probe_=false;allow_camera_rig_=false;allow_parallel_passes_=false;
     configure_drive(json::object());
     std::ifstream input(module_path(module).parent_path()/L"ot_config.json");
     if(!input) throw std::runtime_error("Cannot open ot_config.json; returned to Tier 0");
@@ -285,10 +299,12 @@ json Runtime::reload_permissions() {
     allow_tier1_=settings.value("allow_tier1",false) && settings.value("singleplayer_research",false);
     allow_render_probe_=settings.value("allow_render_probe",false);
     allow_camera_rig_=settings.value("allow_camera_rig",false);
+    allow_parallel_passes_=settings.value("allow_parallel_passes",false);
     configure_drive(settings);
     log("Permissions reloaded; tier=0, allow_tier1="+std::to_string(allow_tier1_));
     return {{"tier",0},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_}};
+        {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
+        {"parallel_passes_allowed",gate_ok_ && allow_tier1_ && allow_parallel_passes_}};
 }
 json Runtime::engine_snapshot() {
     const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
@@ -396,9 +412,10 @@ json Runtime::command(const json& request) {
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","stream","manual_dump","panic","drive"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","stream","manual_dump","panic","drive","parallel_passes"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
-        {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false)},
+        {"parallel_passes_allowed",gate_ok_ && allow_tier1_ && allow_parallel_passes_},
+        {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false) || parallel_passes_->active()},
         {"drive",current_drive()},
         {"field_writes",false},{"camera_rig",render_probe_->camera_rig(json::object())},{"channels",*registered_.load()}};
     if(cmd=="schema") return schema_;
@@ -528,6 +545,24 @@ json Runtime::command(const json& request) {
             } else {render_probe_->disable();if(tier_==2) tier_=1;}
         }
         return render_probe_->status();
+    }
+    if(cmd=="parallel_passes") {
+        // docs/28 M3a. Independent of the bridge lease: it changes when passes
+        // are recorded, not what is captured. F11, lease end and permission
+        // reload return it to the original path (release_runtime).
+        std::lock_guard lock(control_);
+        if(request.contains("mode")) {
+            const auto mode=request.at("mode").get<std::string>();
+            if(mode=="off") parallel_passes_->disable();
+            else if(mode=="defer") {
+                if(!gate_ok_ || !allow_tier1_ || !allow_parallel_passes_)
+                    throw std::runtime_error("parallel_passes requires matching EXE, singleplayer_research, allow_tier1 and allow_parallel_passes");
+                parallel_passes_->enable(ParallelPasses::Mode::defer);
+            } else if(mode=="shadow") throw std::runtime_error("Recording a pass twice crashes: pass callbacks consume their blit pairs (0x151BF80, docs/28)");
+            else if(mode=="parallel") throw std::runtime_error("Worker recording is M3b; this build implements off and defer");
+            else throw std::runtime_error("parallel_passes mode must be off or defer");
+        }
+        return parallel_passes_->status();
     }
     if(cmd=="panic") {panic();return {{"tier",0},{"active_hooks",render_probe_->status().at("active")}};}
     if(cmd=="tier") {

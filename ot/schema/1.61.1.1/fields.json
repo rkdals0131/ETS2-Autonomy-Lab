@@ -87,6 +87,25 @@
     "model_component_set_placement_rva": 3282016,
     "evidence": "docs/12_dx11_mirror_render_path.md#차량-렌더-모델의-실제-변환-성분"
   },
+  "render_parallel": {
+    "pass_execute_rva": 2255200,
+    "pass_execute_signature": "48 89 5C 24 08 48 89 74 24 18 48 89 54 24 10 55 57 41 56 48 8D 6C 24 80",
+    "execute_join_rva": 2259743,
+    "execute_join_signature": "4C 89 BD 98 08 00 00 48 8D 85 A8 08 00 00 48 89 85 90 08 00 00",
+    "storage_allocate_rva": 2674272,
+    "storage_offset_in_pass": 744,
+    "storage_vtable_rva": 35641088,
+    "device_pointer_rva": 57153632,
+    "device_vtable_rva": 35727272,
+    "device_slots_checked": {
+      "0x108": 2824752,
+      "0x120": 3051488,
+      "0x278": 2845472
+    },
+    "pass_name_offset": 32,
+    "pass_space_offset": 192,
+    "evidence": "docs/28_render_pass_parallel_prototype.md; ot/native/parallel_passes.cpp hardcodes these with the signatures"
+  },
   "vehicle_physics": {
     "actor_vehicle_offset": 24,
     "vehicle_body_offset": 48,
