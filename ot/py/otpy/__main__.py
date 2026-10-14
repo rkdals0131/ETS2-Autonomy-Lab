@@ -24,6 +24,7 @@ def main():
     profile.add_argument("--hz", type=float, default=250.0)
     profile.add_argument("--seconds", type=float, default=20.0)
     profile.add_argument("--depth", type=int, default=48, help="Call-stack frames per sample with start; 0 records only RIP")
+    profile.add_argument("--thread", type=int, default=0, help="With start: another game thread id (see perf's thread table); default main")
     profile.add_argument("--out", help="With stacks: write the finished run's stacks here for ot.cmd hotspots")
     perf = sub.add_parser("perf", help="One labeled performance sample (PresentMon + core counters); read-only")
     perf.add_argument("label", help="File name for <out>/<label>.csv/.json; alternate A/B labels, e.g. A1 B1 A2 B2")
@@ -194,6 +195,8 @@ def main():
                       "(no PresentMon frames: hotspots shows shares, not ms/frame)")
                 return 0
             options = {"hz": args.hz, "seconds": args.seconds, "depth": args.depth} if args.action == "start" else {}
+            if args.action == "start" and args.thread:
+                options["thread_id"] = args.thread
             result = client.request("main_profile", action=args.action, **options)
         elif args.command == "read":
             result = client.read(args.field)

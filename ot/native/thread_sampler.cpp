@@ -39,6 +39,7 @@ void ThreadSampler::run(DWORD id,double hz,double seconds,unsigned depth) noexce
         // No allocation may happen while the target is suspended.
         rips.reserve(capacity);counts.reserve(capacity);ends.reserve(capacity);frames.resize(capacity*depth);
         table.build(); // Modules loaded later count as unknown code.
+        if(id==GetCurrentThreadId()) throw std::runtime_error("The sampler cannot sample its own thread");
         Handle thread(OpenThread(THREAD_SUSPEND_RESUME|THREAD_GET_CONTEXT|THREAD_QUERY_LIMITED_INFORMATION,FALSE,id));
         if(!thread) throw std::runtime_error("OpenThread failed: "+std::to_string(GetLastError()));
         const NT_TIB* tib=depth?thread_tib(thread.h):nullptr;

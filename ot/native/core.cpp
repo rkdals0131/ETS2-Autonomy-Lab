@@ -427,8 +427,15 @@ json Runtime::command(const json& request) {
         // runs are bounded and the target is suspended only for each sample.
         const auto action=request.value("action",std::string("status"));
         if(action=="start") {
-            const auto thread=main_thread_.load();
+            // Any thread of the game can be sampled; the default is the main thread.
+            auto thread=request.value("thread_id",DWORD{0});
+            if(!thread) thread=main_thread_.load();
             if(!thread) throw std::runtime_error("No SDK frame has run yet");
+            {
+                Handle handle(OpenThread(THREAD_QUERY_LIMITED_INFORMATION,FALSE,thread));
+                if(!handle || GetProcessIdOfThread(handle.h)!=GetCurrentProcessId())
+                    throw std::runtime_error("thread_id is not a thread of the game process");
+            }
             const double hz=request.value("hz",250.0),seconds=request.value("seconds",20.0);
             const auto depth=request.value("depth",0);
             if(!std::isfinite(hz) || hz<10 || hz>1000 || !std::isfinite(seconds) || seconds<=0 || seconds>120 || depth<0 || depth>64)
