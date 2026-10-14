@@ -58,7 +58,7 @@ ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 | 범위·결정 | [요구사항과 결정](docs/01_requirements_and_decisions.md) |
 | 설계 | [구조](docs/03_system_design.md), [좌표·시각·데이터](docs/04_sensors_and_data.md), [FH4 센서 리그](docs/14_phase1_highway_sensors.md) |
 | 센서·ROS | [라이다](docs/15_virtual_sensors.md), [ROS 토픽 계약](docs/16_ros2_bridge.md), [센서 확장](docs/17_sensor_expansion.md) |
-| 다음 개발 | [Windows 네이티브 계획](docs/20_windows_native_port_plan.md), [성능 진단](docs/18_performance.md), [CPU 최적화 계획](docs/26_cpu_optimization_plan.md), [메인 스레드 병렬화 연구](docs/27_main_thread_parallel_research.md) |
+| 다음 개발 | [Windows 네이티브 계획](docs/20_windows_native_port_plan.md), [성능 진단](docs/18_performance.md), [CPU 최적화 계획](docs/26_cpu_optimization_plan.md), [메인 스레드 병렬화 연구](docs/27_main_thread_parallel_research.md), [렌더 패스 병렬 기록 시제품](docs/28_render_pass_parallel_prototype.md) |
 | 포팅 상세 | [안전 체크리스트](docs/21_safety_checklist.md), [P0 실행서](docs/22_p0_spike_runbook.md), [릴레이 노드](docs/23_relay_node_design.md), [HUD 데칼](docs/24_hud_overlay_design.md), [센서 스택](docs/25_sensor_stack_design.md) |
 | 레거시 | [옮긴 문서와 이유](docs/legacy/README.md): 마일스톤 표, Autoware adapter 계획, GT 폐루프 순서 |
 | 엔진 참조 | [설치 분석](docs/10_installed_game_static_analysis.md), [SDK·물리 상태](docs/11_idle_memory_and_telemetry.md), [DX11·가시성](docs/12_dx11_mirror_render_path.md) |

@@ -264,7 +264,7 @@ hookup 연쇄의 정체(✔ 맹글된 이름 `array_t<owner_ptr_t<particle_gen_u
 | M0 | S, 게임 | core 0.34.0 설치 뒤 [26 §6](26_cpu_optimization_plan.md#6-다음-게임-세션-진행) 측정에 스택을 함께 기록 | ✔ 브리지 끔 정차, 센서 켬 정차, 고속도로 주행(§6) |
 | M1 | M | 엔진 worker 시스템 분석 | ✔ 정적 분석 완료(§5). 주행 중에도 worker는 놂(§6) |
 | M2 | M | `hotspots` 상위 30개 함수를 디컴파일해 조건 4개로 분류 | 후보 표. 통과 0이면 이 연구는 접고 26의 일 줄이기에 집중 |
-| M3 | L, 연구 | 후보 하나로 fork-join 또는 엔진 worker 제출 시제품 | 같은 입력에서 단일·병렬 결과 해시 일치, 장시간 주행 무충돌, ABAB에서 frame time 감소 |
+| M3 | L, 연구 | 후보 하나로 fork-join 또는 엔진 worker 제출 시제품 | 1순위 렌더 패스 기록으로 진행: [28](28_render_pass_parallel_prototype.md). M3a(미루기) ✔ core 0.35.0 |
 
 - CPU 배치(C3)는 게임을 CPU 0–7에 묶고 메인 스레드에 CPU 2를 줍니다. 엔진 worker 6+3+3과 PhysX 2개가 남은 7개 논리 CPU를 나눠 씁니다. M0의 스레드 표에서 worker가 바쁘면 배치를 다시 정합니다.
 
