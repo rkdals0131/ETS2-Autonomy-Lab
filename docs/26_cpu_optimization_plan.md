@@ -30,6 +30,8 @@
 
 ✔ 2026-10-13 구현(core 0.33.0, 게임 확인 전): `ot.cmd perf <label> [--profile-hz 250]`, `ot.cmd perf_table <json...>`, core `main_profile`·`traffic` 명령. 샘플러는 게임 없는 MSVC 시험(`ot_sampler_test`)에서 바쁜 스레드를 자기 이미지로 100% 귀속하고, 힙을 계속 잡는 스레드도 교착 없이 끝까지 샘플했습니다. 샘플당 정지는 평균 25 µs·최대 235 µs라 250 Hz면 메인 스레드에 약 0.6%입니다.
 
+✔ 2026-10-14 core 0.34.0(게임 확인 전): `main_profile` 호출 스택(`depth`, 락 없는 자체 unwinder), perf의 게임 스레드별 CPU와 `<label>.stacks.json`, 함수별 집계 `ot.cmd hotspots`. 설계와 시험 결과는 [27 메인 스레드 병렬화 연구](27_main_thread_parallel_research.md#4-도구)에 있습니다.
+
 - 저장소 도구로 ABAB 측정을 합니다. 조건 A/B를 30초씩 3회 번갈아 재고 아래를 함께 기록합니다.
   - PresentMon fps·p50·p99·CPU/GPU busy
   - 센서 렌더/초, `hooks`·`sdk_timing` 증분, stream 카운터
@@ -133,11 +135,13 @@
 
 같은 주차 위치에서 정차, snowymoon 안티앨리어싱 끔, `r_mirror_view_distance 250`, 브라우저 등 무거운 앱은 닫습니다. 측정은 모두 `.\ot\ot.cmd perf <label> [--profile-hz 250]`(30 s)이고, 조건을 바꾼 뒤 10 s 기다렸다 잽니다. 결과는 `ot.cmd perf_table research\live\<날짜>-perf\*.json`으로 봅니다.
 
-1. core 0.33.0 설치(런처 중지 상태): `ot.cmd loader unload` → 이전 `plugins/ot_runtime/ot_core.dll`을 `ot/backup/<날짜>-before-0.33.0/`에 복사 → `ot/dist/ot_core.dll` 복사·해시 확인 → `ot.cmd loader load` → `ot.cmd version`이 0.33.0. 릴레이도 새로 빌드한 것을 씁니다.
-2. 브리지 끔 기준과 분포: `off-1 --profile-hz 250`.
-3. 런처 시작, Foxglove 뷰어 연결: `view-1 --profile-hz 250`. 분포에서 `eurotrucks2.exe`·`d3d11.dll`·`nvwgf2umx.dll`·`ot_core.dll` 비중을 C7 판단에 씁니다.
-4. C10 게임 미러: 체크박스와 **재시작**으로 켬/끔을 바꿔 `mirror-on-1`·`mirror-off-1`·`mirror-on-2`·`mirror-off-2`·`mirror-on-3`·`mirror-off-3`. 끈 동안 화면 미러가 멈추는지, 다시 켜면 돌아오는지 눈으로 확인합니다.
-5. C3 CPU 배치: 같은 방식으로 `layout-on-*`·`layout-off-*` 3쌍.
-6. C1 준비 렌더 비용: `bridge/config/bridge.local.json`에 `"capture_warmup": false`를 넣고 재시작해 `warmup-off-*`, 지우고 `warmup-on-*` 3쌍. 끈 동안 나무·가로등 결함은 감수하고, 끝나면 반드시 되돌립니다.
-7. C4 뷰어: 뷰어 창 보임·최소화를 번갈아 `viewer-shown-*`·`viewer-min-*` 3쌍.
-8. 각 단계의 `slow_publishes.recent`와 런처 "발행" 줄을 함께 기록합니다(330 ms 정지 추적).
+1. core 0.34.0 설치(런처 중지 상태): `ot.cmd loader unload` → 이전 `plugins/ot_runtime/ot_core.dll`을 `ot/backup/<날짜>-before-0.34.0/`에 복사 → `ot/dist/ot_core.dll` 복사·해시 확인 → `ot.cmd loader load` → `ot.cmd version`이 0.34.0. 릴레이도 새로 빌드한 것을 씁니다.
+2. 스택 smoke: `smoke-1 --seconds 5 --profile-hz 250` 뒤 `ot.cmd hotspots research\live\<날짜>-perf\smoke-1.json`. `main_profile.error`가 비고, 스택 끝 `top`이 90% 이상인지, 샘플당 정지 최대(`suspend_us_max`)를 봅니다. `depth`로 끝나는 비율이 크면 이후 `--profile-depth 64`, `bad_frame`·`unknown_code`가 크면 C 시리즈는 `--profile-depth 0`으로 잽니다.
+3. 브리지 끔 기준과 분포: `off-1 --profile-hz 250`. 게임 스레드별 CPU는 항상 남고, `--profile-hz`를 주면 호출 스택(기본 depth 48)도 남습니다. 끝나면 `ot.cmd hotspots research\live\<날짜>-perf\off-1.json`으로 함수별 비중을 봅니다([27](27_main_thread_parallel_research.md) M0). ABAB도 250 Hz를 유지합니다(정지 비용 약 0.8%로 0.33.0 계획과 같음).
+4. 주행 샘플(사람이 운전할 때): `drive-1 --seconds 60 --profile-hz 1000`. 순위와 "주행 중 엔진 worker가 노는가"는 정차로는 답이 안 나옵니다. 정지 비용이 약 3%라 fps 비교에는 쓰지 않습니다.
+5. 런처 시작, Foxglove 뷰어 연결: `view-1 --profile-hz 250`. 분포에서 `eurotrucks2.exe`·`d3d11.dll`·`nvwgf2umx.dll`·`ot_core.dll` 비중을 C7 판단에 씁니다.
+6. C10 게임 미러: 체크박스와 **재시작**으로 켬/끔을 바꿔 `mirror-on-1`·`mirror-off-1`·`mirror-on-2`·`mirror-off-2`·`mirror-on-3`·`mirror-off-3`. 끈 동안 화면 미러가 멈추는지, 다시 켜면 돌아오는지 눈으로 확인합니다.
+7. C3 CPU 배치: 같은 방식으로 `layout-on-*`·`layout-off-*` 3쌍.
+8. C1 준비 렌더 비용: `bridge/config/bridge.local.json`에 `"capture_warmup": false`를 넣고 재시작해 `warmup-off-*`, 지우고 `warmup-on-*` 3쌍. 끈 동안 나무·가로등 결함은 감수하고, 끝나면 반드시 되돌립니다.
+9. C4 뷰어: 뷰어 창 보임·최소화를 번갈아 `viewer-shown-*`·`viewer-min-*` 3쌍.
+10. 각 단계의 `slow_publishes.recent`와 런처 "발행" 줄을 함께 기록합니다(330 ms 정지 추적).
