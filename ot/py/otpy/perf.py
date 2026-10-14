@@ -172,6 +172,7 @@ def counters(client):
     rig = _try(client, "camera_rig")
     stream = _try(client, "stream", action="status")
     snapshot = _try(client, "snapshot")
+    passes = _try(client, "parallel_passes")
     result = {"qpc": time.perf_counter(), "frame_id": snapshot.get("frame_id"), "paused": snapshot.get("paused"),
               "tier": _try(client, "tier").get("tier"), "sdk_timing": _try(client, "sdk_timing"),
               "qpc_frequency": hooks.get("qpc_frequency"),
@@ -180,7 +181,11 @@ def counters(client):
                       for v in rig.get("views", []) if isinstance(v, dict) and "slot" in v},
               "native_mirrors": rig.get("native_mirrors"), "native_suppressed": rig.get("native_suppressed", 0),
               "stream": {k: stream.get(k) for k in ("armed", "completed", "published", "queue_dropped", "gpu_ring_busy",
-                                                      "same_frame_skipped", "failed", "canceled") if k in stream}}
+                                                      "same_frame_skipped", "failed", "canceled") if k in stream},
+              # docs/28 M3a: counters difference over the sample; keys are cumulative.
+              "parallel_passes": {k: passes.get(k) for k in ("requested_mode", "frames", "passes", "join", "defer_frame_mean",
+                                                             "keys", "key_count", "off_reason", "error", "game_folder_dxgi")
+                                  if k in passes}}
     placement = (snapshot.get("sdk") or {}).get("truck.world.placement")
     if isinstance(placement, dict) and {"x", "z"} <= placement.keys():
         result["truck_xy"] = [placement["x"], -placement["z"]]
@@ -299,6 +304,9 @@ def sample(client, label, seconds=30.0, out=None, profile_hz=0.0, profile_depth=
         "hook_ms_per_frame": {k: v / frames["frames"] for k, v in hook_ms.items()},
         "sdk_callback_ms_per_s": {k: v / wall for k, v in sdk_ms.items()},
         "sdk_frames_per_s": (change.get("frame_id") or 0) / wall,
+        "parallel_passes": {**(change.get("parallel_passes") or {}),
+                            "requested_mode": [before.get("parallel_passes", {}).get("requested_mode"),
+                                               after.get("parallel_passes", {}).get("requested_mode")]},
         "cores": {name: cpu(name) for name in (GAME,) + HELPERS},
         "traffic": [traffic_before, traffic_after],
         "thread_count": len(threads_after),
@@ -327,6 +335,9 @@ def line(s):
     traffic_counts = "/".join(str(t.get("within_250m", t.get("spawned", "?"))) for t in s.get("traffic", []))
     hooks = sum(s.get("hook_ms_per_frame", {}).values())
     flags = ("PAUSED " if s.get("paused") else "") + ("BACKGROUND " if (s.get("foreground_share") or 0) < .95 else "")
+    modes = (s.get("parallel_passes") or {}).get("requested_mode") or []
+    if any(m not in (None, "off") for m in modes):
+        flags += "passes=" + "/".join(str(m) for m in modes) + " "
     return (f"{s['label']:24} {s['fps']:5.1f} fps  p50 {s['frame_ms_p50']:5.1f} p99 {s['frame_ms_p99']:5.1f}  "
             f"CPU {s['cpu_busy_ms_p50'] or float('nan'):5.1f} GPU {s['gpu_busy_ms_p50'] or float('nan'):5.1f}  "
             f"sensor {s['sensor_renders_per_s']:5.1f}/s native {s['native_mirror_renders_per_s']:5.1f}/s  "

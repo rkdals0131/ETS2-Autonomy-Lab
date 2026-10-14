@@ -50,6 +50,9 @@ def main():
     probe.add_argument("--mode", dest="hook_mode", choices=("observe", "rig"), default="observe",
                        help="observe: capture hooks; rig: only the four camera placement hooks")
     probe.add_argument("--frames", action="store_true", help="With rig mode: also observe Present intervals")
+    passes = sub.add_parser("parallel_passes", help="docs/28 M3a: defer type 1 render passes to the end of the pass "
+                            "loop on the main thread; F11 returns to off")
+    passes.add_argument("mode", choices=("status", "off", "defer"), default="status", nargs="?")
     rig = sub.add_parser("camera_rig", help="Place cameras in slots 0-8; +X right, +Y up, -Z forward")
     rig.add_argument("mode", choices=("status", "apply", "off"), default="status", nargs="?")
     rig.add_argument("--config", help="JSON containing views with slot, basis, position, quaternion_wxyz and FOVs")
@@ -213,6 +216,8 @@ def main():
                     parser.error("--vehicles requires render_probe on")
                 options["vehicle_metadata"] = True
             result = client.request("render_probe", **options)
+        elif args.command == "parallel_passes":
+            result = client.request("parallel_passes", **({} if args.mode == "status" else {"mode": args.mode}))
         elif args.command == "camera_rig":
             if (args.rig_only or args.frames) and args.mode != "apply":
                 parser.error("--rig-only and --frames require camera_rig apply")
