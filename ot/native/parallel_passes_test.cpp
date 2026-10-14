@@ -5,8 +5,13 @@
 // pass names normalize their object ids.
 #include "pass_stream.hpp"
 #include "text_gate.hpp"
+#include "parallel_loop.hpp"
+#include <algorithm>
 #include <cstdio>
 #include <deque>
+#include <mutex>
+#include <random>
+#include <thread>
 
 using namespace ot::passes;
 namespace {
@@ -145,6 +150,89 @@ void text_gate() {
           "differences closer than the gap merge into one range");
     check(ot::gate::diff_ranges(file.data(),file.data(),file.size()).empty(),"equal bytes give no range");
 }
+// A task manager table like the engine's: [0] submit starts executors-1
+// threads that call the body, [3] wait runs one executor on the caller and
+// joins the rest (0x167E90 / 0x167DD0 semantics).
+std::vector<std::thread> fake_threads;
+void fake_submit(void*,ot::loop::EngineTask* task) {
+    for(unsigned i=1;i<task->executors;++i) fake_threads.emplace_back([task]{task->body(task->capture,task);});
+}
+void fake_wait(void*,ot::loop::EngineTask* task) {
+    task->body(task->capture,task);
+    for(auto& thread:fake_threads) thread.join();
+    fake_threads.clear();
+}
+void* fake_table[8]={reinterpret_cast<void*>(&fake_submit),nullptr,nullptr,reinterpret_cast<void*>(&fake_wait)};
+struct LoopRun {
+    ot::loop::Loop loop;
+    std::vector<size_t> order;          // appended without a lock: only one item may run at a time
+    std::atomic<int> inside{0},most{0};
+    std::vector<std::atomic<int>> seen;
+    std::mutex threads_mutex;
+    std::vector<DWORD> threads;
+    explicit LoopRun(size_t n,bool ticket):seen(n) {loop.count=n;loop.ticket=ticket;}
+};
+void loop_body(void* capture,void*) {
+    auto& run=*static_cast<LoopRun*>(capture);
+    {std::lock_guard lock(run.threads_mutex);run.threads.push_back(GetCurrentThreadId());}
+    thread_local std::mt19937 random{GetCurrentThreadId()};
+    ot::loop::run_items(run.loop,[&](size_t i) {
+        const auto now=++run.inside;
+        for(auto most=run.most.load();now>most && !run.most.compare_exchange_weak(most,now););
+        if(random()%4==0) std::this_thread::sleep_for(std::chrono::microseconds(50));
+        run.order.push_back(i);
+        ++run.seen[i];
+        --run.inside;
+    });
+}
+void engine_loop() {
+    for(const bool ticket:{true,false}) {
+        LoopRun run(400,ticket);
+        ot::loop::run_parallel_loop(fake_table,0x1234,5,"test",&run,&loop_body);
+        const bool once=std::all_of(run.seen.begin(),run.seen.end(),[](const auto& v){return v.load()==1;});
+        check(once && run.order.size()==400 && run.threads.size()==5,
+              ticket?"ticket loop: every item once, five executors":"free loop: every item once, five executors");
+        check(run.most.load()==1,ticket?"ticket loop runs one item at a time":"free loop runs one item at a time under its lock");
+        if(ticket) {
+            bool sorted=true;
+            for(size_t i=0;i<run.order.size();++i) sorted&=run.order[i]==i;
+            check(sorted,"ticket loop keeps the original order whichever thread claims an item");
+        }
+    }
+    ot::loop::EngineTask task{};
+    check(reinterpret_cast<uintptr_t>(&task.body)-reinterpret_cast<uintptr_t>(&task)==0x40,"task body sits at +0x40 like 0xC74AA0");
+}
+void alternate() {
+    using ot::passes::Summary;
+    const auto summary=[](uint64_t dwords,uint64_t draws){Summary s;s.dwords=s.parsed=dwords;s.draws=draws;s.histogram[1]=static_cast<uint32_t>(draws);return s;};
+    ot::loop::Alternate same;
+    for(uint64_t frame=1;frame<=200;++frame) {
+        const int mode=static_cast<int>(frame&1);
+        same.observe(1,mode,frame,summary(100,5));
+        same.observe(2,mode,frame,summary(40,2));
+    }
+    check(same.cross().compared>0 && same.cross().rate()==0 && same.baseline().rate()==0 && !same.suspect(100),
+          "identical summaries give no cross or baseline difference");
+    ot::loop::Alternate planted;
+    for(uint64_t frame=1;frame<=200;++frame) {
+        const int mode=static_cast<int>(frame&1);
+        planted.observe(1,mode,frame,summary(100,5));
+        planted.observe(2,mode,frame,mode?summary(40,3):summary(40,2));   // parallel frames record one more draw
+    }
+    check(planted.cross().rate()>0.4 && planted.baseline().rate()==0 && planted.suspect(100),
+          "a difference present only in parallel frames is flagged against the baseline");
+    check(planted.first_cross() && planted.first_cross()->key==2,"the first cross difference names the key");
+    ot::loop::Alternate missing;
+    for(uint64_t frame=1;frame<=200;++frame) {
+        const int mode=static_cast<int>(frame&1);
+        missing.observe(1,mode,frame,summary(100,5));
+        if(!mode) missing.observe(2,mode,frame,summary(40,2));                  // key 2 never recorded in parallel frames
+    }
+    check(missing.cross().compared<same.cross().compared,"a key absent from parallel frames lowers the cross comparisons");
+    ot::loop::Alternate noisy;                                                  // scene changes every frame: both rates high, not suspect
+    for(uint64_t frame=1;frame<=300;++frame) noisy.observe(1,static_cast<int>(frame&1),frame,summary(100+frame,5));
+    check(noisy.baseline().rate()==1 && noisy.cross().rate()==1 && !noisy.suspect(100),"scene change alone is not suspect");
+}
 void names() {
     check(normalize_name("sun0000029B0FD0B558_cascade4")=="sun#_cascade4","object id becomes #");
     check(normalize_name("scene defattr")=="scene defattr","plain names are unchanged");
@@ -160,6 +248,8 @@ int main() {
     splice_empty_storage();
     comparator();
     text_gate();
+    engine_loop();
+    alternate();
     names();
     std::printf(failures?"FAILED %d\n":"ALL PASSED\n",failures);
     return failures?1:0;
