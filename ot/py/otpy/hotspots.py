@@ -145,6 +145,39 @@ def label(key):
     return f"?0x{entry:X}" if image is None else image.label(entry, exact)
 
 
+def tree(paths, minimum=0.02, depth=24):
+    """Root-first call tree; children below `minimum` of all wall time are folded away."""
+    stacks, frames, wall_ms = load(paths)
+    root = {"weight": 0.0, "children": {}}
+    for _, weight, _, stack in stacks:
+        node = root
+        node["weight"] += weight
+        for key in reversed(functions(stack)):
+            node = node["children"].setdefault(key, {"weight": 0.0, "children": {}})
+            node["weight"] += weight
+    out = [f"{frames:.0f} frames, {wall_ms / frames if frames else 0:.2f} ms/frame wall; ms/frame, share of wall time"]
+
+    def walk(node, level):
+        if level >= depth:
+            return
+        children = sorted(node["children"].items(), key=lambda item: -item[1]["weight"])
+        for key, child in children:
+            if child["weight"] < minimum * wall_ms:
+                break
+            # Collapse single-child chains so the tree stays readable.
+            name, inner = label(key), child
+            while len(inner["children"]) == 1:
+                (next_key, next_child), = inner["children"].items()
+                if next_child["weight"] < inner["weight"] * 0.98:
+                    break
+                name += " > " + label(next_key)
+                inner = next_child
+            out.append(f"{'  ' * level}{child['weight'] / frames if frames else 0:7.3f} {child['weight'] / wall_ms:6.1%}  {name}")
+            walk(inner, level + 1)
+    walk(root, 0)
+    return "\n".join(out)
+
+
 def report(paths, top=40, focus=None, folded=None):
     stacks, frames, wall_ms = load(paths)
     samples = sum(count for count, _, _, _ in stacks)

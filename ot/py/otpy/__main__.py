@@ -37,6 +37,8 @@ def main():
     spots.add_argument("--top", type=int, default=40)
     spots.add_argument("--focus", help="Callers and callees of one function, e.g. eurotrucks2.exe+0x2B1B40")
     spots.add_argument("--folded", help="Also write root-first folded stacks for speedscope.app")
+    spots.add_argument("--tree", type=float, metavar="SHARE",
+                       help="Print the root-first call tree instead, hiding branches below this share (e.g. 0.02)")
     # Changing tier, render_probe, camera_rig or stream requires the bridge lease;
     # from this CLI only their status forms, camera_rig apply and panic work alone.
     sub.add_parser("tier", help="Show the tier; setting it requires the bridge lease").add_argument(
@@ -164,7 +166,10 @@ def main():
             print(table(args.files))
             return 0
         elif args.command == "hotspots":
-            from .hotspots import report
+            from .hotspots import report, tree
+            if args.tree is not None:
+                print(tree(args.files, args.tree))
+                return 0
             focus = None
             if args.focus:
                 image, plus, rva = args.focus.partition("+")
