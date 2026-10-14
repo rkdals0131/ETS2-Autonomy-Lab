@@ -2,20 +2,27 @@
 #include "ot.hpp"
 #include "pass_stream.hpp"
 #include "hook_support.hpp"
+#include "parallel_loop.hpp"
 #include <array>
 #include <string>
 #include <unordered_map>
 #include <safetyhook.hpp>
 
 namespace ot {
-// docs/28 M3a: type 1 render passes are deferred from 0x226960 and recorded at
-// the end of the pass loop in 0x227140 (0x227B1F), still on the main thread
-// and in the original order. Recording a pass twice is not possible: pass
+// docs/28 M3a/M3b: type 1 render passes are deferred from 0x226960 and recorded
+// at the end of the pass loop in 0x227140 (0x227B1F): on the main thread in the
+// original order (defer), or on engine workers through parallel_loop_task_t,
+// one pass at a time (ticket order or one lock). Recording a pass twice is not possible: pass
 // callbacks consume per-pass state (0x151BF80 asserts on an empty blit pair
 // array the second time), so there is no same-frame shadow recording.
 class ParallelPasses {
 public:
-    enum class Mode : int {off=0,defer=1};
+    enum class Mode : int {off=0,defer=1,parallel=2,alternate=3};
+    struct Options {
+        bool ticket=true;          // false: free order under one lock (M3b-2)
+        unsigned executors=0;      // 0: worker count + 1, as the engine's own loops
+        bool accept_foreign=false; // ticket only: run beside foreign code patches
+    };
     // docs/28 §5 environment gate inputs: hooks of this DLL (absolute ranges),
     // patches the user accepted (RVA, size) and the recording closure (RVAs).
     struct GateInputs {
@@ -24,7 +31,7 @@ public:
         std::vector<uintptr_t> closure;
     };
     ParallelPasses()=default;
-    void enable(Mode mode,const GateInputs& gate);
+    void enable(Mode mode,const GateInputs& gate,const Options& options={});
     // Returns to the original path at a frame boundary, then disables hooks.
     void disable() noexcept;
     // On failure the caller must retain this object and its module reference.
@@ -36,7 +43,7 @@ public:
 private:
     using Execute=void(*)(uintptr_t,uintptr_t,uintptr_t,void*);
     using Allocate=uint32_t*(*)(passes::CmdStorage*,uint64_t);
-    struct Deferred {uintptr_t builder,value,pass;passes::Splice splice;};
+    struct Deferred {uintptr_t builder,value,pass;passes::Splice splice;uint64_t key;std::string name,space,raw;};
     struct Timing {
         uint64_t count=0,total=0,maximum=0;
         void add(uint64_t ticks) noexcept {++count;total+=ticks;if(ticks>maximum) maximum=ticks;}
@@ -47,7 +54,8 @@ private:
         uint64_t passes=0,ticks=0,max_ticks=0,dwords=0,raw_changes=0;
     };
     struct Counters {
-        uint64_t frames_off=0,frames_defer=0,deferred=0,marker=0,overflow=0;
+        uint64_t frames_off=0,frames_defer=0,frames_parallel=0,duplicate_frames=0,deferred=0,marker=0,overflow=0;
+        uint64_t wait_ticks=0,hold_ticks=0,parallel_join_ticks=0,parallel_pass_ticks=0;
         uint64_t splice_used=0,splice_fallback=0,orphaned=0;
         std::array<uint64_t,4> chunks{};      // storage records at deferral: 0,1,2,3+
         std::array<uint64_t,3> front{},back{}; // dwords before/after the body: 0, 4, other
@@ -59,10 +67,13 @@ private:
     bool defer(uintptr_t builder,uintptr_t value,uintptr_t pass,void* marker) noexcept;
     void join() noexcept;
     void latch() noexcept;
-    void record(const Deferred& item,uint64_t& frame_dwords,uint64_t& largest);
+    struct ParallelFrame;
+    static void parallel_body(void* capture,void* task);
+    // summary_mode: -1 none, 0 serial, 1 parallel (alternate mode comparison).
+    void record(const Deferred& item,uint64_t& frame_dwords,uint64_t& largest,int summary_mode,uint64_t frame);
     void turn_off(const std::string& reason) noexcept;
     bool device_matches() const noexcept;
-    uint64_t pass_key(uintptr_t pass,KeyStats& seen) const;
+    void pass_key(Deferred& item);
     bool quiescent() noexcept;
     json scan_text(const GateInputs& gate);
     void watch_code(const GateInputs& gate);
@@ -81,7 +92,12 @@ private:
     std::atomic<DWORD> main_thread_{0};
     std::atomic<bool> paused_{true};
     // Main thread only (the deferral hook and the join both run there).
-    Mode frame_mode_=Mode::off;
+    Mode frame_mode_=Mode::off;     // effective mode of the latched frame (off, defer or parallel)
+    int summary_mode_=-1;           // alternate: 0 serial frame, 1 parallel frame
+    uint64_t frame_index_=0;        // non-off frames latched since enable
+    Options options_{},frame_options_{};
+    void** task_table_{};
+    unsigned workers_=0;
     bool latched_=false,joining_=false;
     uint64_t latch_qpc_=0;
     uint32_t overflow_frames_=0;
@@ -90,10 +106,8 @@ private:
     std::vector<std::pair<uintptr_t,std::array<uint8_t,32>>> watched_;
     std::array<Deferred,1024> queue_{};
     size_t queued_=0;
-    std::vector<uint32_t> tail_;
     std::unordered_map<uint64_t,uint32_t> occurrences_;
-    struct FrameKey {uint64_t key;uint64_t ticks,dwords;std::string raw;};
-    std::vector<FrameKey> frame_keys_;
+    std::vector<uintptr_t> pointers_;
     // Shared with status().
     std::mutex stats_mutex_;
     Counters counters_;
@@ -101,5 +115,7 @@ private:
     std::string reason_,error_;
     json gate_=nullptr;
     bool workers_allowed_=false;
+    std::unordered_map<DWORD,uint64_t> thread_passes_;
+    loop::Alternate alternate_;
 };
 }

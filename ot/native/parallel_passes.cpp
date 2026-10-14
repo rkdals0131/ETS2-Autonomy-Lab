@@ -15,6 +15,10 @@ std::atomic<uint64_t> non_main_calls{};
 // signatures confirm the inspected bytes before any hook is created.
 constexpr uintptr_t execute_rva=0x226960,join_rva=0x227B1F,allocate_rva=0x28CE60;
 constexpr uintptr_t device_pointer_rva=0x3681860,device_vtable_rva=0x22127A8,storage_vtable_rva=0x21FD700;
+// Engine task manager (docs/28 §3.3, 0xC74AA0): table pointer, worker count,
+// parallel_loop_task_t vtable, submit stub [0] and wait stub [3].
+constexpr uintptr_t task_table_rva=0x36AC888,worker_count_rva=0x304B300,loop_vtable_rva=0x21EC488;
+constexpr uintptr_t submit_stub_rva=0x167D50,wait_stub_rva=0x167D80;
 // 0x226960 prologue: mov [rsp+8],rbx; mov [rsp+18h],rsi; mov [rsp+10h],rdx; push rbp/rdi/r14; lea rbp,[rsp-80h]
 constexpr std::array<uint8_t,24> execute_signature={0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x74,0x24,0x18,0x48,0x89,
     0x54,0x24,0x10,0x55,0x57,0x41,0x56,0x48,0x8D,0x6C,0x24,0x80};
@@ -53,7 +57,7 @@ bool game_folder_dxgi() {
     if(!dxgi) return false;
     return module_path(dxgi).parent_path()==module_path(nullptr).parent_path();
 }
-const char* mode_name(int mode) {return mode==1?"defer":"off";}
+const char* mode_name(int mode) {return mode==1?"defer":mode==2?"parallel":mode==3?"alternate":"off";}
 std::string hex(uintptr_t value) {char text[24];std::snprintf(text,sizeof(text),"0x%llX",static_cast<unsigned long long>(value));return text;}
 // Module name and offset of an address, following one anonymous jump stub.
 std::string describe_target(uintptr_t address) {
@@ -82,7 +86,7 @@ bool ParallelPasses::device_matches() const noexcept {
     uintptr_t device{},vtable{};
     return read_memory(base_+device_pointer_rva,device) && device==device_ && read_memory(device,vtable) && vtable==device_vtable_;
 }
-void ParallelPasses::enable(Mode mode,const GateInputs& gate) {
+void ParallelPasses::enable(Mode mode,const GateInputs& gate,const Options& options) {
     std::lock_guard lock(control_);
     if(mode==Mode::off) throw std::runtime_error("Use disable for off");
     if(GetModuleHandleW(L"renderdoc.dll"))
@@ -98,6 +102,17 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate) {
     }
     if(std::memcmp(reinterpret_cast<const void*>(base_+allocate_rva),allocate_prologue.data(),allocate_prologue.size()))
         throw std::runtime_error("r_cmd_storage_t::allocate differs from the inspected build");
+    const bool workers=mode==Mode::parallel || mode==Mode::alternate;
+    if(workers) {
+        void** table{};uint32_t count{};
+        if(!read_memory(base_+task_table_rva,table) || !table || !read_memory(base_+worker_count_rva,count))
+            throw std::runtime_error("Engine task manager is not available");
+        if(reinterpret_cast<uintptr_t>(table[0])!=base_+submit_stub_rva || reinterpret_cast<uintptr_t>(table[3])!=base_+wait_stub_rva)
+            throw std::runtime_error("Engine task manager table differs from docs/28 §3.3");
+        if(count<1 || count>32) throw std::runtime_error("Engine worker count is outside 1-32");
+        if(!options.ticket && options.accept_foreign) throw std::runtime_error("accept_foreign_hooks is allowed only with order=ticket");
+        task_table_=table;workers_=count;
+    }
     if(!execute_hook_) {
         if(instance.load() && instance.load()!=this)
             throw std::runtime_error("A previous parallel_passes instance is retained; restart ETS2");
@@ -132,16 +147,27 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate) {
     // Deferral stays on the main thread in the original order, so it runs
     // beside patches such as snowymoon's (2,200 frames, 2026-10-15).
     auto scanned=scan_text(gate);
+    const bool allowed=scanned.value("workers_allowed",false);
+    if(workers && !allowed) {
+        // docs/28 §5: one pass at a time (ticket) may run beside foreign patches
+        // only when asked explicitly; free order never does.
+        if(!options.ticket || !options.accept_foreign)
+            throw std::runtime_error("Foreign code patches are in the recording path (status gate); worker recording needs a clean .text"
+                                     " or order=ticket with accept_foreign_hooks");
+        for(const auto& item:scanned.value("foreign",json::array()))
+            if(item.value("in_closure",false)) log("parallel_passes: accepting foreign patch "+item.dump());
+    }
     {
         std::lock_guard stats(stats_mutex_);
         gate_=std::move(scanned);
-        workers_allowed_=gate_.value("workers_allowed",false);
+        workers_allowed_=allowed;
     }
     if(requested_.load()==0) {
         std::lock_guard stats(stats_mutex_);
-        counters_={};keys_.clear();
+        counters_={};keys_.clear();thread_passes_.clear();alternate_.clear();
         non_main_calls=0;
     }
+    options_=options;
     reason_.clear();error_.clear();
     // The join must be live before any pass can be deferred.
     if(!join_hook_.enabled() && !join_hook_.enable()) throw std::runtime_error("Cannot enable the pass loop join hook");
@@ -322,7 +348,15 @@ void ParallelPasses::latch() noexcept {
     if(mode!=Mode::off && !device_matches()) {turn_off("render device changed (drain or -rdevice)");mode=Mode::off;}
     if(mode!=Mode::off && paused_.load()) mode=Mode::off;
     if(mode!=Mode::off && !code_unchanged()) {requested_.store(0);log("parallel_passes off: "+reason_);mode=Mode::off;}
+    if(mode!=Mode::off && non_main_calls.load()) {turn_off("0x226960 was called off the main thread");mode=Mode::off;}
+    summary_mode_=-1;
     if(mode==Mode::off) frame_active_.store(false);
+    else {
+        ++frame_index_;
+        frame_options_=options_;
+        if(mode==Mode::alternate) {summary_mode_=static_cast<int>(frame_index_&1);mode=summary_mode_?Mode::parallel:Mode::defer;}
+    }
+    occurrences_.clear();
     frame_mode_=mode;latched_=true;latch_qpc_=qpc_now();
 }
 bool ParallelPasses::defer(uintptr_t builder,uintptr_t value,uintptr_t pass,void* marker) noexcept {
@@ -344,43 +378,70 @@ bool ParallelPasses::defer(uintptr_t builder,uintptr_t value,uintptr_t pass,void
     const auto splice=passes::prepare_splice(storage);
     ++counters_.chunks[std::min<uint64_t>(storage.count,3)];
     if(splice.usable) ++counters_.front[splice.k==0?0:splice.k==4?1:2];
-    queue_[queued_++]={builder,value,pass,splice};
+    auto& item=queue_[queued_++];
+    item.builder=builder;item.value=value;item.pass=pass;item.splice=splice;
     ++counters_.deferred;
+    // Keys are read here, on the main thread; workers never touch engine strings.
+    pass_key(item);
     return true;
 }
 // Pass objects are pooled and reassigned every frame (docs/28 §2.8), so the
 // key is (name, implementation space) plus its occurrence within the frame.
-uint64_t ParallelPasses::pass_key(uintptr_t pass,KeyStats& seen) const {
+void ParallelPasses::pass_key(Deferred& item) {
     uintptr_t name{},space{};
-    read_memory(pass+0x20,name);read_memory(pass+0xC0,space);
-    seen.name=engine_string(name);seen.space=engine_string(space);
-    seen.last_raw=seen.name+'/'+seen.space;
-    seen.name=passes::normalize_name(seen.name);seen.space=passes::normalize_name(seen.space);
-    return fnv(seen.space,fnv(seen.name)^0x9E3779B97F4A7C15ull);
+    read_memory(item.pass+0x20,name);read_memory(item.pass+0xC0,space);
+    item.name=engine_string(name);item.space=engine_string(space);
+    item.raw=item.name+'/'+item.space;
+    item.name=passes::normalize_name(item.name);item.space=passes::normalize_name(item.space);
+    const auto base_key=fnv(item.space,fnv(item.name)^0x9E3779B97F4A7C15ull);
+    item.key=base_key+occurrences_[base_key]++*0x100000001B3ull;
 }
-void ParallelPasses::record(const Deferred& item,uint64_t& frame_dwords,uint64_t& largest) {
+// Runs on the main thread (defer) or on an engine worker (parallel, one pass
+// at a time). Scratch is thread-local; shared state is under stats_mutex_.
+void ParallelPasses::record(const Deferred& item,uint64_t& frame_dwords,uint64_t& largest,int summary_mode,uint64_t frame) {
+    thread_local std::vector<uint32_t> tail,body;
     auto* storage=reinterpret_cast<passes::CmdStorage*>(item.pass+0x2E8);
     const auto original=original_.load();
     const auto before=passes::total_dwords(*storage);
     const auto start=qpc_now();
-    const bool spliced=passes::run_spliced(*storage,item.splice,tail_,
+    bool observed=false;
+    const bool spliced=passes::run_spliced(*storage,item.splice,tail,
         [&]{original(item.builder,item.value,item.pass,nullptr);},
         [&](passes::CmdStorage* target,uint64_t size){return allocate_(target,size);},
-        [](const passes::CmdStorage&){});
+        [&](const passes::CmdStorage& recorded){
+            if(summary_mode<0) return;
+            passes::gather(recorded,0,item.splice.k,body);observed=true;
+        });
     const auto ticks=qpc_now()-start;
     const auto dwords=passes::total_dwords(*storage)-before;
     frame_dwords+=dwords;largest=std::max(largest,ticks);
-    KeyStats seen;
-    const auto base_key=pass_key(item.pass,seen);
-    const auto key=base_key+occurrences_[base_key]++*0x100000001B3ull;
+    const auto summary=observed?passes::summarize(body.data(),body.size()):passes::Summary{};
     std::lock_guard stats(stats_mutex_);
     ++(spliced?counters_.splice_used:counters_.splice_fallback);
-    if(spliced) ++counters_.back[tail_.empty()?0:tail_.size()==4?1:2];
-    auto& entry=keys_[key];
-    if(!entry.passes) {entry.name=seen.name;entry.space=seen.space;}
-    else if(entry.last_raw!=seen.last_raw) ++entry.raw_changes;
-    entry.last_raw=seen.last_raw;
+    if(spliced) ++counters_.back[tail.empty()?0:tail.size()==4?1:2];
+    auto& entry=keys_[item.key];
+    if(!entry.passes) {entry.name=item.name;entry.space=item.space;}
+    else if(entry.last_raw!=item.raw) ++entry.raw_changes;
+    entry.last_raw=item.raw;
     ++entry.passes;entry.ticks+=ticks;entry.max_ticks=std::max(entry.max_ticks,ticks);entry.dwords+=dwords;
+    ++thread_passes_[GetCurrentThreadId()];
+    if(observed) alternate_.observe(item.key,summary_mode,frame,summary);
+}
+struct ParallelPasses::ParallelFrame {
+    ParallelPasses* self;
+    loop::Loop loop;
+    int summary_mode;
+    uint64_t frame;
+    std::atomic<uint64_t> dwords{0},largest{0};
+};
+void ParallelPasses::parallel_body(void* capture,void*) {
+    auto& frame=*static_cast<ParallelFrame*>(capture);
+    loop::run_items(frame.loop,[&](size_t i) {
+        uint64_t dwords=0,largest=0;
+        frame.self->record(frame.self->queue_[i],dwords,largest,frame.summary_mode,frame.frame);
+        frame.dwords+=dwords;
+        for(auto seen=frame.largest.load();largest>seen && !frame.largest.compare_exchange_weak(seen,largest););
+    });
 }
 void ParallelPasses::join() noexcept {
     if(!latched_) return;
@@ -392,26 +453,48 @@ void ParallelPasses::join() noexcept {
         return;
     }
     joining_=true;
-    occurrences_.clear();
     uint64_t frame_dwords=0,largest=0;
     const auto start=qpc_now();
-    for(size_t i=0;i<queued_;++i) record(queue_[i],frame_dwords,largest);
+    bool parallel=mode==Mode::parallel && queued_>1;
+    if(parallel) {
+        // A pass object recorded by two executors would consume its state twice (§2.11).
+        pointers_.resize(queued_);
+        for(size_t i=0;i<queued_;++i) pointers_[i]=queue_[i].pass;
+        std::sort(pointers_.begin(),pointers_.end());
+        if(std::adjacent_find(pointers_.begin(),pointers_.end())!=pointers_.end()) {
+            parallel=false;
+            std::lock_guard stats(stats_mutex_);
+            ++counters_.duplicate_frames;
+        }
+    }
+    if(parallel) {
+        ParallelFrame frame{this,{},summary_mode_,frame_index_};
+        frame.loop.count=queued_;frame.loop.ticket=frame_options_.ticket;
+        const auto executors=std::clamp<unsigned>(frame_options_.executors?frame_options_.executors:workers_+1,1,std::min(workers_+1,255u));
+        loop::run_parallel_loop(task_table_,base_+loop_vtable_rva,static_cast<uint8_t>(executors),"ot_parallel_passes",&frame,&parallel_body);
+        frame_dwords=frame.dwords.load();largest=frame.largest.load();
+        std::lock_guard stats(stats_mutex_);
+        counters_.wait_ticks+=frame.loop.wait_ticks.load();counters_.hold_ticks+=frame.loop.hold_ticks.load();
+    } else for(size_t i=0;i<queued_;++i) record(queue_[i],frame_dwords,largest,summary_mode_,frame_index_);
     const auto ticks=qpc_now()-start;
     const bool overflowed=queued_==queue_.size();
     queued_=0;
     joining_=false;
     frame_active_.store(false);
-    bool too_long=false,overflow_off=false;
+    bool too_long=false,overflow_off=false,suspect=false;
     {
         std::lock_guard stats(stats_mutex_);
-        ++counters_.frames_defer;
+        ++(parallel?counters_.frames_parallel:counters_.frames_defer);
+        if(parallel) counters_.parallel_join_ticks+=ticks;
         counters_.join.add(ticks);
         counters_.frame_dwords+=frame_dwords;counters_.frame_ticks+=ticks;counters_.largest_ticks+=largest;++counters_.frames_measured;
+        suspect=alternate_.suspect();
         overflow_frames_=overflowed?overflow_frames_+1:0;
         too_long=ticks>ms_ticks(join_limit_ms);
         overflow_off=overflow_frames_>=overflow_limit_frames;
     }
     if(too_long) turn_off("join exceeded 50 ms");
+    if(suspect) turn_off("alternate: parallel frames differ from serial frames more than serial frames from each other");
     if(overflow_off) turn_off("deferral queue overflowed for 100 frames");
 }
 json ParallelPasses::status() {
@@ -420,7 +503,23 @@ json ParallelPasses::status() {
         {"game_folder_dxgi",game_folder_dxgi()},{"qpc_frequency",qpc_frequency()},{"non_main_calls",non_main_calls.load()}};
     std::lock_guard stats(stats_mutex_);
     const auto& c=counters_;
-    result["frames"]={{"off",c.frames_off},{"defer",c.frames_defer}};
+    result["frames"]={{"off",c.frames_off},{"defer",c.frames_defer},{"parallel",c.frames_parallel},{"duplicate_pointer_frames",c.duplicate_frames}};
+    const auto freq=static_cast<double>(qpc_frequency());
+    json threads=json::object();
+    for(const auto& [thread,count]:thread_passes_) threads[std::to_string(thread)]=count;
+    result["parallel"]={{"order",options_.ticket?"ticket":"free"},{"executors_requested",options_.executors},{"workers",workers_},
+        {"accept_foreign_hooks",options_.accept_foreign},{"turn_wait_ms",c.wait_ticks*1000.0/freq},{"pass_hold_ms",c.hold_ticks*1000.0/freq},
+        {"join_ms",c.parallel_join_ticks*1000.0/freq},{"passes_by_thread",std::move(threads)}};
+    const auto rates=[](const loop::Rates& r){return json{{"compared",r.compared},{"rate",r.rate()},
+        {"level1_size",r.differ[1]},{"level2_tokens",r.differ[2]},{"level3_content",r.differ[3]}};};
+    json first=nullptr;
+    if(const auto& d=alternate_.first_cross()) {
+        const auto found=keys_.find(d->key);
+        first={{"name",found!=keys_.end()?found->second.name:""},{"space",found!=keys_.end()?found->second.space:""},{"level",d->level},
+            {"frame",d->frame},{"dwords",{d->now.dwords,d->before.dwords}},{"draws",{d->now.draws,d->before.draws}},
+            {"stop_token",{d->now.stop_token,d->before.stop_token}}};
+    }
+    result["alternate"]={{"cross",rates(alternate_.cross())},{"baseline",rates(alternate_.baseline())},{"suspect",alternate_.suspect()},{"first_cross_difference",first}};
     result["passes"]={{"deferred",c.deferred},{"marker_passthrough",c.marker},{"queue_overflow_or_bad_storage",c.overflow},
         {"orphaned_frames",c.orphaned},{"splice_used",c.splice_used},{"splice_fallback",c.splice_fallback},
         {"storage_records_at_deferral",{{"0",c.chunks[0]},{"1",c.chunks[1]},{"2",c.chunks[2]},{"3+",c.chunks[3]}}},
