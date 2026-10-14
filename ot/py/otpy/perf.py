@@ -345,5 +345,50 @@ def line(s):
             f"viewer {cores.get('Foxglove.exe', 0):4.2f} relay {cores.get('ets2_relay.exe', 0):4.2f} cores  {flags}")
 
 
+def wait_speed(client, min_kmh, hold=10.0, timeout=1200.0):
+    """Block until the truck has held at least min_kmh, unpaused, for `hold` seconds."""
+    deadline, since = time.monotonic() + timeout, None
+    while time.monotonic() < deadline:
+        state = _try(client, "snapshot")
+        speed = ((state.get("sdk") or {}).get("truck.speed") or {}).get("value")
+        kmh = 3.6 * speed if isinstance(speed, (int, float)) else -1.0
+        if kmh >= min_kmh and not state.get("paused", True):
+            since = since or time.monotonic()
+            if time.monotonic() - since >= hold:
+                return kmh
+        else:
+            since = None
+        time.sleep(1.0)
+    raise TimeoutError(f"no sustained {min_kmh} km/h within {timeout:.0f} s")
+
+
+def speed_kmh(client):
+    state = _try(client, "snapshot")
+    speed = ((state.get("sdk") or {}).get("truck.speed") or {}).get("value")
+    return round(3.6 * speed, 1) if isinstance(speed, (int, float)) else None
+
+
+def passes_abab(client, prefix, pairs=2, seconds=30.0, settle=10.0, profile_hz=0.0, min_kmh=None, out=None, report=print):
+    """docs/28 §6: alternate parallel_passes off (A) and defer (B) samples, A first.
+    Labels <prefix>-off-<n> and <prefix>-on-<n>; returns to off at the end."""
+    if min_kmh:
+        report(f"waiting for {min_kmh} km/h")
+        wait_speed(client, min_kmh)
+    summaries = []
+    try:
+        for n in range(1, pairs + 1):
+            for mode, tag in (("off", "off"), ("defer", "on")):
+                client.request("parallel_passes", mode=mode)
+                time.sleep(settle)
+                before = speed_kmh(client)
+                summary = sample(client, f"{prefix}-{tag}-{n}", seconds, out, profile_hz)
+                summary["speed_kmh"] = [before, speed_kmh(client)]
+                summaries.append(summary)
+                report(line(summary) + f" {summary['speed_kmh'][0]}->{summary['speed_kmh'][1]} km/h")
+    finally:
+        client.request("parallel_passes", mode="off")
+    return summaries
+
+
 def table(paths):
     return "\n".join(line(json.loads(Path(p).read_text(encoding="utf-8"))) for p in paths)

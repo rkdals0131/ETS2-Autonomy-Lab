@@ -32,6 +32,14 @@ def main():
     perf.add_argument("--profile-hz", type=float, default=0.0, help="Also sample the main thread at this rate (e.g. 250)")
     perf.add_argument("--profile-depth", type=int, default=48, help="Call-stack frames per main-thread sample; 0 records only RIP")
     perf.add_argument("--out", help="Directory; default research/live/<today>-perf")
+    abab = sub.add_parser("passes_abab", help="docs/28 §6: alternate parallel_passes off/defer perf samples (A first)")
+    abab.add_argument("prefix", help="Labels <prefix>-off-<n> and <prefix>-on-<n>, e.g. pp-drive")
+    abab.add_argument("--pairs", type=int, default=2)
+    abab.add_argument("--seconds", type=float, default=30.0)
+    abab.add_argument("--settle", type=float, default=10.0, help="Seconds after each mode change before sampling")
+    abab.add_argument("--profile-hz", type=float, default=0.0)
+    abab.add_argument("--min-kmh", type=float, help="First wait until the truck holds this speed for 10 s (highway set)")
+    abab.add_argument("--out", help="Directory; default research/live/<today>-perf")
     sub.add_parser("perf_table", help="One line per saved perf sample").add_argument("files", nargs="+")
     spots = sub.add_parser("hotspots", help="Main-thread time per function from saved perf stacks (offline)")
     spots.add_argument("files", nargs="+", help="<label>.json or <label>.stacks.json; several are merged")
@@ -164,6 +172,11 @@ def main():
             for thread in summary.get("threads", [])[:10]:
                 main = " (main)" if thread["tid"] == summary.get("main_thread_id") else ""
                 print(f"    {thread['cores']:5.2f} cores  {thread['tid']}{main} {thread['name']} {thread['start']}")
+            return 0
+        elif args.command == "passes_abab":
+            from .perf import passes_abab
+            passes_abab(client, args.prefix, args.pairs, args.seconds, args.settle, args.profile_hz, args.min_kmh, args.out,
+                        report=lambda text: print(text, flush=True))
             return 0
         elif args.command == "perf_table":
             from .perf import table
