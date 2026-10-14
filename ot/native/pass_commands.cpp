@@ -158,6 +158,8 @@ RenderCameraSample camera_at_compile(uintptr_t pass,uintptr_t base) {
         const auto callback=read<uintptr_t>(pass+layout.callback_offset);
         if(!callback || read<uintptr_t>(callback)!=base+layout.wrapper_vtable_rva)
             throw std::runtime_error("Unsupported surface pass callback");
+        // The inner callback records the scene pass: its vtable slot 1 (0x1476140)
+        // jumps to 0x1473E60, whose entry snowymoon's dxgi.dll patches (docs/28 §2.10).
         const auto inner=read<uintptr_t>(callback+layout.inner_callback_offset);
         if(!inner || read<uintptr_t>(inner)!=base+layout.inner_vtable_rva)
             throw std::runtime_error("Unsupported surface pass work layout");

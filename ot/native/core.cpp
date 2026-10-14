@@ -110,6 +110,8 @@ private:
     std::unique_ptr<Transport> transport_;
     std::unique_ptr<RenderProbe> render_probe_;
     std::unique_ptr<ParallelPasses> parallel_passes_;
+    std::vector<std::pair<uintptr_t,size_t>> accepted_text_patches_;
+    void read_accepted_patches(const json& settings);
     ThreadSampler sampler_;
 };
 
@@ -124,6 +126,7 @@ void Runtime::initialize() {
     allow_render_probe_=config_.value("allow_render_probe",false);
     allow_camera_rig_=config_.value("allow_camera_rig",false);
     allow_parallel_passes_=config_.value("allow_parallel_passes",false);
+    read_accepted_patches(config_);
     render_probe_=std::make_unique<RenderProbe>();
     parallel_passes_=std::make_unique<ParallelPasses>();
     try {executable_hash_=sha256_file(module_path(nullptr)); gate_ok_=executable_hash_==OT_GAME_SHA256;}
@@ -300,11 +303,21 @@ json Runtime::reload_permissions() {
     allow_render_probe_=settings.value("allow_render_probe",false);
     allow_camera_rig_=settings.value("allow_camera_rig",false);
     allow_parallel_passes_=settings.value("allow_parallel_passes",false);
+    read_accepted_patches(settings);
     configure_drive(settings);
     log("Permissions reloaded; tier=0, allow_tier1="+std::to_string(allow_tier1_));
     return {{"tier",0},{"internal_access_allowed",gate_ok_ && allow_tier1_},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"parallel_passes_allowed",gate_ok_ && allow_tier1_ && allow_parallel_passes_}};
+}
+// accepted_text_patches: [{"rva":"0x1D16A8D","size":4}, ...] (docs/28 §5).
+void Runtime::read_accepted_patches(const json& settings) {
+    accepted_text_patches_.clear();
+    for(const auto& item:settings.value("accepted_text_patches",json::array())) {
+        const auto& rva=item.at("rva");
+        const auto value=rva.is_string()?std::stoull(rva.get<std::string>(),nullptr,0):rva.get<uint64_t>();
+        accepted_text_patches_.push_back({static_cast<uintptr_t>(value),item.value("size",size_t(1))});
+    }
 }
 json Runtime::engine_snapshot() {
     const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
@@ -557,7 +570,9 @@ json Runtime::command(const json& request) {
             else if(mode=="defer") {
                 if(!gate_ok_ || !allow_tier1_ || !allow_parallel_passes_)
                     throw std::runtime_error("parallel_passes requires matching EXE, singleplayer_research, allow_tier1 and allow_parallel_passes");
-                parallel_passes_->enable(ParallelPasses::Mode::defer);
+                ParallelPasses::GateInputs gate{render_probe_->patched_ranges(),accepted_text_patches_,{}};
+                for(const auto& rva:schema_.at("render_parallel").at("closure_rvas")) gate.closure.push_back(rva.get<uintptr_t>());
+                parallel_passes_->enable(ParallelPasses::Mode::defer,gate);
             } else if(mode=="shadow") throw std::runtime_error("Recording a pass twice crashes: pass callbacks consume their blit pairs (0x151BF80, docs/28)");
             else if(mode=="parallel") throw std::runtime_error("Worker recording is M3b; this build implements off and defer");
             else throw std::runtime_error("parallel_passes mode must be off or defer");

@@ -4,6 +4,7 @@
 // allocation pointers but catches content, token and size differences, and
 // pass names normalize their object ids.
 #include "pass_stream.hpp"
+#include "text_gate.hpp"
 #include <cstdio>
 #include <deque>
 
@@ -123,6 +124,27 @@ void comparator() {
     const auto sv=summarize(variable.data(),variable.size());
     check(sv.stop_token==6 && sv.stop_offset==2 && sv.parsed==2,"variable-length tokens stop parsing with their offset");
 }
+void text_gate() {
+    // A 0x40-byte section at RVA 0x1000; one DIR64 at 0x1008, one HIGHLOW (type 3, ignored)
+    // at 0x1010 and one DIR64 at 0x103C that straddles the section end.
+    std::vector<uint8_t> section(0x40,0);
+    const uint64_t pointer=0x140001234;std::memcpy(&section[8],&pointer,8);
+    std::vector<uint8_t> relocations(8+3*2);
+    const uint32_t page=0x1000,block=static_cast<uint32_t>(relocations.size());
+    std::memcpy(&relocations[0],&page,4);std::memcpy(&relocations[4],&block,4);
+    const uint16_t entries[3]={0xA008,0x3010,0xA03C};
+    std::memcpy(&relocations[8],entries,sizeof(entries));
+    const int64_t delta=0x7FF6644B0000ll-0x140000000ll;
+    const auto applied=ot::gate::apply_dir64(section,0x1000,relocations,delta);
+    uint64_t moved{};std::memcpy(&moved,&section[8],8);
+    check(applied==1 && moved==0x7FF6644B1234ull,"DIR64 entries move to the live base; others and straddling ones are skipped");
+    std::vector<uint8_t> live(section),file(section);
+    live[3]=1;live[10]=2;live[40]=3;live[41]=4;
+    const auto ranges=ot::gate::diff_ranges(live.data(),file.data(),live.size(),8);
+    check(ranges.size()==2 && ranges[0]==std::pair<size_t,size_t>(3,8) && ranges[1]==std::pair<size_t,size_t>(40,2),
+          "differences closer than the gap merge into one range");
+    check(ot::gate::diff_ranges(file.data(),file.data(),file.size()).empty(),"equal bytes give no range");
+}
 void names() {
     check(normalize_name("sun0000029B0FD0B558_cascade4")=="sun#_cascade4","object id becomes #");
     check(normalize_name("scene defattr")=="scene defattr","plain names are unchanged");
@@ -137,6 +159,7 @@ int main() {
     splice_fallback();
     splice_empty_storage();
     comparator();
+    text_gate();
     names();
     std::printf(failures?"FAILED %d\n":"ALL PASSED\n",failures);
     return failures?1:0;

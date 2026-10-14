@@ -1,6 +1,7 @@
 #pragma once
 #include "ot.hpp"
 #include "pass_stream.hpp"
+#include "hook_support.hpp"
 #include <array>
 #include <string>
 #include <unordered_map>
@@ -15,8 +16,15 @@ namespace ot {
 class ParallelPasses {
 public:
     enum class Mode : int {off=0,defer=1};
+    // docs/28 §5 environment gate inputs: hooks of this DLL (absolute ranges),
+    // patches the user accepted (RVA, size) and the recording closure (RVAs).
+    struct GateInputs {
+        CodeRanges ours;
+        std::vector<std::pair<uintptr_t,size_t>> accepted;
+        std::vector<uintptr_t> closure;
+    };
     ParallelPasses()=default;
-    void enable(Mode mode);
+    void enable(Mode mode,const GateInputs& gate);
     // Returns to the original path at a frame boundary, then disables hooks.
     void disable() noexcept;
     // On failure the caller must retain this object and its module reference.
@@ -56,6 +64,9 @@ private:
     bool device_matches() const noexcept;
     uint64_t pass_key(uintptr_t pass,KeyStats& seen) const;
     bool quiescent() noexcept;
+    json scan_text(const GateInputs& gate);
+    void watch_code(const GateInputs& gate);
+    bool code_unchanged() noexcept;
 
     std::mutex control_;
     safetyhook::InlineHook execute_hook_;
@@ -74,6 +85,9 @@ private:
     bool latched_=false,joining_=false;
     uint64_t latch_qpc_=0;
     uint32_t overflow_frames_=0;
+    std::atomic<uint64_t> watch_qpc_{0};
+    // First 32 bytes of the closure functions and of our hook sites at enable.
+    std::vector<std::pair<uintptr_t,std::array<uint8_t,32>>> watched_;
     std::array<Deferred,1024> queue_{};
     size_t queued_=0;
     std::vector<uint32_t> tail_;
@@ -85,5 +99,7 @@ private:
     Counters counters_;
     std::unordered_map<uint64_t,KeyStats> keys_;
     std::string reason_,error_;
+    json gate_=nullptr;
+    bool workers_allowed_=false;
 };
 }

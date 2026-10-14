@@ -104,6 +104,7 @@
     },
     "pass_name_offset": 32,
     "pass_space_offset": 192,
+    "closure_rvas": [2255200, 2257216, 21446240, 23120272, 23121680, 23121936, 23123328, 3039216, 3035200, 3042032, 22057280, 4110832, 4108944, 2845472, 2856112, 2878064, 2811456, 3051488, 3052384, 3096224, 2842480, 3047568, 3048512, 1967536, 2674272, 1469232, 1469520, 2824752, 2843312],
     "evidence": "docs/28_render_pass_parallel_prototype.md; ot/native/parallel_passes.cpp hardcodes these with the signatures"
   },
   "vehicle_physics": {

@@ -18,6 +18,14 @@ public:
     bool close() noexcept;
     void sdk_frame(std::shared_ptr<const json> state) noexcept { sdk_frame_.store(state->at("frame_id").get<uint64_t>()); sdk_state_.store(std::move(state)); }
     json status();
+    // Patched code of the enabled hooks, for the parallel_passes text gate.
+    std::vector<std::pair<uintptr_t,uintptr_t>> patched_ranges() {
+        std::lock_guard lock(control_);
+        std::vector<std::pair<uintptr_t,uintptr_t>> ranges;
+        for(auto* hook:hookset()) if(*hook && hook->enabled())
+            ranges.push_back({hook->target_address(),hook->target_address()+hook->original_bytes().size()});
+        return ranges;
+    }
     json frames(uint64_t after_id=0);
     json camera_rig(const json& request);
     json stream(const json& request,Transport& publisher,const CaptureOptions& options={});

@@ -1,6 +1,8 @@
 #include "parallel_passes.hpp"
-#include "hook_support.hpp"
+#include "text_gate.hpp"
 #include <algorithm>
+#include <cstdio>
+#include <fstream>
 #include <stdexcept>
 #include <Zydis.h>
 
@@ -52,6 +54,23 @@ bool game_folder_dxgi() {
     return module_path(dxgi).parent_path()==module_path(nullptr).parent_path();
 }
 const char* mode_name(int mode) {return mode==1?"defer":"off";}
+std::string hex(uintptr_t value) {char text[24];std::snprintf(text,sizeof(text),"0x%llX",static_cast<unsigned long long>(value));return text;}
+// Module name and offset of an address, following one anonymous jump stub.
+std::string describe_target(uintptr_t address) {
+    for(int hop=0;hop<3;++hop) {
+        HMODULE owner{};
+        if(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR>(address),&owner) && owner)
+            return module_path(owner).filename().string()+"+"+hex(address-reinterpret_cast<uintptr_t>(owner));
+        std::array<uint8_t,14> code{};
+        if(!copy_memory(address,code.data(),code.size())) break;
+        if(code[0]==0xE9) {int32_t rel{};std::memcpy(&rel,&code[1],4);address=address+5+rel;}
+        else if(code[0]==0xFF && code[1]==0x25) {int32_t rel{};std::memcpy(&rel,&code[2],4);
+            if(!read_memory(address+6+rel,address)) break;}
+        else break;
+    }
+    return "anonymous "+hex(address);
+}
 }
 
 ParallelPasses::~ParallelPasses() {
@@ -63,7 +82,7 @@ bool ParallelPasses::device_matches() const noexcept {
     uintptr_t device{},vtable{};
     return read_memory(base_+device_pointer_rva,device) && device==device_ && read_memory(device,vtable) && vtable==device_vtable_;
 }
-void ParallelPasses::enable(Mode mode) {
+void ParallelPasses::enable(Mode mode,const GateInputs& gate) {
     std::lock_guard lock(control_);
     if(mode==Mode::off) throw std::runtime_error("Use disable for off");
     if(GetModuleHandleW(L"renderdoc.dll"))
@@ -109,6 +128,15 @@ void ParallelPasses::enable(Mode mode) {
         instance.store(this);
     }
     device_=device;device_vtable_=vtable;
+    // Report every foreign patch; worker modes (M3b+) refuse them (docs/28 §5).
+    // Deferral stays on the main thread in the original order, so it runs
+    // beside patches such as snowymoon's (2,200 frames, 2026-10-15).
+    auto scanned=scan_text(gate);
+    {
+        std::lock_guard stats(stats_mutex_);
+        gate_=std::move(scanned);
+        workers_allowed_=gate_.value("workers_allowed",false);
+    }
     if(requested_.load()==0) {
         std::lock_guard stats(stats_mutex_);
         counters_={};keys_.clear();
@@ -121,8 +149,10 @@ void ParallelPasses::enable(Mode mode) {
         (void)join_hook_.disable();
         throw std::runtime_error("Cannot enable the pass execution detour");
     }
+    watch_code(gate);
     requested_.store(static_cast<int>(mode));
-    log(std::string("parallel_passes enabled: ")+mode_name(static_cast<int>(mode))+(game_folder_dxgi()?" (game-folder dxgi.dll present)":""));
+    log(std::string("parallel_passes enabled: ")+mode_name(static_cast<int>(mode))+", foreign text patches "+
+        std::to_string(gate_.value("foreign",json::array()).size())+(game_folder_dxgi()?" (game-folder dxgi.dll present)":""));
 }
 void ParallelPasses::disable() noexcept {
     try {
@@ -181,6 +211,93 @@ void ParallelPasses::turn_off(const std::string& reason) noexcept {
     log("parallel_passes off: "+reason);
 }
 
+json ParallelPasses::scan_text(const GateInputs& gate) {
+    const auto start=qpc_now();
+    json report={{"workers_allowed",false},{"ours",json::array()},{"accepted",json::array()},{"foreign",json::array()}};
+    try {
+        auto* dos=reinterpret_cast<IMAGE_DOS_HEADER*>(base_);
+        auto* nt=reinterpret_cast<IMAGE_NT_HEADERS64*>(base_+dos->e_lfanew);
+        auto* sections=IMAGE_FIRST_SECTION(nt);
+        const IMAGE_SECTION_HEADER* text{};const IMAGE_SECTION_HEADER* reloc_section{};
+        const auto& reloc_dir=nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+        for(unsigned i=0;i<nt->FileHeader.NumberOfSections;++i) {
+            if(!std::memcmp(sections[i].Name,".text",6)) text=&sections[i];
+            if(reloc_dir.VirtualAddress>=sections[i].VirtualAddress &&
+               reloc_dir.VirtualAddress<sections[i].VirtualAddress+sections[i].SizeOfRawData) reloc_section=&sections[i];
+        }
+        if(!text || !reloc_section) throw std::runtime_error("PE sections not found");
+        std::ifstream file(module_path(nullptr),std::ios::binary);
+        IMAGE_DOS_HEADER file_dos{};IMAGE_NT_HEADERS64 file_nt{};
+        file.read(reinterpret_cast<char*>(&file_dos),sizeof(file_dos));
+        file.seekg(file_dos.e_lfanew);file.read(reinterpret_cast<char*>(&file_nt),sizeof(file_nt));
+        const auto size=std::min<size_t>(text->Misc.VirtualSize,text->SizeOfRawData);
+        std::vector<uint8_t> image(size),relocations(reloc_dir.Size);
+        file.seekg(text->PointerToRawData);file.read(reinterpret_cast<char*>(image.data()),size);
+        file.seekg(reloc_section->PointerToRawData+(reloc_dir.VirtualAddress-reloc_section->VirtualAddress));
+        file.read(reinterpret_cast<char*>(relocations.data()),relocations.size());
+        if(!file) throw std::runtime_error("Cannot read the executable");
+        const auto delta=static_cast<int64_t>(base_-file_nt.OptionalHeader.ImageBase);
+        report["relocations_applied"]=gate::apply_dir64(image,text->VirtualAddress,relocations,delta);
+        const auto* live=reinterpret_cast<const uint8_t*>(base_+text->VirtualAddress);
+        std::vector<std::pair<uintptr_t,uintptr_t>> closure;
+        for(const auto rva:gate.closure) {
+            DWORD64 image_base{};
+            if(const auto* entry=RtlLookupFunctionEntry(base_+rva,&image_base,nullptr))
+                closure.push_back({entry->BeginAddress,entry->EndAddress});
+            else closure.push_back({rva,rva+1});
+        }
+        bool foreign_in_closure=false,accepted_in_closure=false;
+        for(const auto& [offset,length]:gate::diff_ranges(live,image.data(),size)) {
+            const uintptr_t rva=text->VirtualAddress+offset;
+            DWORD64 image_base{};
+            const auto* entry=RtlLookupFunctionEntry(base_+rva,&image_base,nullptr);
+            bool in_closure=false;
+            for(const auto& [begin,end]:closure) in_closure|=gate::overlaps(rva,length,begin,end-begin);
+            std::string bytes;
+            for(size_t i=0;i<length && i<16;++i) {char b[4];std::snprintf(b,sizeof(b),"%02X",live[offset+i]);bytes+=b;}
+            json item={{"rva",hex(rva)},{"size",length},{"function",entry?json(hex(entry->BeginAddress)):json(nullptr)},
+                {"in_closure",in_closure},{"live",bytes}};
+            if(live[offset]==0xE9 || (live[offset]==0xFF && live[offset+1]==0x25)) item["target"]=describe_target(base_+rva);
+            bool ours=false,accepted=false;
+            for(const auto& [begin,end]:gate.ours) ours|=gate::overlaps(base_+rva,length,begin,end-begin);
+            for(const auto& [accepted_rva,accepted_size]:gate.accepted) accepted|=gate::overlaps(rva,length,accepted_rva,accepted_size);
+            if(ours) report["ours"].push_back(std::move(item));
+            else if(accepted) {accepted_in_closure|=in_closure;report["accepted"].push_back(std::move(item));}
+            else {foreign_in_closure|=in_closure;report["foreign"].push_back(std::move(item));}
+        }
+        report["foreign_in_closure"]=foreign_in_closure;
+        report["workers_allowed"]=report["foreign"].empty() && !accepted_in_closure;
+    } catch(const std::exception& e) {report["error"]=e.what();}
+    report["scan_ms"]=static_cast<double>(qpc_now()-start)*1000.0/static_cast<double>(qpc_frequency());
+    return report;
+}
+void ParallelPasses::watch_code(const GateInputs& gate) {
+    std::vector<uintptr_t> sites(gate.closure);
+    sites.push_back(execute_rva);sites.push_back(join_rva);
+    std::vector<std::pair<uintptr_t,std::array<uint8_t,32>>> watched;
+    for(const auto rva:sites) {
+        std::array<uint8_t,32> bytes{};
+        if(copy_memory(base_+rva,bytes.data(),bytes.size())) watched.push_back({base_+rva,bytes});
+    }
+    std::lock_guard stats(stats_mutex_);
+    watched_=std::move(watched);watch_qpc_.store(0);
+}
+// Main thread, at most once a second: a hook installed after the gate on a
+// closure function or on our sites turns the mode off.
+bool ParallelPasses::code_unchanged() noexcept {
+    const auto now=qpc_now();
+    if(now-watch_qpc_.load()<qpc_frequency()) return true;
+    watch_qpc_.store(now);
+    std::lock_guard stats(stats_mutex_);
+    for(const auto& [address,bytes]:watched_) {
+        std::array<uint8_t,32> current{};
+        if(!copy_memory(address,current.data(),current.size()) || current!=bytes) {
+            if(reason_.empty()) reason_="code changed at "+hex(address-base_);
+            return false;
+        }
+    }
+    return true;
+}
 void ParallelPasses::execute_detour(uintptr_t builder,uintptr_t value,uintptr_t pass,void* marker) {
     callbacks.fetch_add(1);
     auto* self=instance.load();
@@ -204,6 +321,7 @@ void ParallelPasses::latch() noexcept {
     auto mode=static_cast<Mode>(requested_.load());
     if(mode!=Mode::off && !device_matches()) {turn_off("render device changed (drain or -rdevice)");mode=Mode::off;}
     if(mode!=Mode::off && paused_.load()) mode=Mode::off;
+    if(mode!=Mode::off && !code_unchanged()) {requested_.store(0);log("parallel_passes off: "+reason_);mode=Mode::off;}
     if(mode==Mode::off) frame_active_.store(false);
     frame_mode_=mode;latched_=true;latch_qpc_=qpc_now();
 }
@@ -322,6 +440,7 @@ json ParallelPasses::status() {
             {"dwords",k.dwords},{"raw_name_changes",k.raw_changes}});
     }
     result["keys"]=std::move(keys);result["key_count"]=keys_.size();
+    result["gate"]=gate_;
     result["off_reason"]=reason_.empty()?json(nullptr):json(reason_);
     result["error"]=error_.empty()?json(nullptr):json(error_);
     return result;
