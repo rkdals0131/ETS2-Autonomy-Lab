@@ -30,7 +30,9 @@
 
 ✔ 2026-10-13 구현(core 0.33.0, 게임 확인 전): `ot.cmd perf <label> [--profile-hz 250]`, `ot.cmd perf_table <json...>`, core `main_profile`·`traffic` 명령. 샘플러는 게임 없는 MSVC 시험(`ot_sampler_test`)에서 바쁜 스레드를 자기 이미지로 100% 귀속하고, 힙을 계속 잡는 스레드도 교착 없이 끝까지 샘플했습니다. 샘플당 정지는 평균 25 µs·최대 235 µs라 250 Hz면 메인 스레드에 약 0.6%입니다.
 
-✔ 2026-10-14 core 0.34.0(게임 확인 전): `main_profile` 호출 스택(`depth`, 락 없는 자체 unwinder), perf의 게임 스레드별 CPU와 `<label>.stacks.json`, 함수별 집계 `ot.cmd hotspots`. 설계와 시험 결과는 [27 메인 스레드 병렬화 연구](27_main_thread_parallel_research.md#4-도구)에 있습니다.
+✔ 2026-10-14 core 0.34.0: `main_profile` 호출 스택(`depth`, 락 없는 자체 unwinder), perf의 게임 스레드별 CPU와 `<label>.stacks.json`, 함수별 집계 `ot.cmd hotspots`. 설계와 시험 결과는 [27 메인 스레드 병렬화 연구](27_main_thread_parallel_research.md#4-도구)에 있습니다.
+
+✔ 2026-10-14 게임 확인(브리지 끔 정차, `off-long-1` 120 s): 52.7 fps, CPU busy 18.5 ms, GPU 9.0 ms. 메인 스레드 0.95코어, 모듈 비중 `eurotrucks2.exe` 83.8%·`d3d11` 1.3%·`nvwgf2umx` 0.7%·snowymoon `dxgi.dll` 프록시 3.8%·`ot_core` 0.9%. 엔진 worker는 각각 0.03코어 이하로 놉니다. 프레임 갱신·뷰 준비 약 8.9 ms, 렌더 제출 약 9 ms로 나뉩니다. 함수별 표는 [27 §6](27_main_thread_parallel_research.md#6-m0-결과-정차브리지-끔)에 있습니다. 센서 켬 분포는 아직입니다.
 
 - 저장소 도구로 ABAB 측정을 합니다. 조건 A/B를 30초씩 3회 번갈아 재고 아래를 함께 기록합니다.
   - PresentMon fps·p50·p99·CPU/GPU busy
@@ -87,7 +89,7 @@
 
 ### C7. 렌더 제출을 다른 스레드로 (L, 연구, 보류)
 
-- C0 샘플러에서 `d3d11.dll`·드라이버 비중이 클 때만 시작합니다.
+- C0 샘플러에서 `d3d11.dll`·드라이버 비중이 클 때만 시작합니다. ✔ 2026-10-14 브리지 끔 정차에서는 둘을 합쳐 메인 스레드의 2.0%라 조건이 성립하지 않습니다. 센서 켬 분포로 다시 판단합니다.
 - 후보 DXVK(D3D11→Vulkan): 드라이버 일을 별도 command stream 스레드가 맡습니다.
   - 먼저 브리지 끔으로 DX11과 fps만 비교합니다.
   - 위험: 릴레이와 주고받는 공유 텍스처·펜스가 DXVK에서 동작하지 않을 수 있습니다. 그러면 CPU readback 경로로 물러나야 하고 메인 스레드 비용이 다시 늘 수 있습니다.
@@ -102,6 +104,7 @@
 ### C10. 게임 미러 렌더 끄기 (S, 구현 완료, 게임 확인 남음)
 
 - ✔ 화면에 보이는 게임 미러(FH4 슬롯 0·1·2·5)는 매 렌더 프레임 같은 `r_mirror_view_distance`로 장면을 다시 렌더합니다. △ 센서 뷰 1회가 250 m에서 약 0.8 ms라면 게임 미러 4개는 프레임당 약 3 ms로, 10 Hz 센서 렌더 전체보다 큽니다. 자율주행 시험에서는 센서가 미러를 대신하므로 사람용 미러는 필요 없습니다.
+- ✔ 2026-10-14 브리지 끔 정차 스택: 미러 뷰 준비(`0x4D0D80` → `0x4D4450`)가 1.40 ms/프레임(7.4%)입니다. 여기에 미러의 렌더 제출 몫이 더해집니다([27 §6](27_main_thread_parallel_research.md#6-m0-결과-정차브리지-끔)).
 - 0.33.0(게임 확인 전): 리그 설정 `native_mirrors:false`이면 `CameraRig::select`가 엔진이 고른 슬롯 마스크(r12)에서 우리 것이 아닌 미러 비트를 지웁니다. 엔진이 화면 밖 미러를 건너뛸 때와 같은 결과이고, 미러 텍스처는 마지막 장면에서 멈춥니다. 릴레이 설정 `native_mirrors`(기본 true), 런처 체크박스 **게임 미러 렌더 끄기**.
 - 계측: `camera_rig`의 `views[].native_applied`(엔진이 고른 게임 미러 렌더 수)와 `native_suppressed`. 끄기 전에도 게임 미러가 실제로 몇 번 렌더되는지 이 값으로 봅니다.
 - 확인할 것: 충돌·경고 없음, 센서 출력과 `applied`가 이전과 같음, CPU busy 감소, 끄고 다시 켰을 때 미러 복귀. `config.cfg`의 `r_mirror_group`(의미 미확인)도 같은 세션에서 값만 바꿔 미러 갱신이 어떻게 달라지는지 봅니다.
