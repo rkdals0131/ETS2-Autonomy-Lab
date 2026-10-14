@@ -1,6 +1,6 @@
 # ot — 게임 DLL과 개발 도구
 
-저장소·설치본 core는 0.34.1(2026-10-14 설치, 브리지 끔 프로파일만 게임 확인), 상주 loader는 0.31.0입니다. 0.31.1(lease 반납을 `panic` 대신 `disconnected`로 기록), 0.32.0(자세만 남은 카메라는 미리보기 주기로만 렌더, `sdk_timing`), 0.33.0(GT 메타데이터도 rider, 리그 `native_mirrors`, `main_profile`·`traffic` 명령), 0.34.0(`main_profile` 호출 스택), 0.34.1(`main_profile`의 `thread_id`로 다른 게임 스레드 샘플)은 core만 바뀌어 설치된 loader 0.31.0을 그대로 씁니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
+저장소·설치본 core는 0.35.0(2026-10-15 설치, 렌더 패스 미루기 `parallel_passes`), 상주 loader는 0.31.0입니다. 0.31.1(lease 반납을 `panic` 대신 `disconnected`로 기록), 0.32.0(자세만 남은 카메라는 미리보기 주기로만 렌더, `sdk_timing`), 0.33.0(GT 메타데이터도 rider, 리그 `native_mirrors`, `main_profile`·`traffic` 명령), 0.34.0(`main_profile` 호출 스택), 0.34.1(`main_profile`의 `thread_id`로 다른 게임 스레드 샘플), 0.35.0(`parallel_passes`)은 core만 바뀌어 설치된 loader 0.31.0을 그대로 씁니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
 
 브리지는 카메라 30 Hz·라이다 10 Hz·표시용 JPEG 10 Hz를 요청합니다. FH4·Scania S private 프리셋은 슬롯 3·4·6·7을 센서 제출에 사용하며 native mirror 배열은 보존합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
 
@@ -38,6 +38,18 @@ x64 MSVC Build Tools, CMake·Ninja, 공식 SCS SDK가 필요합니다. 기계별
 ```
 
 먼저 브리지를 중지한 뒤 기능 DLL을 교체합니다. 로더는 남아 있고 기존 FFB 플러그인은 유지됩니다. `loader reload`는 파일 교체 없이 기능 모듈을 재초기화합니다. F11은 내부 접근·리그·수집을 해제하고 SDK 수신을 유지합니다.
+
+## 렌더 패스 미루기 (M3a)
+
+```powershell
+.\ot\ot.cmd parallel_passes defer   # 타입 1 패스를 패스 반복 끝(0x227B1F)에서 원래 순서로 기록
+.\ot\ot.cmd parallel_passes         # 프레임·패스·합류 시간, 패스별(이름/공간) 시간·dword 상위 60
+.\ot\ot.cmd parallel_passes off
+```
+
+렌더 패스 병렬 기록의 첫 단계입니다. 아직 메인 스레드에서 직렬로 기록하므로 성능 이득은 없고, 미루기·splice·패스별 카운터를 확인하는 용도입니다. 설치된 `ot_config.json`에 `allow_parallel_passes`(저장소 기본값 false), `allow_tier1`, `singleplayer_research`가 필요합니다. 브리지 lease와 무관하게 켜고 끄며, F11·lease 종료·권한 재읽기에서 꺼집니다. 끄기는 미룬 패스가 있는 프레임이 합류를 마칠 때까지 기다렸다가 훅을 내립니다. 일시정지 프레임과 장치가 바뀐 프레임은 원래 경로로 기록합니다. `perf` 표본에 이 상태의 증가분이 함께 저장됩니다.
+
+같은 프레임에서 패스를 두 번 기록해 비교하는 방식은 쓸 수 없습니다. 2026-10-15 시험에서 두 번째 기록이 엔진 assert(`array_t<rg_blit_pair_t>` 인덱스 범위, blit 패스 콜백 `0x151BF80`)로 게임을 종료시켰습니다. 패스 콜백이 기록하면서 자기 패스 객체의 blit 쌍 배열(`pass+0xDB8`)을 소비하기 때문입니다.
 
 ## Phase 1 고속도로 4뷰
 
