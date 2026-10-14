@@ -95,7 +95,7 @@ core 0.31.1, `r_mirror_view_distance 400`. 이때는 자세 출력이 30 Hz로 �
 - [Reddit 1mi5hpc(2025-08)](https://www.reddit.com/r/ETS2/comments/1mi5hpc/is_there_a_way_to_use_multi_cores_instead_of_just/): "엔진 한계라 우회법 없음"이 답이고, 교통량을 낮춘다는 답이 하나입니다. 처음에는 접근이 막혀 2026-10-13 RSS로 읽었습니다.
 - ✔ SCS: 렌더러는 DX11 "for now"이고([1.50 블로그](https://blog.scssoft.com/2024/05/euro-truck-simulator-2-150-update.html)), 1.55의 비동기 로딩은 끊김을 줄이는 목적입니다. 1.61까지 멀티스레드 렌더링 일정은 없습니다. `-rdevice dx12|vk`는 실험적이고 DX11보다 느리다는 보고가 있습니다.
 - ✔ SCS 직원(2018): 미러 하나는 "게임 월드를 한 번 더 렌더하는 것"입니다([t=256023](https://forum.scssoft.com/viewtopic.php?t=256023)).
-- ✔ 이 머신의 `game.log.txt`: `using 6 worker thread(s)`, IO 3, real-time 3. 엔진 worker는 있지만 프레임의 렌더 제출은 메인 스레드에 남습니다.
+- ✔ 이 머신의 `game.log.txt`: `using 6 worker thread(s)`, IO 3, real-time 3. 엔진 worker는 있지만 장면 준비와 렌더 명령 컴파일은 메인 스레드에 남습니다. D3D11 명령 버퍼 실행은 엔진 렌더 스레드가 따로 맡습니다(✔ 2026-10-14, [27 §6](27_main_thread_parallel_research.md#6-m0-결과-정차브리지-끔)).
 - NVIDIA "Threaded optimization"은 OpenGL 설정(`OGL_THREAD_CONTROL`)이고, Microsoft는 HAGS로 큰 변화가 없다고 합니다.
 - 효과 있는 설정은 `r_mirror_view_distance`(가장 큼), `g_traffic`, `g_lod_factor_*`, `r_deferred_mirrors`(센서 영상이 바뀜)입니다. `config.cfg`의 `r_mirror_group "3"`은 위키에 없어 의미를 확인하지 못했습니다.
 
