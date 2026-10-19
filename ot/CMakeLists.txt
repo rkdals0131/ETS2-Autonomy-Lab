@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(ot_core VERSION 0.37.0 LANGUAGES C CXX)
+project(ot_core VERSION 0.38.0 LANGUAGES C CXX)
 if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "ot_core requires MSVC x64 on Windows")
 endif()
@@ -36,10 +36,14 @@ if(NOT EXISTS "${SCS_SDK}/scssdk_telemetry.h")
   message(FATAL_ERROR "Set SCS_SDK to the official telemetry SDK include directory")
 endif()
 # Pin this build to the inspected executable, not to an editable runtime setting.
+# schema/<version>/ holds one analyzed game build; a game update gets a new directory
+# from research/rebase_rvas.py (which also carries the RVA literals in native/).
+set(OT_GAME_VERSION "1.61.1.9" CACHE STRING "Analyzed game build in schema/")
+set(OT_SCHEMA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/schema/${OT_GAME_VERSION}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-  "${CMAKE_CURRENT_SOURCE_DIR}/schema/1.61.1.1/game.json"
-  "${CMAKE_CURRENT_SOURCE_DIR}/schema/1.61.1.1/fields.json")
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/schema/1.61.1.1/game.json" OT_GAME_IDENTITY)
+  "${OT_SCHEMA_DIR}/game.json"
+  "${OT_SCHEMA_DIR}/fields.json")
+file(READ "${OT_SCHEMA_DIR}/game.json" OT_GAME_IDENTITY)
 string(JSON OT_GAME_SHA256 GET "${OT_GAME_IDENTITY}" exe_sha256)
 file(SHA256 "${ETS2_EXE}" OT_BUILD_EXE_SHA256)
 # The runtime gate compares the running executable with game.json and keeps internal
@@ -53,7 +57,7 @@ if(NOT OT_BUILD_EXE_SHA256 STREQUAL OT_GAME_SHA256)
     message(FATAL_ERROR "The executable differs from the inspected build. Re-analyze offsets before updating game.json, or pass -DOT_SDK_ONLY_BUILD=ON for an SDK-only build.")
   endif()
 endif()
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/schema/1.61.1.1/fields.json" OT_SCHEMA)
+file(READ "${OT_SCHEMA_DIR}/fields.json" OT_SCHEMA)
 configure_file(native/build_identity.hpp.in generated/build_identity.hpp @ONLY)
 add_library(safetyhook STATIC vendor/safetyhook/safetyhook.cpp vendor/safetyhook/Zydis.c)
 target_include_directories(safetyhook PUBLIC vendor/safetyhook)
@@ -95,7 +99,7 @@ target_link_libraries(ot_loader PRIVATE bcrypt advapi32 user32 dbghelp xinput)
 set_target_properties(ot_loader PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/dist")
 add_custom_command(TARGET ot_core POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/ot_config.json" "$<TARGET_FILE_DIR:ot_core>/ot_config.json"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/schema/1.61.1.1/fields.json" "$<TARGET_FILE_DIR:ot_core>/ot_schema.json")
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${OT_SCHEMA_DIR}/fields.json" "$<TARGET_FILE_DIR:ot_core>/ot_schema.json")
 message(STATUS "Pinned game SHA256: ${OT_GAME_SHA256}")
 add_library(ot_ipc SHARED native/ipc_reader.cpp)
 target_compile_definitions(ot_ipc PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)

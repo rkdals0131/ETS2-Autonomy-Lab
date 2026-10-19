@@ -26,7 +26,7 @@ bool chassis_pose(uintptr_t interior,Placement& pose) noexcept {
        !read_memory(vehicle+0x38,state) || !state || !read_memory(state,mode)) return false;
     if(mode==2 || mode==3) return read_memory(state+0x10,pose);
     if(mode!=1 || !read_memory(state+8,handle) || (handle>>56)==0xff ||
-       !read_memory(base+0x36AE6D8,controller) || !controller ||
+       !read_memory(base+0x36AF7C8,controller) || !controller ||
        !read_memory(controller+0x3260,manager) || !manager ||
        !read_memory(manager+8,buffers) || !buffers ||
        !read_memory(buffers+8,placements) || !placements ||
@@ -141,7 +141,7 @@ bool CameraRig::prepare_private(uintptr_t cameras,const Configuration& config) n
     uintptr_t controller{};Array camera_array{},drawable_array{};
     const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     if(!read_memory(cameras,camera_array) || camera_array.size!=9 ||
-       !read_memory(base+0x36AE6D8,controller) || !controller ||
+       !read_memory(base+0x36AF7C8,controller) || !controller ||
        !read_memory(controller+0xA8,drawable_array) || drawable_array.size!=9) return false;
     std::array<uintptr_t,9> sources{},drawables{};
     if(!copy_memory(camera_array.data,sources.data(),sizeof(sources)) ||
@@ -213,11 +213,11 @@ void CameraRig::begin(safetyhook::Context& context) noexcept {
     }
     uintptr_t vtable{},convert{};
     if(!read_memory(context.rbx,vtable) || !read_memory(vtable+0x88,convert) ||
-       convert!=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))+0x87fd70 ||
+       convert!=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))+0x8807a0 ||
        !copy_memory(context.rbx,submission.bytes.data(),submission.bytes.size())) {++unavailable_;return;}
     const auto cx=std::floor(position[0]/512.0),cz=std::floor(position[2]/512.0);
     if(cx<-32768 || cx>32767 || cz<-32768 || cz>32767) {++unavailable_;return;}
-    // 0x87FD70 composes the native quaternion with a Z half-turn, then the
+    // 0x8807A0 composes the native quaternion with a Z half-turn, then the
     // camera component builds its inverse view. Cancel that half-turn here:
     // +X right, +Y up, -Z forward, without a reflected/upside-down sensor view.
     rotation=multiply(rotation,{0,0,0,1});
@@ -242,7 +242,7 @@ void CameraRig::end(safetyhook::Context& context) noexcept {
 void CameraRig::dimensions(safetyhook::Context& context) noexcept {
     uintptr_t caller{};
     if(!read_memory(context.rsp,caller) ||
-       caller!=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))+0x4d46b8) return;
+       caller!=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))+0x4d47d8) return;
     const auto slot=static_cast<uint32_t>(context.rdi);
     const auto config=configuration_.load();
     if(!config || slot>=9 || !config->views[slot].enabled) return;
@@ -252,7 +252,7 @@ void CameraRig::dimensions(safetyhook::Context& context) noexcept {
 void CameraRig::ego_parts(safetyhook::Context& context) noexcept {
     uintptr_t caller{};
     static const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    if(!read_memory(context.rsp+0x48,caller) || (caller!=base+0x646DC9 && caller!=base+0x646E57)) return;
+    if(!read_memory(context.rsp+0x48,caller) || (caller!=base+0x647129 && caller!=base+0x6471B7)) return;
     const auto config=configuration_.load();
     if(!config || !config->ego_full_model) return;
     uintptr_t mask{},controller{},actor{},vehicle{};
@@ -263,7 +263,7 @@ void CameraRig::ego_parts(safetyhook::Context& context) noexcept {
     // camera slots owned by this rig. Other models and normal mirrors keep
     // their native per-mirror subsets. No model/camera memory is changed.
     if(!read_memory(context.r8+0x18,mask) || !(mask&sensor_mask) ||
-       !read_memory(base+0x36AE6D8,controller) || !controller ||
+       !read_memory(base+0x36AF7C8,controller) || !controller ||
        !read_memory(controller+0x31B0,actor) || !actor ||
        !read_memory(actor+0x18,vehicle) || context.rsi!=vehicle) return;
     context.rflags&=~uintptr_t{0x40}; // ZF=0: use the engine's full-list path.

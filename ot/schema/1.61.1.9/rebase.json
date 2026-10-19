@@ -1,0 +1,1010 @@
+{
+ "from": "1.61.1.1",
+ "to": "1.61.1.9",
+ "tool": "research/rebase_rvas.py",
+ "note": "Addresses in docs/ refer to the build they were found in; this table carries them.",
+ "results": [
+  {
+   "old": "0x166b30",
+   "new": "0x166bd0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "10/35",
+   "function": "166B30",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[25]"
+   ]
+  },
+  {
+   "old": "0x166c50",
+   "new": "0x166cf0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "7/25",
+   "function": "166C50",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[26]"
+   ]
+  },
+  {
+   "old": "0x167d50",
+   "new": "0x167df0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "neighbour/19",
+   "function": "none (48 bytes from the RVA)",
+   "body": "same",
+   "used_by": [
+    "render_parallel.task_submit_stub_rva",
+    "parallel_passes.cpp:21"
+   ]
+  },
+  {
+   "old": "0x167d80",
+   "new": "0x167e20",
+   "kind": "code",
+   "status": "ok",
+   "votes": "13/13",
+   "function": "none (48 bytes from the RVA)",
+   "body": "same",
+   "used_by": [
+    "render_parallel.task_wait_stub_rva",
+    "parallel_passes.cpp:21"
+   ]
+  },
+  {
+   "old": "0x167dd0",
+   "new": "0x167e70",
+   "kind": "code",
+   "status": "ok",
+   "votes": "11/22",
+   "function": "167DD0",
+   "body": "same",
+   "used_by": [
+    "parallel_passes_test.cpp:155"
+   ]
+  },
+  {
+   "old": "0x167e90",
+   "new": "0x167f30",
+   "kind": "code",
+   "status": "ok",
+   "votes": "6/19",
+   "function": "167E90",
+   "body": "same",
+   "used_by": [
+    "parallel_passes_test.cpp:155"
+   ]
+  },
+  {
+   "old": "0x190c70",
+   "new": "0x190d10",
+   "kind": "code",
+   "status": "ok",
+   "votes": "17/19",
+   "function": "none (48 bytes from the RVA)",
+   "body": "same",
+   "used_by": [
+    "parallel_loop.hpp:18"
+   ]
+  },
+  {
+   "old": "0x1e05b0",
+   "new": "0x1e0650",
+   "kind": "code",
+   "status": "ok",
+   "votes": "14/21",
+   "function": "1E05B0",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[23]"
+   ]
+  },
+  {
+   "old": "0x226960",
+   "new": "0x226a00",
+   "kind": "code",
+   "status": "ok",
+   "votes": "51/90",
+   "function": "226960",
+   "body": "same",
+   "used_by": [
+    "render_parallel.pass_execute_rva",
+    "render_parallel.closure_rvas[0]",
+    "parallel_passes.cpp:16",
+    "parallel_passes.cpp:22",
+    "parallel_passes.cpp:351",
+    "parallel_passes.hpp:12",
+    "parallel_passes_test.cpp:55"
+   ]
+  },
+  {
+   "old": "0x227140",
+   "new": "0x2271e0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "336/503",
+   "function": "227140",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[1]",
+    "parallel_passes.hpp:13",
+    "parallel_passes_test.cpp:58",
+    "pass_stream.hpp:128",
+    "pass_stream.hpp:134"
+   ]
+  },
+  {
+   "old": "0x227b1f",
+   "new": "0x227bbf",
+   "kind": "code",
+   "status": "ok",
+   "votes": "336/503",
+   "function": "227140",
+   "body": "same",
+   "used_by": [
+    "render_parallel.execute_join_rva",
+    "parallel_passes.cpp:16",
+    "parallel_passes.cpp:366",
+    "parallel_passes.hpp:13"
+   ]
+  },
+  {
+   "old": "0x28ce60",
+   "new": "0x28cec0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "28/37",
+   "function": "28CE60",
+   "body": "same",
+   "used_by": [
+    "render_parallel.storage_allocate_rva",
+    "render_parallel.closure_rvas[24]",
+    "parallel_passes.cpp:16",
+    "parallel_passes_test.cpp:21",
+    "pass_stream.hpp:14",
+    "pass_stream.hpp:147"
+   ]
+  },
+  {
+   "old": "0x2ae640",
+   "new": "0x2ae6b0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "18/19",
+   "function": "2AE640",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[16]"
+   ]
+  },
+  {
+   "old": "0x2b1a30",
+   "new": "0x2b1aa0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "355/410",
+   "function": "2B1A30",
+   "body": "same",
+   "used_by": [
+    "render_parallel.device_slots_checked.0x108",
+    "render_parallel.closure_rvas[27]",
+    "parallel_passes.cpp:29"
+   ]
+  },
+  {
+   "old": "0x2b1b40",
+   "new": "0x2b1bb0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "355/410",
+   "function": "2B1A30",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:16"
+   ]
+  },
+  {
+   "old": "0x2b266a",
+   "new": "0x2b26da",
+   "kind": "code",
+   "status": "ok",
+   "votes": "355/410",
+   "function": "2B1A30",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:16"
+   ]
+  },
+  {
+   "old": "0x2b3193",
+   "new": "0x2b3203",
+   "kind": "code",
+   "status": "ok",
+   "votes": "428/507",
+   "function": "2B28C0",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:14"
+   ]
+  },
+  {
+   "old": "0x2b5f70",
+   "new": "0x2b5fe0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "60/94",
+   "function": "2B5F70",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[20]"
+   ]
+  },
+  {
+   "old": "0x2b62b0",
+   "new": "0x2b6320",
+   "kind": "code",
+   "status": "ok",
+   "votes": "35/53",
+   "function": "2B62B0",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[28]"
+   ]
+  },
+  {
+   "old": "0x2b6b20",
+   "new": "0x2b6b90",
+   "kind": "code",
+   "status": "ok",
+   "votes": "330/362",
+   "function": "2B6B20",
+   "body": "same",
+   "used_by": [
+    "render_parallel.device_slots_checked.0x278",
+    "render_parallel.closure_rvas[13]",
+    "parallel_passes.cpp:29"
+   ]
+  },
+  {
+   "old": "0x2b94b0",
+   "new": "0x2b9520",
+   "kind": "code",
+   "status": "ok",
+   "votes": "17/28",
+   "function": "2B94B0",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[14]"
+   ]
+  },
+  {
+   "old": "0x2bea70",
+   "new": "0x2beae0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "37/71",
+   "function": "2BEA70",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[15]"
+   ]
+  },
+  {
+   "old": "0x2bfeda",
+   "new": "0x2bff4a",
+   "kind": "code",
+   "status": "ok",
+   "votes": "10/14",
+   "function": "2BFE80",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:15"
+   ]
+  },
+  {
+   "old": "0x2e5040",
+   "new": "0x2e50b0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "314/387",
+   "function": "2E5040",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[8]"
+   ]
+  },
+  {
+   "old": "0x2e5ff0",
+   "new": "0x2e6060",
+   "kind": "code",
+   "status": "ok",
+   "votes": "93/147",
+   "function": "2E5FF0",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[7]"
+   ]
+  },
+  {
+   "old": "0x2e6243",
+   "new": "0x2e62b3",
+   "kind": "code",
+   "status": "ok",
+   "votes": "93/147",
+   "function": "2E5FF0",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:17"
+   ]
+  },
+  {
+   "old": "0x2e6af0",
+   "new": "0x2e6b60",
+   "kind": "code",
+   "status": "ok",
+   "votes": "29/32",
+   "function": "2E6AF0",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[9]"
+   ]
+  },
+  {
+   "old": "0x2e8090",
+   "new": "0x2e8100",
+   "kind": "code",
+   "status": "ok",
+   "votes": "61/105",
+   "function": "2E8090",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[21]"
+   ]
+  },
+  {
+   "old": "0x2e8440",
+   "new": "0x2e84b0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "15/18",
+   "function": "2E8440",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[22]"
+   ]
+  },
+  {
+   "old": "0x2e8fe0",
+   "new": "0x2e9050",
+   "kind": "code",
+   "status": "ok",
+   "votes": "18/18",
+   "function": "2E8FE0",
+   "body": "same",
+   "used_by": [
+    "render_parallel.device_slots_checked.0x120",
+    "render_parallel.closure_rvas[17]",
+    "parallel_passes.cpp:29"
+   ]
+  },
+  {
+   "old": "0x2e9360",
+   "new": "0x2e93d0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "53/62",
+   "function": "2E9360",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[18]"
+   ]
+  },
+  {
+   "old": "0x2f3ea0",
+   "new": "0x2f3f10",
+   "kind": "code",
+   "status": "ok",
+   "votes": "20/23",
+   "function": "2F3EA0",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[19]"
+   ]
+  },
+  {
+   "old": "0x321460",
+   "new": "0x3214d0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "5/8",
+   "function": "321460",
+   "body": "same",
+   "used_by": [
+    "render_vehicle.model_component_set_placement_rva"
+   ]
+  },
+  {
+   "old": "0x3eb290",
+   "new": "0x3eb300",
+   "kind": "code",
+   "status": "ok",
+   "votes": "224/234",
+   "function": "3EB290",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[12]"
+   ]
+  },
+  {
+   "old": "0x3eb9f0",
+   "new": "0x3eba60",
+   "kind": "code",
+   "status": "ok",
+   "votes": "21/21",
+   "function": "3EB9F0",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[11]"
+   ]
+  },
+  {
+   "old": "0x4d458b",
+   "new": "0x4d46ab",
+   "kind": "code",
+   "status": "ok",
+   "votes": "204/343",
+   "function": "4D4450",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:19"
+   ]
+  },
+  {
+   "old": "0x4d46b8",
+   "new": "0x4d47d8",
+   "kind": "code",
+   "status": "ok",
+   "votes": "204/343",
+   "function": "4D4450",
+   "body": "same",
+   "used_by": [
+    "camera_rig.cpp:245"
+   ]
+  },
+  {
+   "old": "0x4d46e4",
+   "new": "0x4d4804",
+   "kind": "code",
+   "status": "ok",
+   "votes": "204/343",
+   "function": "4D4450",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:19"
+   ]
+  },
+  {
+   "old": "0x4d4e54",
+   "new": "0x4d4f74",
+   "kind": "code",
+   "status": "ok",
+   "votes": "204/343",
+   "function": "4D4450",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:19"
+   ]
+  },
+  {
+   "old": "0x538a4e",
+   "new": "0x538bbe",
+   "kind": "code",
+   "status": "ok",
+   "votes": "89/161",
+   "function": "538860",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:18"
+   ]
+  },
+  {
+   "old": "0x538ad4",
+   "new": "0x538c44",
+   "kind": "code",
+   "status": "ok",
+   "votes": "89/161",
+   "function": "538860",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:19"
+   ]
+  },
+  {
+   "old": "0x538b11",
+   "new": "0x538c81",
+   "kind": "code",
+   "status": "ok",
+   "votes": "89/161",
+   "function": "538860",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:18"
+   ]
+  },
+  {
+   "old": "0x538ce3",
+   "new": "0x538e53",
+   "kind": "code",
+   "status": "ok",
+   "votes": "89/161",
+   "function": "538860",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:18"
+   ]
+  },
+  {
+   "old": "0x646dc9",
+   "new": "0x647129",
+   "kind": "code",
+   "status": "weak",
+   "votes": "103/287",
+   "function": "646C00",
+   "body": "58 differing instruction lines",
+   "accepted": "return address after the call to A3CAD0 (now A3D5A0); 0x646C00 changed only by the vehicle +0x28 layout shift",
+   "used_by": [
+    "camera_rig.cpp:255"
+   ]
+  },
+  {
+   "old": "0x646e57",
+   "new": "0x6471b7",
+   "kind": "code",
+   "status": "weak",
+   "votes": "103/287",
+   "function": "646C00",
+   "body": "58 differing instruction lines",
+   "accepted": "second such return address, same check",
+   "used_by": [
+    "camera_rig.cpp:255"
+   ]
+  },
+  {
+   "old": "0x87fd70",
+   "new": "0x8807a0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "28/42",
+   "function": "87FD70",
+   "body": "same",
+   "used_by": [
+    "camera_rig.cpp:216",
+    "camera_rig.cpp:220"
+   ]
+  },
+  {
+   "old": "0x918f30",
+   "new": "0x919950",
+   "kind": "code",
+   "status": "ok",
+   "votes": "19/19",
+   "function": "none (48 bytes from the RVA)",
+   "body": "same",
+   "used_by": [
+    "render_vehicle.actor_set_bounds_rva"
+   ]
+  },
+  {
+   "old": "0x923b60",
+   "new": "0x924580",
+   "kind": "code",
+   "status": "ok",
+   "votes": "8/14",
+   "function": "923B60",
+   "body": "same",
+   "used_by": [
+    "render_vehicle.ai_publish_bounds_rva"
+   ]
+  },
+  {
+   "old": "0x955790",
+   "new": "0x9561b0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "15/26",
+   "function": "955790",
+   "body": "same",
+   "used_by": [
+    "render_vehicle.model_set_placement_rva"
+   ]
+  },
+  {
+   "old": "0x955870",
+   "new": "0x956290",
+   "kind": "code",
+   "status": "ok",
+   "votes": "16/28",
+   "function": "955870",
+   "body": "same",
+   "used_by": [
+    "render_vehicle.model_get_placement_rva"
+   ]
+  },
+  {
+   "old": "0x95b4d0",
+   "new": "0x95bef0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "8/16",
+   "function": "95B4D0",
+   "body": "same",
+   "used_by": [
+    "render_vehicle.parked_publish_bounds_rva"
+   ]
+  },
+  {
+   "old": "0x978530",
+   "new": "0x978f50",
+   "kind": "code",
+   "status": "ok",
+   "votes": "35/104",
+   "function": "978530",
+   "body": "same",
+   "used_by": [
+    "render_vehicle.model_bounds_in_actor_basis_rva"
+   ]
+  },
+  {
+   "old": "0xa3cade",
+   "new": "0xa3d5ae",
+   "kind": "code",
+   "status": "ok",
+   "votes": "17/36",
+   "function": "A3CAD0",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:25"
+   ]
+  },
+  {
+   "old": "0xc74aa0",
+   "new": "0xc75570",
+   "kind": "code",
+   "status": "ok",
+   "votes": "18/27",
+   "function": "C74AA0",
+   "body": "same",
+   "used_by": [
+    "parallel_loop.hpp:15",
+    "parallel_passes.cpp:18",
+    "parallel_passes_test.cpp:203"
+   ]
+  },
+  {
+   "old": "0x1473e60",
+   "new": "0x1475c90",
+   "kind": "code",
+   "status": "ok",
+   "votes": "71/106",
+   "function": "1473E60",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[2]",
+    "pass_commands.cpp:162"
+   ]
+  },
+  {
+   "old": "0x1476140",
+   "new": "0x1477f70",
+   "kind": "code",
+   "status": "ok",
+   "votes": "6/19",
+   "function": "none (48 bytes from the RVA)",
+   "body": "same",
+   "used_by": [
+    "pass_commands.cpp:161"
+   ]
+  },
+  {
+   "old": "0x1509140",
+   "new": "0x150af70",
+   "kind": "code",
+   "status": "ok",
+   "votes": "39/52",
+   "function": "1509140",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[10]"
+   ]
+  },
+  {
+   "old": "0x151bf80",
+   "new": "0x151ddb0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "5/17",
+   "function": "151BF80",
+   "body": "same",
+   "used_by": [
+    "core.cpp:598",
+    "parallel_passes.hpp:16"
+   ]
+  },
+  {
+   "old": "0x160c990",
+   "new": "0x160e7c0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "125/165",
+   "function": "160C990",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[3]"
+   ]
+  },
+  {
+   "old": "0x160cf10",
+   "new": "0x160ed40",
+   "kind": "code",
+   "status": "ok",
+   "votes": "26/30",
+   "function": "160CF10",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[4]"
+   ]
+  },
+  {
+   "old": "0x160d010",
+   "new": "0x160ee40",
+   "kind": "code",
+   "status": "ok",
+   "votes": "131/150",
+   "function": "160D010",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[5]"
+   ]
+  },
+  {
+   "old": "0x160d580",
+   "new": "0x160f3b0",
+   "kind": "code",
+   "status": "ok",
+   "votes": "24/37",
+   "function": "160D580",
+   "body": "same",
+   "used_by": [
+    "render_parallel.closure_rvas[6]"
+   ]
+  },
+  {
+   "old": "0x1610250",
+   "new": "0x1612080",
+   "kind": "code",
+   "status": "ok",
+   "votes": "7/14",
+   "function": "1610250",
+   "body": "same",
+   "used_by": [
+    "render_probe.cpp:24"
+   ]
+  },
+  {
+   "old": "0x1d16a8d",
+   "new": "0x1d1890d",
+   "kind": "code",
+   "status": "ok",
+   "votes": "120/196",
+   "function": "1D16A80",
+   "body": "same",
+   "used_by": [
+    "core.cpp:325"
+   ]
+  },
+  {
+   "old": "0x21ec488",
+   "new": "0x21ed5b8",
+   "kind": "data",
+   "status": "ok",
+   "votes": "6/6",
+   "vtable": "2/2 slots correspond, first 2 in a row",
+   "used_by": [
+    "render_parallel.parallel_loop_vtable_rva",
+    "parallel_passes.cpp:20"
+   ]
+  },
+  {
+   "old": "0x21fd1b0",
+   "new": "0x21fe2e0",
+   "kind": "data",
+   "status": "ok",
+   "votes": "6/6",
+   "vtable": "128/128 slots correspond, first 128 in a row",
+   "used_by": [
+    "render_pass_camera.wrapper_vtable_rva"
+   ]
+  },
+  {
+   "old": "0x21fd700",
+   "new": "0x21fe830",
+   "kind": "data",
+   "status": "ok",
+   "votes": "12/12",
+   "vtable": "41/41 slots correspond, first 41 in a row",
+   "used_by": [
+    "render_parallel.storage_vtable_rva",
+    "parallel_passes.cpp:17"
+   ]
+  },
+  {
+   "old": "0x22127a8",
+   "new": "0x22138d8",
+   "kind": "data",
+   "status": "ok",
+   "votes": "2/2",
+   "vtable": "115/115 slots correspond, first 115 in a row",
+   "used_by": [
+    "render_parallel.device_vtable_rva",
+    "parallel_passes.cpp:17"
+   ]
+  },
+  {
+   "old": "0x2222fd8",
+   "new": "0x2224108",
+   "kind": "data",
+   "status": "ok",
+   "votes": "2/2",
+   "vtable": "54/54 slots correspond, first 54 in a row",
+   "used_by": [
+    "render_vehicle.model_component_vtable_rva"
+   ]
+  },
+  {
+   "old": "0x2223120",
+   "new": "0x2224250",
+   "kind": "data",
+   "status": "ok",
+   "votes": "1/1",
+   "vtable": "13/13 slots correspond, first 13 in a row",
+   "used_by": [
+    "render_pass_camera.camera_vtable_rva"
+   ]
+  },
+  {
+   "old": "0x22df760",
+   "new": "0x22e0958",
+   "kind": "data",
+   "status": "ok",
+   "votes": "1/1",
+   "vtable": "32/37 slots correspond, first 32 in a row",
+   "used_by": [
+    "render_vehicle.model_vtable_rva"
+   ]
+  },
+  {
+   "old": "0x23f5530",
+   "new": "0x23f6928",
+   "kind": "data",
+   "status": "ok",
+   "votes": "1/1",
+   "vtable": "13/67 slots correspond, first 6 in a row",
+   "used_by": [
+    "render_pass_camera.inner_vtable_rva"
+   ]
+  },
+  {
+   "old": "0x23f64a0",
+   "new": "0x23f7898",
+   "kind": "data",
+   "status": "ok",
+   "votes": "2/2",
+   "vtable": "65/65 slots correspond, first 65 in a row",
+   "used_by": [
+    "render_pass_camera.deferred_vtable_rva"
+   ]
+  },
+  {
+   "old": "0x2506950",
+   "new": "0x2507448",
+   "kind": "data",
+   "status": "ok",
+   "votes": "1/1",
+   "vtable": "84/91 slots correspond, first 84 in a row",
+   "used_by": [
+    "vehicle_physics.backend_vtable_rva"
+   ]
+  },
+  {
+   "old": "0x2737a78",
+   "new": "0x2738a78",
+   "kind": "data",
+   "status": "ok",
+   "votes": "2/2",
+   "used_by": [
+    "render_pass_camera.batch_pool_rva"
+   ]
+  },
+  {
+   "old": "0x304b300",
+   "new": "0x304c320",
+   "kind": "data",
+   "status": "ok",
+   "votes": "15/15",
+   "used_by": [
+    "render_parallel.worker_count_rva",
+    "parallel_passes.cpp:20"
+   ]
+  },
+  {
+   "old": "0x304fc50",
+   "new": "0x3050c70",
+   "kind": "data",
+   "status": "ok",
+   "votes": "60/60",
+   "used_by": [
+    "render_graph.manager_rva",
+    "pass_commands.cpp:387"
+   ]
+  },
+  {
+   "old": "0x363fcf0",
+   "new": "0x363fcf0",
+   "kind": "data",
+   "status": "ok",
+   "votes": "51/51",
+   "used_by": [
+    "render_probe.cpp:433"
+   ]
+  },
+  {
+   "old": "0x3681860",
+   "new": "0x3682920",
+   "kind": "data",
+   "status": "ok",
+   "votes": "60/60",
+   "used_by": [
+    "render_graph.renderer_pointer_rva",
+    "render_parallel.device_pointer_rva",
+    "parallel_passes.cpp:17"
+   ]
+  },
+  {
+   "old": "0x36ac888",
+   "new": "0x36ad978",
+   "kind": "data",
+   "status": "ok",
+   "votes": "59/59",
+   "used_by": [
+    "render_parallel.task_table_rva",
+    "parallel_passes.cpp:20"
+   ]
+  },
+  {
+   "old": "0x36ae6d8",
+   "new": "0x36af7c8",
+   "kind": "data",
+   "status": "ok",
+   "votes": "59/59",
+   "used_by": [
+    "controller_pointer_rva",
+    "camera_rig.cpp:29",
+    "camera_rig.cpp:144",
+    "camera_rig.cpp:266"
+   ]
+  },
+  {
+   "old": "0x36ae728",
+   "new": "0x36af818",
+   "kind": "data",
+   "status": "ok",
+   "votes": "51/51",
+   "used_by": [
+    "render_vehicle.traffic_pointer_rva"
+   ]
+  }
+ ]
+}

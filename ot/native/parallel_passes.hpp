@@ -9,11 +9,11 @@
 #include <safetyhook.hpp>
 
 namespace ot {
-// docs/28 M3a/M3b: type 1 render passes are deferred from 0x226960 and recorded
-// at the end of the pass loop in 0x227140 (0x227B1F): on the main thread in the
+// docs/28 M3a/M3b: type 1 render passes are deferred from 0x226A00 and recorded
+// at the end of the pass loop in 0x2271E0 (0x227BBF): on the main thread in the
 // original order (defer), or on engine workers through parallel_loop_task_t,
 // one pass at a time (ticket order or one lock). Recording a pass twice is not possible: pass
-// callbacks consume per-pass state (0x151BF80 asserts on an empty blit pair
+// callbacks consume per-pass state (0x151DDB0 asserts on an empty blit pair
 // array the second time), so there is no same-frame shadow recording.
 class ParallelPasses {
 public:

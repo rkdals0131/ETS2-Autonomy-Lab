@@ -11,22 +11,23 @@ namespace {
 std::atomic<ParallelPasses*> instance{};
 std::atomic<uint32_t> callbacks{};
 std::atomic<uint64_t> non_main_calls{};
-// 1.61.1.1 sites (docs/28 §2-§3). The game hash gate pins these; the
+// 1.61.1.9 sites, carried from the 1.61.1.1 ones docs/28 §2-§3 name (see
+// schema/1.61.1.9/rebase.json). The game hash gate pins these; the
 // signatures confirm the inspected bytes before any hook is created.
-constexpr uintptr_t execute_rva=0x226960,join_rva=0x227B1F,allocate_rva=0x28CE60;
-constexpr uintptr_t device_pointer_rva=0x3681860,device_vtable_rva=0x22127A8,storage_vtable_rva=0x21FD700;
-// Engine task manager (docs/28 §3.3, 0xC74AA0): table pointer, worker count,
+constexpr uintptr_t execute_rva=0x226A00,join_rva=0x227BBF,allocate_rva=0x28CEC0;
+constexpr uintptr_t device_pointer_rva=0x3682920,device_vtable_rva=0x22138D8,storage_vtable_rva=0x21FE830;
+// Engine task manager (docs/28 §3.3, 0xC75570): table pointer, worker count,
 // parallel_loop_task_t vtable, submit stub [0] and wait stub [3].
-constexpr uintptr_t task_table_rva=0x36AC888,worker_count_rva=0x304B300,loop_vtable_rva=0x21EC488;
-constexpr uintptr_t submit_stub_rva=0x167D50,wait_stub_rva=0x167D80;
-// 0x226960 prologue: mov [rsp+8],rbx; mov [rsp+18h],rsi; mov [rsp+10h],rdx; push rbp/rdi/r14; lea rbp,[rsp-80h]
+constexpr uintptr_t task_table_rva=0x36AD978,worker_count_rva=0x304C320,loop_vtable_rva=0x21ED5B8;
+constexpr uintptr_t submit_stub_rva=0x167DF0,wait_stub_rva=0x167E20;
+// 0x226A00 prologue: mov [rsp+8],rbx; mov [rsp+18h],rsi; mov [rsp+10h],rdx; push rbp/rdi/r14; lea rbp,[rsp-80h]
 constexpr std::array<uint8_t,24> execute_signature={0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x74,0x24,0x18,0x48,0x89,
     0x54,0x24,0x10,0x55,0x57,0x41,0x56,0x48,0x8D,0x6C,0x24,0x80};
 // LAB_140227b1f, the only exit of the pass loop: mov [rbp+898h],r15 then the tail storage setup.
 constexpr std::array<uint8_t,21> join_signature={0x4C,0x89,0xBD,0x98,0x08,0x00,0x00,0x48,0x8D,0x85,0xA8,0x08,0x00,0x00,
     0x48,0x89,0x85,0x90,0x08,0x00,0x00};
 constexpr std::array<uint8_t,16> allocate_prologue={0x48,0x89,0x5C,0x24,0x08,0x57,0x48,0x83,0xEC,0x20,0x48,0x8B,0xD9,0x48,0x8B,0xFA};
-constexpr std::array<std::pair<uintptr_t,uintptr_t>,3> device_slots={{{0x108,0x2B1A30},{0x120,0x2E8FE0},{0x278,0x2B6B20}}};
+constexpr std::array<std::pair<uintptr_t,uintptr_t>,3> device_slots={{{0x108,0x2B1AA0},{0x120,0x2E9050},{0x278,0x2B6B90}}};
 constexpr uint64_t join_limit_ms=50,overflow_limit_frames=100;
 
 uint64_t fnv(std::string_view text,uint64_t hash=1469598103934665603ull) noexcept {
@@ -348,7 +349,7 @@ void ParallelPasses::latch() noexcept {
     if(mode!=Mode::off && !device_matches()) {turn_off("render device changed (drain or -rdevice)");mode=Mode::off;}
     if(mode!=Mode::off && paused_.load()) mode=Mode::off;
     if(mode!=Mode::off && !code_unchanged()) {requested_.store(0);log("parallel_passes off: "+reason_);mode=Mode::off;}
-    if(mode!=Mode::off && non_main_calls.load()) {turn_off("0x226960 was called off the main thread");mode=Mode::off;}
+    if(mode!=Mode::off && non_main_calls.load()) {turn_off("0x226A00 was called off the main thread");mode=Mode::off;}
     summary_mode_=-1;
     if(mode==Mode::off) frame_active_.store(false);
     else {
@@ -363,7 +364,7 @@ bool ParallelPasses::defer(uintptr_t builder,uintptr_t value,uintptr_t pass,void
     if(GetCurrentThreadId()!=main_thread_.load()) {++non_main_calls;return false;}
     if(joining_) return false;
     if(latched_ && qpc_now()-latch_qpc_>qpc_frequency()) {
-        // No join for a second: a frame boundary passed without 0x227B1F.
+        // No join for a second: a frame boundary passed without 0x227BBF.
         if(queued_) turn_off("deferred passes were not joined");
         latched_=false;frame_active_.store(false);
     }

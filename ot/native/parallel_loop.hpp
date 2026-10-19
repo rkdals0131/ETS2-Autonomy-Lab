@@ -12,10 +12,10 @@
 #include <unordered_map>
 
 namespace ot::loop {
-// Layout of parallel_loop_task_t as 0xC74AA0 builds it on its stack. The task
+// Layout of parallel_loop_task_t as 0xC75570 builds it on its stack. The task
 // manager links it through +0x08/+0x10, counts executor slots at +0x27 and
 // running executors at +0x28, and each executor calls vtable slot 1
-// (0x190C70): body(capture, task).
+// (0x190D10): body(capture, task).
 struct EngineTask {
     uintptr_t vtable;
     uintptr_t link[2];

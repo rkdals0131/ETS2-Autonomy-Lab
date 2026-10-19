@@ -158,8 +158,8 @@ RenderCameraSample camera_at_compile(uintptr_t pass,uintptr_t base) {
         const auto callback=read<uintptr_t>(pass+layout.callback_offset);
         if(!callback || read<uintptr_t>(callback)!=base+layout.wrapper_vtable_rva)
             throw std::runtime_error("Unsupported surface pass callback");
-        // The inner callback records the scene pass: its vtable slot 1 (0x1476140)
-        // jumps to 0x1473E60, whose entry snowymoon's dxgi.dll patches (docs/28 §2.10).
+        // The inner callback records the scene pass: its vtable slot 1 (0x1477F70)
+        // jumps to 0x1475C90, whose entry snowymoon's dxgi.dll patches (docs/28 §2.10).
         const auto inner=read<uintptr_t>(callback+layout.inner_callback_offset);
         if(!inner || read<uintptr_t>(inner)!=base+layout.inner_vtable_rva)
             throw std::runtime_error("Unsupported surface pass work layout");
@@ -384,7 +384,7 @@ RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const
     uint32_t index{};
     if(!read_memory(pass+0x1F8,index)) return {};
     for(unsigned b=0;b<3;++b) {
-        const auto manager=base+0x304FC50+b*0x2A8;
+        const auto manager=base+0x3050C70+b*0x2A8;
         const auto passes=array(manager+0xF0);
         if(index<passes.size && read<uintptr_t>(passes.data+index*8)==pass) {
             const auto images=array(manager);

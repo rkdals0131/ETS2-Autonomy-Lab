@@ -322,7 +322,7 @@ json Runtime::reload_permissions() {
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"parallel_passes_allowed",gate_ok_ && allow_tier1_ && allow_parallel_passes_}};
 }
-// accepted_text_patches: [{"rva":"0x1D16A8D","size":4}, ...] (docs/28 §5).
+// accepted_text_patches: [{"rva":"0x1D1890D","size":4}, ...] (docs/28 §5).
 void Runtime::read_accepted_patches(const json& settings) {
     accepted_text_patches_.clear();
     for(const auto& item:settings.value("accepted_text_patches",json::array())) {
@@ -595,7 +595,7 @@ json Runtime::command(const json& request) {
                 }
                 parallel_passes_->enable(mode=="defer"?ParallelPasses::Mode::defer:mode=="parallel"?ParallelPasses::Mode::parallel:
                     ParallelPasses::Mode::alternate,gate,options);
-            } else if(mode=="shadow") throw std::runtime_error("Recording a pass twice crashes: pass callbacks consume their blit pairs (0x151BF80, docs/28)");
+            } else if(mode=="shadow") throw std::runtime_error("Recording a pass twice crashes: pass callbacks consume their blit pairs (0x151DDB0, docs/28)");
             else throw std::runtime_error("parallel_passes mode must be off, defer, parallel or alternate");
         }
         return parallel_passes_->status();

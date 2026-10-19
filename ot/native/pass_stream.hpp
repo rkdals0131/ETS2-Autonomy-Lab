@@ -11,7 +11,7 @@
 #include <vector>
 
 namespace ot::passes {
-// 0x28CE60 r_cmd_storage_t::allocate: records are {data, used dwords, capacity};
+// 0x28CEC0 r_cmd_storage_t::allocate: records are {data, used dwords, capacity};
 // +0x320 is the record being appended. Inline records start at +0x20.
 struct CmdRecord {
     uint32_t* data;
@@ -125,13 +125,13 @@ inline std::string normalize_name(const std::string& raw) {
 }
 
 // Deferred recording keeps [front blob][pass body][back blob] in one storage.
-// At deferral the front part is recorded (k dwords); 0x227140 then appends the
+// At deferral the front part is recorded (k dwords); 0x2271E0 then appends the
 // back blob. The join cuts the blob, records the body, and appends the blob again.
 struct Splice {
     bool usable=false;
     uint64_t k=0;
 };
-// An empty storage (no record yet) splices with k = 0: whatever 0x227140 adds
+// An empty storage (no record yet) splices with k = 0: whatever 0x2271E0 adds
 // before the join opens record 0 and is all back blob.
 inline Splice prepare_splice(const CmdStorage& storage) noexcept {
     if(!storage.records) return {};
@@ -144,7 +144,7 @@ inline uint64_t total_dwords(const CmdStorage& storage) noexcept {
     for(uint64_t r=0;r<storage.count;++r) total+=storage.records[r].used;
     return total;
 }
-// record(): runs the pass into the storage. allocate(): 0x28CE60 semantics.
+// record(): runs the pass into the storage. allocate(): 0x28CEC0 semantics.
 // observe(storage) sees the body (from record 0 offset k) before the blob is
 // appended again. Returns false when the storage no longer matches the
 // deferral state; the pass is then recorded after the blob (DX11 skips 0xD).

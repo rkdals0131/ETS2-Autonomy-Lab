@@ -18,7 +18,7 @@ namespace {
 int failures=0;
 void check(bool ok,const char* what) {std::printf("%s %s\n",ok?"PASS":"FAIL",what);if(!ok) ++failures;}
 
-// A storage with small chunks; allocate() follows 0x28CE60 (strict "<" bound,
+// A storage with small chunks; allocate() follows 0x28CEC0 (strict "<" bound,
 // a new record starts with used = n).
 struct FakeStorage {
     static constexpr uint64_t chunk=64;
@@ -52,10 +52,10 @@ std::vector<uint32_t> blob(uint32_t tag) {return {0xD,0x1000+tag,0x2000+tag,0x30
 
 void splice_order() {
     FakeStorage f;
-    f.append({0xD,1,2,3});                                  // front blob, before 0x226960
+    f.append({0xD,1,2,3});                                  // front blob, before 0x226A00
     const auto splice=prepare_splice(f.storage);
     check(splice.usable && splice.k==4,"deferral records k after the front blob");
-    f.append({0xD,7,8,9});                                  // back blob written by 0x227140
+    f.append({0xD,7,8,9});                                  // back blob written by 0x2271E0
     std::vector<uint32_t> tail,observed;
     const bool used=run_spliced(f.storage,splice,tail,
         [&]{f.append({0x14,5});f.append({0x14,6});f.append({4});},
@@ -152,7 +152,7 @@ void text_gate() {
 }
 // A task manager table like the engine's: [0] submit starts executors-1
 // threads that call the body, [3] wait runs one executor on the caller and
-// joins the rest (0x167E90 / 0x167DD0 semantics).
+// joins the rest (0x167F30 / 0x167E70 semantics).
 std::vector<std::thread> fake_threads;
 void fake_submit(void*,ot::loop::EngineTask* task) {
     for(unsigned i=1;i<task->executors;++i) fake_threads.emplace_back([task]{task->body(task->capture,task);});
@@ -200,7 +200,7 @@ void engine_loop() {
         }
     }
     ot::loop::EngineTask task{};
-    check(reinterpret_cast<uintptr_t>(&task.body)-reinterpret_cast<uintptr_t>(&task)==0x40,"task body sits at +0x40 like 0xC74AA0");
+    check(reinterpret_cast<uintptr_t>(&task.body)-reinterpret_cast<uintptr_t>(&task)==0x40,"task body sits at +0x40 like 0xC75570");
 }
 void alternate() {
     using ot::passes::Summary;
