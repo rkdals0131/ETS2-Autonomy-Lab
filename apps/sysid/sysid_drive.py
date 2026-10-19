@@ -65,7 +65,7 @@ class Session:
         self.status_time = now
         r = self.last or {}
         pos = r.get("pos")
-        data = {"run_dir": str(self.out), "state": self.state, "message": self.message, "phase": self.phase,
+        data = {"run_dir": str(self.out), "updated": time.time(), "state": self.state, "message": self.message, "phase": self.phase,
                 "index": self.index, "step_elapsed": now - self.step_start if self.index >= 0 else 0.0,
                 "steps": [{"label": s.label, "group": s.group, "seconds": s.seconds} for s in self.steps],
                 "live": {"speed_kmh": (r.get("speed") or 0) * 3.6, "eff_steer": r.get("eff_steer"), "cmd_steer": self.steer,

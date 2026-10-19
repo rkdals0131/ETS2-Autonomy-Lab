@@ -72,19 +72,36 @@ def render(st):
                  title=f"OT sysid  {Path(st['run_dir']).name}", border_style=color)
 
 
+# Seconds the final screen stays up before the window closes itself; a stop keeps it
+# longer so the reason can be read (it is also in the run log).
+LINGER = {"done": 5, "stopped": 30}
+# A running status that stops changing for this long means the driver process is gone.
+STALE_S = 20
+
+
 def main():
     path = sys.argv[1]
-    st = None
+    st, start = None, time.time()
     with Live(Text("waiting for status.json ..."), refresh_per_second=8, screen=False) as live:
         while True:
             st = load(path) or st
             if st:
                 live.update(render(st))
-                if st["state"] in ("done", "stopped"):
+                if st["state"] in LINGER:
+                    break
+                if time.time() - st.get("updated", start) > STALE_S:
+                    st["state"], st["message"] = "stopped", f"no status update for {STALE_S} s (driver exited?)"
+                    live.update(render(st))
                     break
             time.sleep(0.12)
-    input("\nPress Enter to close.")
+    end = time.monotonic() + LINGER[st["state"]]
+    while (left := end - time.monotonic()) > 0:
+        print(f"\rclosing in {left:3.0f} s (Ctrl+C closes now)", end="", flush=True)
+        time.sleep(0.25)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
