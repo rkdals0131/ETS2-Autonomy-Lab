@@ -98,10 +98,15 @@ SCENARIOS = [
     ("arc R700 120 deg, 100 km/h", 100, [(700 * 2 * math.pi / 3, 1 / 700), (200, 0)], 0.0),
     ("S-curve R700 2x60 deg, 100 km/h", 100, [(700 * math.pi / 3, 1 / 700), (700 * math.pi / 3, -1 / 700), (200, 0)], 0.0),
     ("3.5 m lane shift over 200 m, 100 km/h", 100, [(300, 0)] + lane_shift(3.5, 200) + [(500, 0)], 0.0),
+    # Large initial errors and tight low-speed turns (optional 5th field: lane heading offset, deg).
+    ("lane 3 m right of truck, 60 km/h", 60, [(700, 0)], -3.0),
+    ("lane heading +8 deg from truck, 60 km/h", 60, [(700, 0)], 0.0, 8.0),
+    ("arc R40 90 deg, 15 km/h", 15, [(30, 0), (40 * math.pi / 2, 1 / 40), (80, 0)], 0.0),
+    ("arc R60 180 deg, 25 km/h", 25, [(40, 0), (60 * math.pi, 1 / 60), (80, 0)], 0.0),
 ]
 
 
-def run_scenario(s: Session, lat: Lateral, out_dir: Path, log, name, kmh, segments, shift, idx):
+def run_scenario(s: Session, lat: Lateral, out_dir: Path, log, name, kmh, segments, shift, idx, heading_deg=0.0):
     v = kmh / 3.6
     straight_need = sum(L for L, _ in segments) + LEAD_IN + v * 25 + 300
     s.ensure_room(min(straight_need, 2500))
@@ -110,7 +115,7 @@ def run_scenario(s: Session, lat: Lateral, out_dir: Path, log, name, kmh, segmen
     x, y, yaw = ros_pose(r)
     pts = None
     for mirror in (1, -1):
-        cand = build_lane(x, y, yaw, [(L, mirror * k) for L, k in segments], shift)
+        cand = build_lane(x, y, yaw + math.radians(heading_deg), [(L, mirror * k) for L, k in segments], shift)
         if inside(cand):
             pts = cand
             break
@@ -119,7 +124,7 @@ def run_scenario(s: Session, lat: Lateral, out_dir: Path, log, name, kmh, segmen
         r = s.drive(6, v, s.hold(), f"lane:{idx}:speed_up")
         x, y, yaw = ros_pose(r)
         for mirror in (1, -1):
-            cand = build_lane(x, y, yaw, [(L, mirror * k) for L, k in segments], shift)
+            cand = build_lane(x, y, yaw + math.radians(heading_deg), [(L, mirror * k) for L, k in segments], shift)
             if inside(cand):
                 pts = cand
                 break
@@ -142,7 +147,7 @@ def run_scenario(s: Session, lat: Lateral, out_dir: Path, log, name, kmh, segmen
             log.write(json.dumps(row) + "\n")
             if len(rows) % 12 == 0:
                 s.message = f"{name}: offset {c['offset']:+.3f} m, heading err {math.degrees(c['heading_error']):+.2f} deg, remaining {c['remaining']:.0f} m"
-            if c["distance"] > 2.5:
+            if c["distance"] > max(2.5, abs(shift) + 1.5):
                 result["aborted"] = f"lane lost: {c['distance']:.2f} m"
                 break
             if c["remaining"] < 5:
@@ -203,10 +208,12 @@ def main():
     chosen = [i for i in range(len(SCENARIOS)) if not a.only or str(i) in a.only.split(",")]
     s.steps = [Step("launch at 18 km/h", "start", 8, lambda: sd.launch(s))]
     for i in chosen:
-        name, kmh, segs, shift = SCENARIOS[i]
+        name, kmh, segs, shift, *rest = SCENARIOS[i]
+        dyaw = rest[0] if rest else 0.0
         est = (sum(L for L, _ in segs) + LEAD_IN) / (kmh / 3.6) + 12
         s.steps.append(Step(name, "lane keeping", est,
-                            lambda i=i, n=name, k=kmh, g=segs, sh=shift: results.append(with_retry(s, lambda: run_scenario(s, lat, out, log, n, k, g, sh, i)))))
+                            lambda i=i, n=name, k=kmh, g=segs, sh=shift, dy=dyaw:
+                            results.append(with_retry(s, lambda: run_scenario(s, lat, out, log, n, k, g, sh, i, dy)))))
     s.steps.append(Step("stop", "end", 10, lambda: s.drive(10, 0.0, s.hold(), "stop")))
     s.status(force=True)
     if a.view:
