@@ -12,19 +12,21 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <numbers>
 #include <string>
+#include <vector>
 
 namespace {
 // Wheelbase from the SDK wheel positions; wheel angle per unit at 20-80 km/h.
 constexpr double wheelbase=3.734,angle_per_unit=.70,game_dt=1.0/60,control_dt=.02;
 
-// Measured steering plant: rate a (/s) and self-centering c (/s) at 0..80 km/h, held beyond.
+// Measured steering plant: rate a (/s) and self-centering c (/s) at 0..96.8 km/h, held beyond.
 std::array<double,2> measured_plant(double speed) {
-    constexpr double kmh[]{0,20,40,60,80},a[]{.650,.570,.489,.401,.320},c[]{0,.939,1.624,1.995,2.108};
-    const auto x=std::min(std::abs(speed)*3.6,80.0);
-    int i=0;while(i<3 && x>kmh[i+1]) ++i;
+    constexpr double kmh[]{0,20,40,60,80,88.2,96.8},a[]{.650,.570,.489,.401,.320,.284,.261},c[]{0,.939,1.624,1.995,2.108,2.084,2.093};
+    const auto x=std::min(std::abs(speed)*3.6,96.8);
+    int i=0;while(i<5 && x>kmh[i+1]) ++i;
     const auto f=(x-kmh[i])/(kmh[i+1]-kmh[i]);
     return {a[i]+f*(a[i+1]-a[i]),c[i]+f*(c[i+1]-c[i])};
 }
@@ -47,7 +49,8 @@ struct PathBuilder {
 
 struct Plant {double rate_scale=1,centering_scale=1,max=.94;}; // scales of the measured a(v), c(v)
 struct Scenario {std::string name;Points points;double speed,offset=0,duration=0,settle_s=0;Plant plant{};};
-struct Metrics {double max_offset=0,settled_offset=0,rms=0,overshoot=0,max_applied=0;int reversals=0;double input_variation=0;};
+struct Metrics {double max_offset=0,settled_offset=0,rms=0,overshoot=0,max_applied=0;int reversals=0;double input_variation=0;
+                int extensions=0;std::vector<double> offsets;}; // offsets: lane offset per controller tick
 
 // A controller maps (lane, pose, speed, applied steering) to the relative input u.
 using Controller=std::function<double(LanePath&,double,double,double,double,double)>;
@@ -74,8 +77,15 @@ Controller current(VirtualEps::Settings eps_settings={},LateralController::Setti
     };
 }
 
-Metrics simulate(const Scenario& scenario,Controller controller) {
-    LanePath lane(scenario.points,3.5),truth(scenario.points,3.5);
+// rolling: like map_lane_provider --follow, the controller's lane starts with the first
+// 1000 m and is extended to 1000 m ahead of the vehicle whenever less than 600 m remain.
+Metrics simulate(const Scenario& scenario,Controller controller,bool rolling=false) {
+    LanePath truth(scenario.points,3.5);
+    const auto window=[&](double from,double to) {
+        Points xy;for(const auto& p:truth.points) if(p.s>from && p.s<=to) xy.push_back({p.x,p.y});
+        return xy;
+    };
+    LanePath lane=rolling?LanePath(window(-1,1000),3.5):truth;
     const auto heading=lane.heading(0);const auto start=lane.at(0);
     double x=start.x-std::sin(heading)*scenario.offset,y=start.y+std::cos(heading)*scenario.offset,yaw=heading;
     double applied=std::clamp(std::atan(wheelbase*lane.curvature(0,5))/angle_per_unit,-1.0,1.0);
@@ -87,9 +97,11 @@ Metrics simulate(const Scenario& scenario,Controller controller) {
         const auto t=n*game_dt;
         // Controller ticks in (t_{n-1}, t_n] see the state after frame n-1.
         for(;next_control<=t;next_control+=control_dt) {
+            if(rolling && lane.remaining()<600 && lane.extend(window(lane.points.back().s,lane.progress+1000))>0) ++m.extensions;
             command=controller(lane,x,y,yaw,scenario.speed,applied);
             m.input_variation+=std::abs(command-last_u);last_u=command;
             const auto p=truth.track(x,y);
+            m.offsets.push_back(p.offset);
             m.max_offset=std::max(m.max_offset,std::abs(p.offset));
             if(next_control>=scenario.settle_s) {m.settled_offset=std::max(m.settled_offset,std::abs(p.offset));sum2+=p.offset*p.offset;++samples;}
             if(scenario.offset>0) m.overshoot=std::max(m.overshoot,-p.offset);
@@ -148,6 +160,54 @@ TEST(LanePath,CurvatureOfArcs) {
     EXPECT_NEAR(lane.curvature(700,5),-1/1000.0,1e-6);
 }
 
+TEST(LanePath,ExtendMatchesWholePath) {
+    const auto all=PathBuilder{}.add(50,0).add(600,1/300.0).add(400,-1/700.0).add(200,0).points;
+    const LanePath whole(all,3.5);
+    LanePath rolling(Points(all.begin(),all.begin()+300),3.5);
+    for(double s=0;s<400;s+=.5) {const auto p=rolling.at(s);rolling.track(p.x,p.y);}
+    const auto progress=rolling.progress;
+    // The joint point repeats, as a provider revision restarts at a published point.
+    EXPECT_EQ(rolling.extend(Points(all.begin()+299,all.begin()+600)),300u);
+    EXPECT_EQ(rolling.extend(Points(all.begin()+600,all.end())),all.size()-600);
+    ASSERT_EQ(rolling.points.size(),whole.points.size());
+    EXPECT_EQ(rolling.progress,progress);
+    for(size_t i=0;i<whole.points.size();++i) {EXPECT_EQ(rolling.points[i].s,whole.points[i].s);EXPECT_EQ(rolling.points[i].x,whole.points[i].x);}
+    for(size_t i=0;i<whole.headings.size();++i) EXPECT_EQ(rolling.headings[i],whole.headings[i]);
+    for(double s=0;s<whole.points.back().s;s+=3.7) EXPECT_EQ(rolling.curvature(s,6),whole.curvature(s,6));
+}
+
+TEST(LanePath,ExtendFromProviderRevision) {
+    // Two revisions of a rolling provider file: the second drops points behind the
+    // vehicle (start_s > 0) and appends ahead.
+    const auto all=PathBuilder{}.add(100,0).add(900,1/400.0).add(500,0).points;
+    const LanePath whole(all,3.5);
+    ASSERT_EQ(whole.points.size(),1000u);
+    const auto dir=std::filesystem::temp_directory_path()/"ets2_lane_extend_test";
+    std::filesystem::create_directories(dir);
+    const auto write=[&](const std::string& name,size_t from,size_t to,long long revision,long long path_id,double shift=0) {
+        nlohmann::json data{{"frame_id","world"},{"lane_width_m",4.5},{"end_reason","distance_limit"},{"revision",revision},{"path_id",path_id},{"start_s",whole.points[from].s}};
+        for(auto i=from;i<to;++i) data["points"].push_back({whole.points[i].x,whole.points[i].y+shift});
+        std::ofstream((dir/name).string())<<data.dump();
+        return (dir/name).string();
+    };
+    LanePath lane(write("r1.json",0,700,1,3));
+    EXPECT_EQ(lane.revision,1);EXPECT_EQ(lane.path_id,3);EXPECT_EQ(lane.start_s,0);
+    for(double s=0;s<300;s+=.5) {const auto p=lane.at(s);lane.track(p.x,p.y);}
+    EXPECT_EQ(lane.extend(write("r1.json",0,700,1,3)),0u);   // same revision: nothing to do
+    EXPECT_EQ(lane.extend(write("r2.json",150,900,2,3)),200u);
+    EXPECT_EQ(lane.revision,2);
+    // A newer file that is not this path's continuation: another path, or no point
+    // coinciding with this path's end (a reset that kept the path_id).
+    EXPECT_THROW(lane.extend(write("other.json",600,1000,3,4)),std::runtime_error);
+    EXPECT_THROW(lane.extend(write("moved.json",600,1000,3,3,1)),std::runtime_error);
+    EXPECT_EQ(lane.revision,2);
+    EXPECT_EQ(lane.extend(write("r3.json",800,1000,3,3)),100u);
+    ASSERT_EQ(lane.points.size(),whole.points.size());
+    for(size_t i=0;i<lane.points.size();++i) {EXPECT_NEAR(lane.points[i].s,whole.points[i].s,1e-9);EXPECT_EQ(lane.points[i].y,whole.points[i].y);}
+    EXPECT_NEAR(lane.progress,299.5,1e-6);
+    std::filesystem::remove_all(dir);
+}
+
 TEST(VirtualEps,TracksRampWithoutLagAndHolds) {
     VirtualEps eps;double applied=0;
     for(int k=0;k<100;++k) {const auto target=.2*k*control_dt;applied+=.65*control_dt*eps.command(target,.2,applied,0,control_dt,{});}
@@ -159,7 +219,7 @@ TEST(VirtualEps,TracksRampWithoutLagAndHolds) {
 }
 
 TEST(VirtualEps,PlantTableMatchesMeasurement) {
-    for(const double v:{0.0,3.0,20/3.6,8.0,40/3.6,15.0,60/3.6,20.0,80/3.6,30.0,-10.0}) {
+    for(const double v:{0.0,3.0,20/3.6,8.0,40/3.6,15.0,60/3.6,20.0,80/3.6,23.5,88.2/3.6,25.0,96.8/3.6,30.0,-10.0}) {
         const auto p=VirtualEps::plant(v);const auto [a,c]=measured_plant(v);
         EXPECT_NEAR(p.rate,a,1e-12);EXPECT_NEAR(p.centering,c,1e-12);
     }
@@ -197,8 +257,24 @@ TEST(LateralSim,SCurve) {
     }
 }
 
+TEST(LateralSim,RollingLaneSplicesWithoutTransient) {
+    // The controller lane grows by provider-style revisions while the vehicle drives
+    // through curves; the trajectory must equal the one on the whole lane.
+    for(const double speed:{15.0,25.0}) {
+        const Scenario s{"rolling lane S-curves "+speed_name(speed),PathBuilder{}.add(100,0).add(500,1/400.0).add(400,-1/300.0).add(300,0).add(600,1/500.0).add(speed*60,0).points,
+                         speed,.5,(1900+speed*40)/speed,20};
+        const auto whole=simulate(s,current()),rolling=simulate(s,current(),true);
+        print("new",s,rolling);
+        ASSERT_EQ(whole.offsets.size(),rolling.offsets.size());
+        double difference=0;
+        for(size_t i=0;i<whole.offsets.size();++i) difference=std::max(difference,std::abs(whole.offsets[i]-rolling.offsets[i]));
+        EXPECT_GE(rolling.extensions,2);EXPECT_LT(difference,1e-9);
+        EXPECT_LT(rolling.settled_offset,.03);EXPECT_LE(rolling.reversals,8); // 6: initial offset and four curve changes
+    }
+}
+
 TEST(LateralSim,CenteringCompensation) {
-    // 80 km/h is the fastest measured point (c 2.1/s): the inverse removes the P-loop
+    // At 80 km/h the centering is near its measured maximum (c 2.1/s): the inverse removes the P-loop
     // steering deficit that the self-centering otherwise leaves in a steady turn.
     auto s=arc(400,80/3.6);s.name="arc R400 80 km/h";
     const auto [old,now]=compare(s);

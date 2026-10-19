@@ -4,8 +4,8 @@
 // d(applied)/dt = rate(v)*u - centering(v)*applied, |u| 0.02..1 both signs, no
 // deadzone, about one game frame of delay. rate falls almost linearly with speed
 // (0.652 - 0.0148*v[m/s]); the self-centering is 0 at standstill and saturates
-// near 2.1 /s (fit R^2 0.98/0.96/0.92/0.87 at 20/40/60/80 km/h). The table is
-// measured only up to 80 km/h for this truck; the end values are held beyond.
+// near 2.1 /s (fit R^2 0.98/0.96/0.92/0.87/0.86/0.92 at 20/40/60/80/88/97 km/h). The
+// table is measured only up to 97 km/h for this truck; the end values are held beyond.
 // Inverting the plant (rate feedforward + centering compensation) and a P term
 // kp = bandwidth/rate(v) give d(error)/dt = -bandwidth*error at every speed, so
 // there is no integral term.
@@ -25,10 +25,11 @@ struct VirtualEps {
         double bandwidth=6.5;  // rad/s, inner-loop error decay rate
         double rate_limit=0;   // target slew limit, units/s; 0 disables
     };
-    // Measured plant at speed (m/s), piecewise linear between 0/20/40/60/80 km/h.
+    // Measured plant at speed (m/s), piecewise linear between 0/20/40/60/80/88/97 km/h
+    // (the last two are the mean speeds of the 90 and 100 km/h blocks, sysid-20261020-033402).
     static Plant plant(double speed) {
-        static constexpr std::array<double,5> v{0,20/3.6,40/3.6,60/3.6,80/3.6};
-        static constexpr std::array<Plant,5> p{{{.650,0},{.570,.939},{.489,1.624},{.401,1.995},{.320,2.108}}};
+        static constexpr std::array<double,7> v{0,20/3.6,40/3.6,60/3.6,80/3.6,88.2/3.6,96.8/3.6};
+        static constexpr std::array<Plant,7> p{{{.650,0},{.570,.939},{.489,1.624},{.401,1.995},{.320,2.108},{.284,2.084},{.261,2.093}}};
         speed=std::isfinite(speed)?std::abs(speed):0;
         if(speed>=v.back()) return p.back();
         std::size_t i=0;while(speed>v[i+1]) ++i;

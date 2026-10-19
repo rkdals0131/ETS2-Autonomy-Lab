@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <fstream>
 #include <limits>
 #include <numbers>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 struct LanePath {
@@ -16,17 +19,21 @@ struct LanePath {
     std::vector<double> headings; // per segment, unwrapped
     double width=0,progress=0;
     bool tracked=false;
+    // Rolling provider files (map_lane_provider --follow): arc length of points.front()
+    // in the provider's path (start_s), its path_id and the revision loaded last.
+    double start_s=0;
+    long long path_id=0,revision=0;
     // Ego search span past progress. The ego moves <1 m per 20 ms cycle; a
     // nearest point at the span end or off the lane falls back to the full scan.
     static constexpr double track_window_m=100;
+    // A newer revision continues this path from the point at the same provider arc length.
+    static constexpr double splice_tolerance_m=.01;
     explicit LanePath(const std::string& file) {
-        std::ifstream input(file);nlohmann::json data;input>>data;
-        if(data.at("frame_id")!="world") throw std::runtime_error("Lane path must use ROS world coordinates");
+        const auto data=read(file);
         width=data.at("lane_width_m").get<double>();
         if(!std::isfinite(width) || width<=0) throw std::runtime_error("Invalid lane width");
-        std::vector<std::array<double,2>> xy;
-        for(const auto& p:data.at("points")) xy.push_back({p.at(0).get<double>(),p.at(1).get<double>()});
-        load(xy);
+        start_s=data.value("start_s",0.0);path_id=data.value("path_id",0LL);revision=data.value("revision",0LL);
+        load(coordinates(data));
     }
     LanePath(const std::vector<std::array<double,2>>& xy,double lane_width):width(lane_width) {
         if(!std::isfinite(width) || width<=0) throw std::runtime_error("Invalid lane width");
@@ -94,17 +101,65 @@ struct LanePath {
         const auto p=track(x,y);
         return {pursuit(x,y,yaw,lookahead),remaining(),p.d};
     }
+    // Appends points after the end. Existing points, their s and headings, progress and
+    // the tracking window are unchanged; lookups up to the old last segment midpoint
+    // give the same values, only the extrapolation beyond it is replaced. A vehicle whose
+    // lookahead and curvature window stay short of the old end sees no change. Returns the count added.
+    size_t extend(const std::vector<std::array<double,2>>& xy) {
+        const auto before=points.size();
+        append(xy);
+        return points.size()-before;
+    }
+    // Splices a newer revision of the provider file: its points from the one at this
+    // path's last provider arc length on (start_s + s) are appended. Returns the count
+    // added, 0 for an older or the same revision. Throws when the file does not continue
+    // this path (another path_id, a reset, or more than the provider trimmed ahead of the
+    // vehicle); the caller then loads the file as a new LanePath.
+    size_t extend(const std::string& file) {
+        const auto data=read(file);
+        const auto next=data.value("revision",0LL);
+        if(next<=revision) return 0;
+        if(data.value("path_id",0LL)!=path_id) throw std::runtime_error("Lane file belongs to another path");
+        const auto end=start_s+points.back().s;
+        const auto all=coordinates(data);
+        double s=data.value("start_s",0.0);
+        for(size_t i=0;i<all.size();++i) {
+            if(i>0) s+=std::hypot(all[i][0]-all[i-1][0],all[i][1]-all[i-1][1]);
+            if(s>end+splice_tolerance_m) break;
+            if(std::abs(s-end)<=splice_tolerance_m && std::hypot(all[i][0]-points.back().x,all[i][1]-points.back().y)<=splice_tolerance_m) {
+                const auto added=extend(std::vector<std::array<double,2>>(all.begin()+std::ptrdiff_t(i)+1,all.end()));
+                revision=next;
+                return added;
+            }
+        }
+        throw std::runtime_error("Lane file revision does not continue this path");
+    }
 private:
+    static nlohmann::json read(const std::string& file) {
+        std::ifstream input(file);
+        if(!input) throw std::runtime_error("Cannot open lane file "+file);
+        nlohmann::json data;input>>data;
+        if(data.at("frame_id")!="world") throw std::runtime_error("Lane path must use ROS world coordinates");
+        return data;
+    }
+    static std::vector<std::array<double,2>> coordinates(const nlohmann::json& data) {
+        std::vector<std::array<double,2>> out;
+        for(const auto& p:data.at("points")) out.push_back({p.at(0).get<double>(),p.at(1).get<double>()});
+        return out;
+    }
     void load(const std::vector<std::array<double,2>>& xy) {
+        append(xy);
+        if(points.size()<2) throw std::runtime_error("Lane path needs two distinct points");
+    }
+    void append(const std::vector<std::array<double,2>>& xy) {
+        for(const auto& [x,y]:xy) if(!std::isfinite(x) || !std::isfinite(y)) throw std::runtime_error("Nonfinite lane point");
         for(const auto& [x,y]:xy) {
-            if(!std::isfinite(x) || !std::isfinite(y)) throw std::runtime_error("Nonfinite lane point");
             const auto distance=points.empty()?0:std::hypot(x-points.back().x,y-points.back().y);
             if(!points.empty() && distance==0) continue;
             points.push_back({x,y,points.empty()?0:points.back().s+distance});
-        }
-        if(points.size()<2) throw std::runtime_error("Lane path needs two distinct points");
-        for(size_t i=0;i+1<points.size();++i) {
-            const auto h=std::atan2(points[i+1].y-points[i].y,points[i+1].x-points[i].x);
+            if(points.size()<2) continue;
+            const auto& a=points[points.size()-2];
+            const auto h=std::atan2(y-a.y,x-a.x);
             headings.push_back(headings.empty()?h:headings.back()+std::remainder(h-headings.back(),2*std::numbers::pi));
         }
     }

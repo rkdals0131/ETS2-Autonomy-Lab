@@ -28,6 +28,16 @@ __declspec(dllexport) const char* lat_last_error() {return last_error.c_str();}
 __declspec(dllexport) void lat_destroy(void* handle) {delete static_cast<Handle*>(handle);}
 __declspec(dllexport) double lat_lane_width(void* handle) {return static_cast<Handle*>(handle)->lane.width;}
 
+// Appends the points of a newer revision of the lane file (map_lane_provider --follow
+// rewrites it in place). Returns the number of points added (0: not newer), or -1 when
+// the file cannot be read or does not continue this path (lat_last_error()); the
+// caller then creates a new handle from the file. The steering state is kept.
+__declspec(dllexport) long long lat_extend(void* handle,const char* lane_json) {
+    try {return static_cast<long long>(static_cast<Handle*>(handle)->lane.extend(std::string(lane_json)));}
+    catch(const std::exception& e) {last_error=e.what();return -1;}
+}
+__declspec(dllexport) long long lat_revision(void* handle) {return static_cast<Handle*>(handle)->lane.revision;}
+
 // Pose in ROS world (x east, y = -SCS z, yaw counterclockwise from +x) at the rear
 // (bicycle) axle. applied = SDK effective steering. out[10]:
 // 0 command u, 1 steering target, 2 target rate, 3 wheel angle, 4 offset (left +),
