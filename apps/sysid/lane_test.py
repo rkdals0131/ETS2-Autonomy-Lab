@@ -92,6 +92,12 @@ SCENARIOS = [
     ("S-curve R300 3x90 deg, 60 km/h", 60, [(300 * math.pi / 2, 1 / 300), (300 * math.pi / 2, -1 / 300), (300 * math.pi / 2, 1 / 300), (150, 0)], 0.0),
     ("S-curve R300 3x90 deg, 80 km/h", 80, [(300 * math.pi / 2, 1 / 300), (300 * math.pi / 2, -1 / 300), (300 * math.pi / 2, 1 / 300), (150, 0)], 0.0),
     ("3.5 m lane shift over 120 m, 80 km/h", 80, [(300, 0)] + lane_shift(3.5, 120) + [(400, 0)], 0.0),
+    # Motorway-like: 90/100 km/h, radii from 700 m.
+    ("straight, lane 1 m left, 100 km/h", 100, [(1800, 0)], 1.0),
+    ("arc R700 120 deg, 90 km/h", 90, [(700 * 2 * math.pi / 3, 1 / 700), (200, 0)], 0.0),
+    ("arc R700 120 deg, 100 km/h", 100, [(700 * 2 * math.pi / 3, 1 / 700), (200, 0)], 0.0),
+    ("S-curve R700 2x60 deg, 100 km/h", 100, [(700 * math.pi / 3, 1 / 700), (700 * math.pi / 3, -1 / 700), (200, 0)], 0.0),
+    ("3.5 m lane shift over 200 m, 100 km/h", 100, [(300, 0)] + lane_shift(3.5, 200) + [(500, 0)], 0.0),
 ]
 
 
@@ -172,14 +178,15 @@ def summarize(rows):
 
 
 def with_retry(s, run):
-    """Retry a scenario once if a game hitch let the command window expire."""
-    try:
+    """Re-arm and rerun a scenario after game hitches let the command window expire."""
+    tries = []
+    def counted():
+        tries.append(1)
         return run()
-    except sd.Expired:
-        sd.rearm(s)
-        result = run()
-        result["retried_after_expiry"] = True
-        return result
+    result = sd.run_with_rearm(s, counted)
+    if len(tries) > 1:
+        result["retries_after_expiry"] = len(tries) - 1
+    return result
 
 
 def main():

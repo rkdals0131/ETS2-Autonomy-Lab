@@ -352,11 +352,7 @@ def main():
         for i, step in enumerate(s.steps):
             s.index, s.step_start = i, time.monotonic()
             s.status(force=True)
-            try:
-                step.run()
-            except Expired:
-                rearm(s)
-                step.run()
+            run_with_rearm(s, step.run)
         s.index = len(s.steps)
         s.state, s.message = "done", "all steps finished"
         print("done", flush=True)
@@ -403,6 +399,16 @@ def wait_focus_and_arm(s):
 def rearm(s):
     """Arm again after an Expired release (same lease); the caller retries its step."""
     s.seen, s.stale = False, 0
+    # Wait for the hitch to pass: 1 s of frames no more than 100 ms apart.
+    calm_since, last = time.monotonic(), s.frame()["t"]
+    until = time.monotonic() + 20
+    while time.monotonic() - calm_since < 1.0:
+        t = s.frame()["t"]
+        if t - last > 0.1:
+            calm_since = t
+        last = t
+        if time.monotonic() > until:
+            raise Stop("game frames did not settle after the expiry")
     until = time.monotonic() + 10
     while True:
         r = s.client.request("drive", action="arm", owner=s.lease, drive_owner=s.lease, axes=3)
@@ -413,6 +419,17 @@ def rearm(s):
             raise Stop(f"re-arm after expiry not accepted: {r.get('reason')}")
         s.frame()
     print("re-armed after expiry", s.epoch, flush=True)
+
+
+def run_with_rearm(s, run, attempts=3):
+    """Run a step; after an Expired release re-arm and run it again, up to `attempts` times."""
+    for attempt in range(attempts):
+        try:
+            return run()
+        except Expired:
+            if attempt == attempts - 1:
+                raise
+            rearm(s)
 
 
 def release(s):
