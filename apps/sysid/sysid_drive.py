@@ -209,7 +209,7 @@ def room_ahead(pos, goal):
     return min(d) if d else 1e9
 
 
-def plan(s: Session, speeds_kmh):
+def plan(s: Session, speeds_kmh, brakes=(0.2, 0.5, 1.0), throttles=(0.3, 0.6, 1.0), coast_down=True):
     steps = [Step("launch at 18 km/h", "start", 8, lambda: launch(s))]
     for kmh in speeds_kmh:
         v = kmh / 3.6
@@ -224,10 +224,11 @@ def plan(s: Session, speeds_kmh):
                               lambda v=v, k=kmh, f=f, a=amp: sine(s, v, k, f, a)))
         eff = math.atan(WHEELBASE * 2.0 / max(v, 4) ** 2) / ANGLE_PER_UNIT
         steps.append(Step(f"steady turn 2 m/s^2 (eff {eff:.3f})", f"{kmh} km/h", 12, lambda v=v, k=kmh, e=eff: turn(s, v, k, e)))
-    steps.append(Step("coast-down 15 s from top speed", "longitudinal", 15, lambda: coast(s)))
-    for b in (0.2, 0.5, 1.0):
+    if coast_down:
+        steps.append(Step("coast-down 15 s from top speed", "longitudinal", 15, lambda: coast(s)))
+    for b in brakes:
         steps.append(Step(f"brake step {b} from 60 km/h", "longitudinal", 24, lambda b=b: brake_step(s, b)))
-    for a in (0.3, 0.6, 1.0):
+    for a in throttles:
         steps.append(Step(f"throttle step {a} from standstill", "longitudinal", 23, lambda a=a: throttle_step(s, a)))
     return steps
 
@@ -329,13 +330,17 @@ def _game_pid():
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--speeds", default="20,40,60,80", help="comma-separated km/h")
+    p.add_argument("--speeds", default="20,40,60,80", help="comma-separated km/h for the lateral blocks ('' for none)")
+    p.add_argument("--brakes", default="0.2,0.5,1.0", help="brake step inputs from 60 km/h ('' for none)")
+    p.add_argument("--throttles", default="0.3,0.6,1.0", help="throttle step inputs from standstill ('' for none)")
+    p.add_argument("--no-coast", action="store_true", help="skip the coast-down")
     p.add_argument("--view", action="store_true", help="open the progress viewer in a new PowerShell window")
     a = p.parse_args()
     out = ROOT / "bridge" / "recordings" / time.strftime("sysid-%Y%m%d-%H%M%S")
     out.mkdir(parents=True)
     s = Session(out)
-    s.steps = plan(s, [int(k) for k in a.speeds.split(",")])
+    values = lambda text, kind: [kind(x) for x in text.split(",") if x.strip()]
+    s.steps = plan(s, values(a.speeds, int), values(a.brakes, float), values(a.throttles, float), not a.no_coast)
     s.status(force=True)
     if a.view:
         open_viewer(out / "status.json")
@@ -347,7 +352,11 @@ def main():
         for i, step in enumerate(s.steps):
             s.index, s.step_start = i, time.monotonic()
             s.status(force=True)
-            step.run()
+            try:
+                step.run()
+            except Expired:
+                rearm(s)
+                step.run()
         s.index = len(s.steps)
         s.state, s.message = "done", "all steps finished"
         print("done", flush=True)
