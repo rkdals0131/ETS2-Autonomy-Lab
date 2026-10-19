@@ -166,7 +166,7 @@ int main(int argc,char** argv) {
             command.steering=lcc?steering_target:0;
             if(lcc && settings->relative_steering) {
                 if(!std::isfinite(drive->steering_applied)) throw std::runtime_error("Applied steering feedback is unavailable");
-                command.steering=eps.command(steering_target,steering_rate,drive->steering_applied,dt,eps_settings(*settings));
+                command.steering=eps.command(steering_target,steering_rate,drive->steering_applied,vehicle->speed_mps,dt,eps_settings(*settings));
             }
             const auto speed_kp=(error>=0?settings->throttle_gain:settings->brake_gain);
             if(speed_target==0) speed_integral=0;

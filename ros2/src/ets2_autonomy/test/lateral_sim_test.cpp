@@ -1,10 +1,15 @@
 // Offline closed loop: kinematic bicycle + measured relative-steering plant
-// (integrator 0.65/s, one game frame delay, 60 Hz game) and the 50 Hz
-// controller. The baseline (pure pursuit + applied-steering PI) runs in the same
-// loop for comparison only; its metrics are printed, not asserted.
+// (2026-10-20, Scania S without trailer: d(applied)/dt = a(v)*u - c(v)*applied,
+// one game frame delay, 60 Hz game) and the 50 Hz controller. The plant table is
+// an independent copy of the measurement, not VirtualEps::plant, so the test
+// checks the controller against the plant. The baseline (pure pursuit +
+// applied-steering PI) runs in the same loop for comparison only; its metrics are
+// printed, not asserted.
 #include "control/lateral_controller.hpp"
 #include "control/virtual_eps.hpp"
 #include <gtest/gtest.h>
+#include <array>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <functional>
@@ -12,7 +17,17 @@
 #include <string>
 
 namespace {
-constexpr double wheelbase=3.824,angle_per_unit=.7087,game_dt=1.0/60,control_dt=.02;
+// Wheelbase from the SDK wheel positions; wheel angle per unit at 20-80 km/h.
+constexpr double wheelbase=3.734,angle_per_unit=.70,game_dt=1.0/60,control_dt=.02;
+
+// Measured steering plant: rate a (/s) and self-centering c (/s) at 0..80 km/h, held beyond.
+std::array<double,2> measured_plant(double speed) {
+    constexpr double kmh[]{0,20,40,60,80},a[]{.650,.570,.489,.401,.320},c[]{0,.939,1.624,1.995,2.108};
+    const auto x=std::min(std::abs(speed)*3.6,80.0);
+    int i=0;while(i<3 && x>kmh[i+1]) ++i;
+    const auto f=(x-kmh[i])/(kmh[i+1]-kmh[i]);
+    return {a[i]+f*(a[i+1]-a[i]),c[i]+f*(c[i+1]-c[i])};
+}
 
 using Points=std::vector<std::array<double,2>>;
 // Polyline of straights (curvature 0) and arcs, 1.5 m spacing like the map lanes.
@@ -30,7 +45,7 @@ struct PathBuilder {
     }
 };
 
-struct Plant {double rate=.65,centering=0,max=.94;};
+struct Plant {double rate_scale=1,centering_scale=1,max=.94;}; // scales of the measured a(v), c(v)
 struct Scenario {std::string name;Points points;double speed,offset=0,duration=0,settle_s=0;Plant plant{};};
 struct Metrics {double max_offset=0,settled_offset=0,rms=0,overshoot=0,max_applied=0;int reversals=0;double input_variation=0;};
 
@@ -46,11 +61,16 @@ Controller baseline() {
         return std::clamp(proportional+integral,-1.0,1.0);
     };
 }
-Controller current(VirtualEps::Settings eps_settings={},LateralController::Settings settings={}) {
-    return [eps=VirtualEps{},eps_settings,settings](LanePath& lane,double x,double y,double yaw,double v,double applied) mutable {
+// compensate_centering=false removes the c(v)*applied/a(v) term again (exact while
+// the command is not saturated), to show what the centering compensation buys.
+Controller current(VirtualEps::Settings eps_settings={},LateralController::Settings settings={},bool compensate_centering=true) {
+    return [eps=VirtualEps{},eps_settings,settings,compensate_centering](LanePath& lane,double x,double y,double yaw,double v,double applied) mutable {
         const auto out=LateralController::update(lane,x,y,yaw,v,wheelbase,settings);
         const auto target=std::clamp(out.wheel_angle/angle_per_unit,-1.0,1.0);
-        return eps.command(target,out.wheel_rate/angle_per_unit,applied,control_dt,eps_settings);
+        const auto u=eps.command(target,out.wheel_rate/angle_per_unit,applied,v,control_dt,eps_settings);
+        if(compensate_centering) return u;
+        const auto [a,c]=VirtualEps::plant(v);
+        return std::clamp(u-c*applied/a,-1.0,1.0);
     };
 }
 
@@ -61,6 +81,7 @@ Metrics simulate(const Scenario& scenario,Controller controller) {
     double applied=std::clamp(std::atan(wheelbase*lane.curvature(0,5))/angle_per_unit,-1.0,1.0);
     double latched=0,active=0,command=0,next_control=.003; // controller phase vs game frames
     Metrics m;double sum2=0,last_u=0,extreme=applied;int direction=0,samples=0;
+    const auto [rate,centering]=measured_plant(scenario.speed);
     const auto frames=int(scenario.duration/game_dt);
     for(int n=0;n<frames;++n) {
         const auto t=n*game_dt;
@@ -75,7 +96,7 @@ Metrics simulate(const Scenario& scenario,Controller controller) {
         }
         // The command latched at the previous frame boundary acts over this frame.
         active=latched;latched=command;
-        applied=std::clamp(applied+game_dt*(scenario.plant.rate*active-scenario.plant.centering*applied),-scenario.plant.max,scenario.plant.max);
+        applied=std::clamp(applied+game_dt*(scenario.plant.rate_scale*rate*active-scenario.plant.centering_scale*centering*applied),-scenario.plant.max,scenario.plant.max);
         const auto angle=angle_per_unit*applied;
         // Midpoint heading: explicit Euler would bias heading against travel direction.
         const auto turn=scenario.speed*std::tan(angle)/wheelbase*game_dt;
@@ -129,12 +150,28 @@ TEST(LanePath,CurvatureOfArcs) {
 
 TEST(VirtualEps,TracksRampWithoutLagAndHolds) {
     VirtualEps eps;double applied=0;
-    for(int k=0;k<100;++k) {const auto target=.2*k*control_dt;applied+=.65*control_dt*eps.command(target,.2,applied,control_dt,{});}
+    for(int k=0;k<100;++k) {const auto target=.2*k*control_dt;applied+=.65*control_dt*eps.command(target,.2,applied,0,control_dt,{});}
     EXPECT_NEAR(applied,.2*100*control_dt,1e-9); // exact for the undelayed ideal integrator
-    VirtualEps limited;const VirtualEps::Settings slow{.65,10,.3};
-    const auto first=limited.command(1,0,0,control_dt,slow);
+    VirtualEps limited;const VirtualEps::Settings slow{6.5,.3};
+    const auto first=limited.command(1,0,0,0,control_dt,slow);
     EXPECT_NEAR(first,.3/.65+10*.3*control_dt,1e-12); // target slews from applied, not jumps
-    EXPECT_EQ(VirtualEps{}.command(.5,0,.5,control_dt,{}),0);
+    EXPECT_EQ(VirtualEps{}.command(.5,0,.5,0,control_dt,{}),0);
+}
+
+TEST(VirtualEps,PlantTableMatchesMeasurement) {
+    for(const double v:{0.0,3.0,20/3.6,8.0,40/3.6,15.0,60/3.6,20.0,80/3.6,30.0,-10.0}) {
+        const auto p=VirtualEps::plant(v);const auto [a,c]=measured_plant(v);
+        EXPECT_NEAR(p.rate,a,1e-12);EXPECT_NEAR(p.centering,c,1e-12);
+    }
+}
+
+TEST(VirtualEps,BandwidthIndependentOfSpeed) {
+    // On the undelayed measured plant the error decays by (1 - bandwidth*dt) per cycle at any speed.
+    for(const double v:{0.0,40/3.6,80/3.6}) {
+        VirtualEps eps;double applied=.05;const auto [a,c]=measured_plant(v);
+        for(int k=0;k<10;++k) applied+=control_dt*(a*eps.command(.06,0,applied,v,control_dt,{})-c*applied);
+        EXPECT_NEAR(.06-applied,.01*std::pow(1-6.5*control_dt,10),1e-12);
+    }
 }
 
 TEST(LateralSim,StraightWithOffset) {
@@ -160,19 +197,28 @@ TEST(LateralSim,SCurve) {
     }
 }
 
+TEST(LateralSim,CenteringCompensation) {
+    // 80 km/h is the fastest measured point (c 2.1/s): the inverse removes the P-loop
+    // steering deficit that the self-centering otherwise leaves in a steady turn.
+    auto s=arc(400,80/3.6);s.name="arc R400 80 km/h";
+    const auto [old,now]=compare(s);
+    s.name="arc R400 80 km/h no centering comp";
+    const auto uncompensated=simulate(s,current({},{},false));print("new",s,uncompensated);
+    EXPECT_LT(now.settled_offset,.005);EXPECT_LT(now.max_offset,.02);EXPECT_LE(now.reversals,2);
+    EXPECT_GT(uncompensated.settled_offset,.1); // about 0.19 m, printed above
+}
+
 TEST(LateralSim,PlantUncertainty) {
-    // The rate and self-centering at speed are not measured yet: the loop must stay
-    // stable for a rate -30%/+40% off and a 0.5/s centering pull. Uncompensated
-    // centering leaves a P-loop offset; the centering parameter removes it.
-    for(const Plant plant:{Plant{.45,0},Plant{.9,0},Plant{.65,.5}}) {
+    // The table is one truck without trailer: the loop must stay stable for a rate
+    // -30%/+40% off and a centering 0x/1.5x the measured value. Without an integral
+    // term any a or c mismatch leaves a steady steering error
+    // (c_true*a_model/a_true - c_model)*applied/bandwidth, a 0.06-0.22 m offset here.
+    for(const Plant plant:{Plant{.7,1},Plant{1.4,1},Plant{1,0},Plant{1,1.5}}) {
         auto s=arc(400,25);s.plant=plant;
-        char name[64];std::snprintf(name,sizeof name,"R400 25 m/s rate %.2f centering %.1f",plant.rate,plant.centering);s.name=name;
+        char name[64];std::snprintf(name,sizeof name,"R400 25 m/s rate x%.1f centering x%.1f",plant.rate_scale,plant.centering_scale);s.name=name;
         const auto [old,now]=compare(s);
-        EXPECT_LT(now.settled_offset,plant.centering>0?.08:.005);EXPECT_LT(now.max_offset,.08);EXPECT_LE(now.reversals,2);
+        EXPECT_LT(now.max_offset,.25);EXPECT_LE(now.reversals,2);
     }
-    auto s=arc(400,25);s.plant={.65,.5};s.name="R400 25 m/s centering 0.5 compensated";
-    const auto [old,now]=compare(s,current({.65,10,0,.5}));
-    EXPECT_LT(now.settled_offset,.005);
 }
 
 TEST(LateralSim,RecordedLane) {
