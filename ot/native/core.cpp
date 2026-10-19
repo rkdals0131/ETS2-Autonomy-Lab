@@ -40,6 +40,16 @@ static void configure_drive(const json& settings) {
     input_host->configure(input_host->context,settings.value("allow_drive",false) && settings.value("singleplayer_research",false),path.c_str());
 }
 class Runtime;
+// Schema field type -> SDK value type for channel registration.
+static scs_value_type_t sdk_value_type(const std::string& type) {
+    if(type=="dplacement") return SCS_VALUE_TYPE_dplacement;
+    if(type=="fvector") return SCS_VALUE_TYPE_fvector;
+    if(type=="s32") return SCS_VALUE_TYPE_s32;
+    if(type=="u32") return SCS_VALUE_TYPE_u32;
+    if(type=="bool") return SCS_VALUE_TYPE_bool;
+    if(type=="float") return SCS_VALUE_TYPE_float;
+    throw std::runtime_error("Unsupported SDK field type in schema: "+type);
+}
 struct Channel {
     Runtime* owner; std::string name; scs_value_type_t type;
     scs_u32_t index=SCS_U32_NIL; scs_result_t registration=SCS_RESULT_not_found;
@@ -135,10 +145,7 @@ void Runtime::initialize() {
     tier_=(gate_ok_ && allow_tier1_)?initial:0;
     const auto& fields=schema_.at("sdk_fields");
     for(const auto& field:fields) {
-        std::string type=field.at("type"),name=field.at("name");
-        auto kind=type=="dplacement"?SCS_VALUE_TYPE_dplacement:type=="fvector"?SCS_VALUE_TYPE_fvector:
-            type=="s32"?SCS_VALUE_TYPE_s32:SCS_VALUE_TYPE_float;
-        channels_.push_back({this,name,kind});
+        channels_.push_back({this,field.at("name"),sdk_value_type(field.at("type"))});
     }
     for(auto& channel:channels_) {
         channel.registration=api_.register_for_channel(channel.name.c_str(),SCS_U32_NIL,channel.type,
@@ -214,6 +221,7 @@ void Runtime::value(const Channel& channel,const scs_value_t* value) {
         if(value->type!=channel.type) throw std::runtime_error("SDK channel type mismatch");
         if(value->type==SCS_VALUE_TYPE_float) item["value"]=value->value_float.value;
         else if(value->type==SCS_VALUE_TYPE_s32) item["value"]=value->value_s32.value;
+        else if(value->type==SCS_VALUE_TYPE_u32) item["value"]=value->value_u32.value;
         else if(value->type==SCS_VALUE_TYPE_bool) item["value"]=value->value_bool.value!=0;
         else if(value->type==SCS_VALUE_TYPE_fvector) {
             const auto& v=value->value_fvector; item["value"]={v.x,v.y,v.z};
@@ -235,9 +243,13 @@ void Runtime::event(scs_event_t event,const void* data) {
             json attributes=json::array();uint32_t wheel_count=0;
             for(const auto* attribute=config.attributes;attribute->name;++attribute) {
                 const std::string_view name=attribute->name;
+                // Identity, geometry and the drivetrain/brake constants a vehicle bus or spec sheet would carry.
                 if(name!="id" && name!="brand" && name!="name" && name!="cabin.position" &&
                    name!="head.position" && name!="hook.position" && name!="wheels.count" &&
-                   !name.starts_with("wheel.")) continue;
+                   !name.starts_with("wheel.") && !name.starts_with("gear") && !name.starts_with("retarder.") &&
+                   name!="differential.ratio" && name!="forward.ratio" && name!="reverse.ratio" && name!="rpm.limit" && name!="fuel.capacity" && name!="adblue.capacity" &&
+                   name!="brake.air.pressure.warning" && name!="brake.air.pressure.emergency" && name!="shifter.type" &&
+                   name!="selector.count" && name!="hshifter.slot.gear") continue;
                 const auto& value=attribute->value;json decoded;
                 switch(value.type) {
                     case SCS_VALUE_TYPE_bool:decoded=value.value_bool.value!=0;break;
@@ -260,7 +272,7 @@ void Runtime::event(scs_event_t event,const void* data) {
                 registration_.erase(c.key());channels_.pop_back();
             }
             for(uint32_t i=0;i<wheel_count;++i) for(const auto& field:schema_.at("sdk_wheel_fields")) {
-                channels_.push_back({this,field.at("name"),field.at("type")=="bool"?SCS_VALUE_TYPE_bool:SCS_VALUE_TYPE_float,i});
+                channels_.push_back({this,field.at("name"),sdk_value_type(field.at("type")),i});
                 auto& c=channels_.back();
                 c.registration=api_.register_for_channel(c.name.c_str(),c.index,c.type,
                     SCS_TELEMETRY_CHANNEL_FLAG_each_frame|SCS_TELEMETRY_CHANNEL_FLAG_no_value,channel_callback,&c);

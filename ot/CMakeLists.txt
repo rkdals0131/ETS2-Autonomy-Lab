@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(ot_core VERSION 0.36.0 LANGUAGES C CXX)
+project(ot_core VERSION 0.37.0 LANGUAGES C CXX)
 if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "ot_core requires MSVC x64 on Windows")
 endif()
@@ -42,8 +42,16 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/schema/1.61.1.1/game.json" OT_GAME_IDENTITY)
 string(JSON OT_GAME_SHA256 GET "${OT_GAME_IDENTITY}" exe_sha256)
 file(SHA256 "${ETS2_EXE}" OT_BUILD_EXE_SHA256)
+# The runtime gate compares the running executable with game.json and keeps internal
+# (Tier 1) access off on any other build. OT_SDK_ONLY_BUILD lets the SDK-only parts be
+# rebuilt after a game update, before the offsets are re-analyzed; game.json stays as is.
+option(OT_SDK_ONLY_BUILD "Build although the installed executable differs from game.json (runtime stays SDK-only)" OFF)
 if(NOT OT_BUILD_EXE_SHA256 STREQUAL OT_GAME_SHA256)
-  message(FATAL_ERROR "The executable differs from the inspected build. Re-analyze offsets before updating game.json.")
+  if(OT_SDK_ONLY_BUILD)
+    message(WARNING "Installed executable ${OT_BUILD_EXE_SHA256} differs from game.json; building for SDK-only use.")
+  else()
+    message(FATAL_ERROR "The executable differs from the inspected build. Re-analyze offsets before updating game.json, or pass -DOT_SDK_ONLY_BUILD=ON for an SDK-only build.")
+  endif()
 endif()
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/schema/1.61.1.1/fields.json" OT_SCHEMA)
 configure_file(native/build_identity.hpp.in generated/build_identity.hpp @ONLY)
