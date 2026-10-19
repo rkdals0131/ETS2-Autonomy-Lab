@@ -27,6 +27,12 @@ class Stop(Exception):
     pass
 
 
+class Expired(Stop):
+    """The core released control because no command arrived inside its 200 ms window
+    (a game hitch such as an autosave). Test scripts may re-arm once; manual input,
+    pause and F11 releases stay final."""
+
+
 @dataclass
 class Step:
     label: str
@@ -67,7 +73,13 @@ class Session:
                          "edge_m": edge_distance(pos) if pos else None, "frames": self.seq}}
         tmp = self.out / "status.json.tmp"
         tmp.write_text(json.dumps(data))
-        os.replace(tmp, self.out / "status.json")
+        # The viewer may hold status.json open for a moment; Windows then refuses the replace.
+        for attempt in range(5 if force else 1):
+            try:
+                os.replace(tmp, self.out / "status.json")
+                return
+            except PermissionError:
+                time.sleep(0.01)
 
     def frame(self):
         now = time.monotonic()
@@ -98,6 +110,8 @@ class Session:
             if d["armed"]:
                 self.seen = True
             elif self.seen:
+                if d["reason"] == "expired":
+                    raise Expired("released by game side: expired")
                 raise Stop(f"released by game side: {d['reason']}")
         if self.epoch and not self.seen:
             self.stale += 1
@@ -117,7 +131,7 @@ class Session:
             self.brk = max(0.0, min(1.0, brk))
         self.seq += 1
         r = self.client.request("drive", action="command", owner=self.lease, drive_owner=self.lease, epoch=self.epoch,
-                                sequence=self.seq, deadline_ms=int(ticks()) + 150, axes=3,
+                                sequence=self.seq, deadline_ms=int(ticks()) + 190, axes=3,
                                 steering=self.steer, throttle=self.thr, brake=self.brk)
         if not r.get("accepted"):
             raise Stop(f"command rejected: {r.get('reason')}")
@@ -275,9 +289,42 @@ def throttle_step(s, a):
 
 
 def open_viewer(status_path):
+    """New PowerShell window shown without activation, so the game keeps the focus it needs for input."""
     viewer = Path(__file__).with_name("sysid_view.py")
-    subprocess.Popen(["cmd", "/c", "start", "OT sysid", "powershell", "-NoProfile", "-Command",
-                      f"py -3 '{viewer}' '{status_path}'"], creationflags=subprocess.CREATE_NO_WINDOW)
+    info = subprocess.STARTUPINFO()
+    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    info.wShowWindow = 4  # SW_SHOWNOACTIVATE
+    # conhost honors SW_SHOWNOACTIVATE; a default Windows Terminal host would take the focus.
+    subprocess.Popen(["conhost.exe", "powershell", "-NoProfile", "-Command",
+                      f"$Host.UI.RawUI.WindowTitle='OT sysid'; py -3 '{viewer}' '{status_path}'"],
+                     creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=info)
+    time.sleep(1.0)
+    focus_game()
+
+
+def focus_game():
+    """Bring the game window back to the front (Alt tap lifts the foreground lock for this process)."""
+    user32 = ctypes.windll.user32
+    game_pid = StateReader._producer_pid() if hasattr(StateReader, "_producer_pid") else None
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def each(hwnd, _):
+        pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if user32.IsWindowVisible(hwnd) and pid.value == (game_pid or _game_pid()):
+            found.append(hwnd)
+        return True
+    user32.EnumWindows(each, 0)
+    if found:
+        user32.keybd_event(0x12, 0, 0, 0)       # VK_MENU down
+        user32.keybd_event(0x12, 0, 2, 0)       # VK_MENU up
+        user32.SetForegroundWindow(found[0])
+
+
+def _game_pid():
+    with StateReader() as r:
+        return r.producer_pid
 
 
 def main():
@@ -296,34 +343,7 @@ def main():
     s.client.request("lease", action="claim", owner=s.lease)
     s.hb = time.monotonic()
     try:
-        s.message = "click the game window; arming 2 s after it has focus"
-        user32 = ctypes.windll.user32
-        until, since = time.monotonic() + 180, None
-        while True:
-            s.frame()
-            pid = ctypes.c_ulong()
-            user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ctypes.byref(pid))
-            if pid.value == s.reader.producer_pid:
-                since = since or time.monotonic()
-                if time.monotonic() - since > 2.0:
-                    break
-            else:
-                since = None
-            if time.monotonic() > until:
-                raise Stop("game window never came to the foreground")
-            time.sleep(0.05)
-        until = time.monotonic() + 30
-        while True:
-            s.frame()
-            r = s.client.request("drive", action="arm", owner=s.lease, drive_owner=s.lease, axes=3)
-            if r.get("accepted"):
-                s.epoch = r["epoch"]
-                break
-            if time.monotonic() > until:
-                raise Stop(f"arm not accepted: {r.get('reason')}")
-            time.sleep(0.5)
-        s.state, s.message = "running", "hands off; F11 stops"
-        print("armed", s.epoch, flush=True)
+        wait_focus_and_arm(s)
         for i, step in enumerate(s.steps):
             s.index, s.step_start = i, time.monotonic()
             s.status(force=True)
@@ -335,29 +355,81 @@ def main():
         s.state, s.message = "stopped", str(e)
         print("STOPPED:", e, flush=True)
     finally:
-        try:
-            if s.epoch:
-                s.phase = "stop"
-                if s.seen and s.last and s.last["armed"]:
-                    try:
-                        end = time.monotonic() + 15
-                        r = s.last
-                        while time.monotonic() < end and r["speed"] > 0.3:
-                            s.send(steer_to(r, 0.0), 0.0, 0.6)
-                            r = s.frame()
-                    except Exception:
-                        pass
-                s.client.request("drive", action="disarm", owner=s.lease, drive_owner=s.lease, epoch=s.epoch)
-        except Exception as e:
-            print("disarm:", e)
-        try:
-            s.client.request("lease", action="release", owner=s.lease)
-        except Exception as e:
-            print("lease release:", e)
-        s.status(force=True)
-        s.log.close()
-        s.reader.close()
+        release(s)
         print("log", out / "frames.jsonl", flush=True)
+
+
+def wait_focus_and_arm(s):
+    """Wait up to 180 s for the game window to stay in front for 2 s, then arm steering and pedals."""
+    s.message = "click the game window; arming 2 s after it has focus"
+    user32 = ctypes.windll.user32
+    until, since = time.monotonic() + 180, None
+    while True:
+        s.frame()
+        pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ctypes.byref(pid))
+        if pid.value == s.reader.producer_pid:
+            since = since or time.monotonic()
+            if time.monotonic() - since > 2.0:
+                break
+        else:
+            since = None
+        if time.monotonic() > until:
+            raise Stop("game window never came to the foreground")
+        time.sleep(0.05)
+    until = time.monotonic() + 30
+    while True:
+        s.frame()
+        r = s.client.request("drive", action="arm", owner=s.lease, drive_owner=s.lease, axes=3)
+        if r.get("accepted"):
+            s.epoch = r["epoch"]
+            break
+        if time.monotonic() > until:
+            raise Stop(f"arm not accepted: {r.get('reason')}")
+        time.sleep(0.5)
+    s.state, s.message = "running", "hands off; F11 stops"
+    print("armed", s.epoch, flush=True)
+
+
+def rearm(s):
+    """Arm again after an Expired release (same lease); the caller retries its step."""
+    s.seen, s.stale = False, 0
+    until = time.monotonic() + 10
+    while True:
+        r = s.client.request("drive", action="arm", owner=s.lease, drive_owner=s.lease, axes=3)
+        if r.get("accepted"):
+            s.epoch = r["epoch"]
+            break
+        if time.monotonic() > until:
+            raise Stop(f"re-arm after expiry not accepted: {r.get('reason')}")
+        s.frame()
+    print("re-armed after expiry", s.epoch, flush=True)
+
+
+def release(s):
+    """Brake to a stop if still in control, disarm, release the lease, close logs."""
+    try:
+        if s.epoch:
+            s.phase = "stop"
+            if s.seen and s.last and s.last["armed"]:
+                try:
+                    end = time.monotonic() + 15
+                    r = s.last
+                    while time.monotonic() < end and r["speed"] > 0.3:
+                        s.send(steer_to(r, 0.0), 0.0, 0.6)
+                        r = s.frame()
+                except Exception:
+                    pass
+            s.client.request("drive", action="disarm", owner=s.lease, drive_owner=s.lease, epoch=s.epoch)
+    except Exception as e:
+        print("disarm:", e)
+    try:
+        s.client.request("lease", action="release", owner=s.lease)
+    except Exception as e:
+        print("lease release:", e)
+    s.status(force=True)
+    s.log.close()
+    s.reader.close()
 
 
 if __name__ == "__main__":
