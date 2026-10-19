@@ -82,7 +82,7 @@ float32 confidence
 ### 3.5 제어 (controller + virtual_eps)
 
 - 횡: pure pursuit(lookahead = 6 m + 0.7 s × v, ✔ baseline 값). 출력은 **바퀴각**(rad).
-- 바퀴각 → W12 가상 EPS → 상대 조향 입력 [-1,1]. W11 식별 결과(`docs/26_steering_plant.md`, 예정)가 없는 동안은 ✔ baseline의 applied-steering 추종 PI(`gt_drive_node.cpp:main`의 조향 PI)를 `interim` 모드로 둔다.
+- 바퀴각 → W12 가상 EPS → 상대 조향 입력 [-1,1]. ✔ 정지 상태 식별(2026-10-20: 적분기 0.65/s, 0.7087 rad/unit)로 baseline의 조향 PI를 `ets2_autonomy/src/control/virtual_eps.hpp`(rate feedforward + P)와 `lateral_controller.hpp`(곡률 feedforward)로 교체했다. 주행 속도에서의 조향 속도·자기 복원은 미측정.
 - 종: 속도 PI(✔ baseline 이득 `throttle_gain .2`, `brake_gain .2`, `speed_integral_gain .08`).
 - 명령: 50 Hz, `sequence` 단조 증가, `sent_steady_ns`, `axes`=LCC 1 | ACC 2.
 - watchdog: `/ets2/drive/state`·센서 stamp가 200 ms 이상 늦으면 명령 중단(코어가 `expired`로 해제). Lane invalid 지속·객체 추적 소실 시 ACC만 유지하거나 전체 해제(파라미터).

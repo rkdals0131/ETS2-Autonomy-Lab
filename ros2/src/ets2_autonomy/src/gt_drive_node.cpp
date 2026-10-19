@@ -6,7 +6,6 @@
 #include <ets2_msgs/msg/traffic_state.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/string.hpp>
-#include "control/path_following.hpp"
 #include "control/parameters.hpp"
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <algorithm>
@@ -104,8 +103,12 @@ int main(int argc,char** argv) {
             rclcpp::spin_some(node);std::this_thread::sleep_for(2ms);
         }
         std::cout<<"Driving armed; owner="<<owner<<", epoch="<<epoch<<". Ctrl+C releases control."<<std::endl;
-        auto report=Clock::now(),previous=report;double steering_integral=0,speed_integral=0,previous_speed=vehicle->speed_mps;
-        while(!stopped() && rclcpp::ok()) {
+        auto report=Clock::now(),previous=report;double speed_integral=0,previous_speed=vehicle->speed_mps;
+        VirtualEps eps;
+        // Fixed 50 Hz schedule: sleep_until the next 20 ms deadline keeps the mean
+        // period at 20 ms even with Windows' coarse sleep granularity; after an
+        // overrun the schedule restarts from now instead of bursting to catch up.
+        for(auto next=Clock::now();!stopped() && rclcpp::ok();) {
             rclcpp::spin_some(node);const auto now=Clock::now();
             if(!drive->armed || drive->owner!=owner || drive->epoch!=epoch) throw std::runtime_error("Driving released: "+drive->reason);
             const auto settings=configuration.load();
@@ -113,23 +116,25 @@ int main(int argc,char** argv) {
             if(!enabled_axes) {std::cout<<"ACC and LCC disabled; releasing control"<<std::endl;break;}
             const bool acc=enabled_axes&2,lcc=enabled_axes&1;
             if(!acc) speed_integral=0;
-            if(!lcc) steering_integral=0;
+            if(!lcc) eps.reset();
             if(now-drive_time>200ms || now-vehicle_time>200ms || vehicle->paused || !std::isfinite(vehicle->speed_mps))
                 throw std::runtime_error("Current game state is unavailable or paused");
             const auto dt=std::chrono::duration<double>(now-previous).count();
             auto speed_target=settings->target_speed_mps;
-            auto steering_target=settings->steering_target;
-            double path_error=0,remaining=0,lead_gap=std::numeric_limits<double>::infinity();
+            auto steering_target=settings->steering_target;double steering_rate=0;
+            double path_error=0,path_offset=0,remaining=0,lead_gap=std::numeric_limits<double>::infinity();
             if(lane) {
                 if(now-pose_time>200ms || now-traffic_time>200ms) throw std::runtime_error("Current GT path/traffic observation is unavailable");
-                const auto goal=lane->follow(ego_x,ego_y,ego_yaw,settings->lookahead_m+std::max(0.0,vehicle->speed_mps)*settings->lookahead_time_s);
-                path_error=goal.error;remaining=goal.remaining;
+                const auto goal=LateralController::update(*lane,ego_x,ego_y,ego_yaw,vehicle->speed_mps,wheelbase,lateral_settings(*settings));
+                path_error=goal.distance;path_offset=goal.offset;remaining=goal.remaining;
                 if(lcc) {
-                    steering_target=std::clamp(std::atan(wheelbase*goal.curvature)/settings->steering_angle_per_unit_rad,-1.0,1.0);
+                    steering_target=std::clamp(goal.wheel_angle/settings->steering_angle_per_unit_rad,-1.0,1.0);
+                    steering_rate=goal.wheel_rate/settings->steering_angle_per_unit_rad;
                     if(path_error>lane->width/2) throw std::runtime_error("LCC lane reference lost; releasing assistance");
                     if(acc) {
+                        // Baseline curve speed limit, on the pure pursuit curvature as before.
                         speed_target=std::min(speed_target,std::sqrt(2*settings->stopping_deceleration_mps2*std::max(0.0,remaining-1)));
-                        if(std::abs(goal.curvature)>0) speed_target=std::min(speed_target,std::sqrt(settings->lateral_acceleration_mps2/std::abs(goal.curvature)));
+                        if(std::abs(goal.pursuit_curvature)>0) speed_target=std::min(speed_target,std::sqrt(settings->lateral_acceleration_mps2/std::abs(goal.pursuit_curvature)));
                     }
                 }
                 for(const auto& actor:actors) {
@@ -161,12 +166,7 @@ int main(int argc,char** argv) {
             command.steering=lcc?steering_target:0;
             if(lcc && settings->relative_steering) {
                 if(!std::isfinite(drive->steering_applied)) throw std::runtime_error("Applied steering feedback is unavailable");
-                const auto steering_error=steering_target-drive->steering_applied;
-                const auto proportional=steering_error*settings->steering_gain;
-                const auto candidate=steering_integral+steering_error*settings->steering_integral_gain*dt;
-                // Do not accumulate error pushing further into a saturated input.
-                if(std::abs(proportional+candidate)<=1 || steering_error*(proportional+candidate)<0) steering_integral=candidate;
-                command.steering=std::clamp(proportional+steering_integral,-1.0,1.0);
+                command.steering=eps.command(steering_target,steering_rate,drive->steering_applied,dt,eps_settings(*settings));
             }
             const auto speed_kp=(error>=0?settings->throttle_gain:settings->brake_gain);
             if(speed_target==0) speed_integral=0;
@@ -178,12 +178,14 @@ int main(int argc,char** argv) {
             command.throttle=acc?std::max(0.0,effort):0;command.brake=acc?std::max(0.0,-effort):0;
             publisher->publish(command);
             if(now>=report) {
-                std::cout<<"speed="<<vehicle->speed_mps<<" target="<<speed_target<<" path_error="<<path_error<<" remaining="<<remaining<<" lead_gap="<<lead_gap
+                std::cout<<"speed="<<vehicle->speed_mps<<" target="<<speed_target<<" path_error="<<path_error<<" path_offset="<<path_offset<<" remaining="<<remaining<<" lead_gap="<<lead_gap
                     <<" steering_target="<<steering_target<<" steering_applied="<<drive->steering_applied<<" steering_input="<<command.steering<<" throttle="<<command.throttle<<" brake="<<command.brake
                     <<" axes="<<unsigned(drive->axes)<<" accepted_sequence="<<drive->sequence<<std::endl;
                 report=now+1s;
             }
-            std::this_thread::sleep_for(20ms);
+            next+=20ms;
+            if(next<Clock::now()) next=Clock::now(); // overrun: restart the schedule
+            std::this_thread::sleep_until(next);
         }
     } catch(const std::exception& error) {std::cerr<<error.what()<<std::endl;result=1;}
     if(epoch) try {control(false);} catch(const std::exception& error) {std::cerr<<"Release: "<<error.what()<<std::endl;}

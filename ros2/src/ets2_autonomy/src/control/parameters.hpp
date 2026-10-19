@@ -1,4 +1,6 @@
 #pragma once
+#include "lateral_controller.hpp"
+#include "virtual_eps.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <array>
 #include <cmath>
@@ -7,9 +9,13 @@
 struct DrivingParameters {
     bool arm=false,acc_enabled=true,lcc_enabled=true,relative_steering=true;
     std::string path_file;
-    double target_speed_mps=0,steering_target=0,steering_gain=2,steering_integral_gain=1;
+    double target_speed_mps=0,steering_target=0;
+    // Relative-steering inner loop (virtual_eps.hpp) and lane feedforward (lateral_controller.hpp).
+    double steering_kp=10,steering_rate_per_unit=.65,steering_rate_limit=0,steering_centering_per_s=0;
+    double curvature_preview_s=0,curvature_window_m=6;
     double throttle_gain=.2,brake_gain=.2,speed_integral_gain=.08,speed_derivative_gain=0;
-    double lookahead_m=6,lookahead_time_s=.7,steering_angle_per_unit_rad=.7;
+    // Mean front wheel angle per applied steering unit, measured 2026-10-20 (linear, residual <0.004 rad).
+    double lookahead_m=6,lookahead_time_s=.7,steering_angle_per_unit_rad=.7087;
     double lateral_acceleration_mps2=1.5,stopping_deceleration_mps2=1.5;
     double following_time_s=1.5,standstill_gap_m=5,following_gain=.5;
     uint8_t axes() const {return (lcc_enabled?1:0)|(acc_enabled?2:0);}
@@ -26,8 +32,12 @@ struct DrivingDoubleParameter {
 inline constexpr std::array driving_double_parameters{
     DrivingDoubleParameter{"target_speed_mps",&DrivingParameters::target_speed_mps},
     DrivingDoubleParameter{"steering_target",&DrivingParameters::steering_target,DrivingDoubleParameter::Steering},
-    DrivingDoubleParameter{"steering_gain",&DrivingParameters::steering_gain},
-    DrivingDoubleParameter{"steering_integral_gain",&DrivingParameters::steering_integral_gain},
+    DrivingDoubleParameter{"steering_kp",&DrivingParameters::steering_kp,DrivingDoubleParameter::Positive},
+    DrivingDoubleParameter{"steering_rate_per_unit",&DrivingParameters::steering_rate_per_unit,DrivingDoubleParameter::Positive},
+    DrivingDoubleParameter{"steering_rate_limit",&DrivingParameters::steering_rate_limit},
+    DrivingDoubleParameter{"steering_centering_per_s",&DrivingParameters::steering_centering_per_s},
+    DrivingDoubleParameter{"curvature_preview_s",&DrivingParameters::curvature_preview_s},
+    DrivingDoubleParameter{"curvature_window_m",&DrivingParameters::curvature_window_m,DrivingDoubleParameter::Positive},
     DrivingDoubleParameter{"throttle_gain",&DrivingParameters::throttle_gain},
     DrivingDoubleParameter{"brake_gain",&DrivingParameters::brake_gain},
     DrivingDoubleParameter{"speed_integral_gain",&DrivingParameters::speed_integral_gain},
@@ -69,7 +79,7 @@ inline rcl_interfaces::msg::SetParametersResult check_driving_parameter_changes(
         }
         for(const auto& field:driving_double_parameters) if(name==field.name) {
             if(p.get_type()!=rclcpp::ParameterType::PARAMETER_DOUBLE || !field.accepts(p.as_double())) {
-                result.successful=false;result.reason="Speed/gains must be finite and nonnegative; steering must be in [-1,1]";break;
+                result.successful=false;result.reason="Speed/gains must be finite and nonnegative (positive for kp, rates, lookahead, window); steering must be in [-1,1]";break;
             }
         }
         if(!result.successful) break;
@@ -83,4 +93,10 @@ inline void apply_driving_parameter_changes(DrivingParameters& values,const std:
         else if(name=="lcc_enabled") values.lcc_enabled=p.as_bool();
         else for(const auto& field:driving_double_parameters) if(name==field.name) values.*field.value=p.as_double();
     }
+}
+inline VirtualEps::Settings eps_settings(const DrivingParameters& values) {
+    return {values.steering_rate_per_unit,values.steering_kp,values.steering_rate_limit,values.steering_centering_per_s};
+}
+inline LateralController::Settings lateral_settings(const DrivingParameters& values) {
+    return {values.lookahead_m,values.lookahead_time_s,values.curvature_preview_s,values.curvature_window_m};
 }

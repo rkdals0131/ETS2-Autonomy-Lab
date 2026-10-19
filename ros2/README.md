@@ -4,7 +4,7 @@
 | --- | --- |
 | src/ets2_msgs | 센서·차량 상태·운전 명령과 서비스 계약 |
 | src/ets2_relay | Windows 릴레이 노드: 게임 공유메모리·GPU 출력을 읽어 직접 발행, 구독→수집 요구, `/ets2/capture`, 운전 명령 전달. 소스는 `bridge/windows` |
-| src/ets2_autonomy | GT baseline: 차로 pure-pursuit·속도 PI·앞차 속도 제한·ETS2 입력 adapter(연결 확인용, 동결)와 안전 시험용 `drive_hold` |
+| src/ets2_autonomy | GT baseline: 차로 추종(pure pursuit 선형화 + 곡률 feedforward)·가상 EPS·속도 PI·앞차 속도 제한과 안전 시험용 `drive_hold`. 횡제어 오프라인 폐루프 시험 `lateral_sim_test` |
 | src/ets2_sensor_degradation | `/ets2/*` 이상 센서에 seed 고정 잡음·지연·드롭을 적용해 `/sensing/*`로 재발행 |
 
 ROS 2 Jazzy는 Windows 네이티브 RoboStack 환경(저장소 루트 `pixi.toml`)에서 빌드·실행합니다. pixi activation(`ros2/activate.bat`)이 overlay, domain 42, `rmw_fastrtps_cpp`, localhost 탐색, 공유 DDS 프로필(`bridge/config/fastdds.xml`)을 모든 프로세스에 설정합니다.
