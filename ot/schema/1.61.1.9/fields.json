@@ -151,6 +151,12 @@
     "projection": {"offset": 96, "type": "mat4_row_major", "writable": false}
   },
   "evidence": "docs/12_dx11_mirror_render_path.md",
+  "sdk_trailer_wheel_fields": [
+    {"name": "trailer.0.wheel.on_ground", "type": "bool"},
+    {"name": "trailer.0.wheel.angular_velocity", "type": "float"},
+    {"name": "trailer.0.wheel.suspension.deflection", "type": "float"},
+    {"name": "trailer.0.wheel.lift", "type": "float"}
+  ],
   "sdk_wheel_fields": [
     {"name": "truck.wheel.angular_velocity", "type": "float"},
     {"name": "truck.wheel.steering", "type": "float"},
@@ -210,7 +216,13 @@
     {"name": "truck.odometer", "type": "float"},
     {"name": "truck.navigation.speed.limit", "type": "float"},
     {"name": "truck.navigation.distance", "type": "float"},
-    {"name": "truck.navigation.time", "type": "float"}
+    {"name": "truck.navigation.time", "type": "float"},
+    {"name": "trailer.0.connected", "type": "bool"},
+    {"name": "trailer.0.world.placement", "type": "dplacement"},
+    {"name": "trailer.0.velocity.linear", "type": "fvector"},
+    {"name": "trailer.0.velocity.angular", "type": "fvector"},
+    {"name": "trailer.0.acceleration.linear", "type": "fvector"},
+    {"name": "trailer.0.cargo.damage", "type": "float"}
   ],
   "traffic_physics": {
     "actor_physics_offset": 568,

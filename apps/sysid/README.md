@@ -29,6 +29,15 @@ py -3 apps/sysid/analyze_brake.py bridge/recordings/brake-<시각>
 
 80 km/h에서 10 km/h까지 타력, 서비스 브레이크 계단, 엔진브레이크(B 키 유지), 둘의 조합을 잽니다. R 단계는 리타더 1–N단(`;`/`'` 키로 단 조정, `truck.brake.retarder`로 확인)과 최고 단 + 엔진브레이크, 최고 단 + 서비스 브레이크입니다. 리타더가 없는 트럭(`retarder.steps 0`)이면 R을 거부합니다. B·R 단계 전에 트럭을 세우고 제어를 푼 뒤 게임 콘솔(`` ` ``)에 `g_motor_brake_auto 0`, `g_retarder_auto 0`을 입력하고, 끝나거나 중단되면 1로 되돌립니다. W/A/S/D가 운전 키라 콘솔 입력은 정지·해제 상태에서만 합니다. 브레이크·엔진브레이크·공기압·브레이크 온도·변속 채널은 프레임의 `x`에 기록됩니다. 결과는 [docs/29](../../docs/29_reference_truck_dynamics.md#브레이크엔진브레이크리타더-brake-20261020-105939-태그-올림-brake-20261020-120355-태그-내림)(6x2 리타더 트럭)와 [4x2 당시 분해](../../docs/29_reference_truck_dynamics.md#브레이크-분해-2026-10-20-core-0380-채널)에 있습니다.
 
+## 시퀀셜 변속과 기어 고정
+
+```powershell
+py -3 apps/sysid/gear_test.py --view                   # 6·8·10·12단 고정, 단마다 회전수를 쓸어서 토크 맵
+py -3 apps/sysid/analyze_gear.py bridge/recordings/gear-<시각>
+```
+
+게임 변속을 시퀀셜로 두면(SDK `controls` 구성의 `shifter.type`이 `manual`) 하네스가 왼쪽 Shift·Ctrl로 직접 변속합니다. 평소에는 회전수 기준 자동 변속(전부하 1,700 rpm·부분 부하 1,450 rpm에서 올림, 1,000 rpm 아래에서 내림, 정지에서 3단, 한 번 누른 뒤 1.2 s 대기)이고, `gear_test.py`는 한 단을 고정합니다. 단마다 회전수 약 2,250 rpm(85 km/h 제한)에 맞춰 들어가서 엔진브레이크 감속, 전부하 가속, 타력 감속, 스로틀 0.5 가속, 리타더 3단 감속을 900–2,250 rpm 사이에서 차례로 합니다. 자동 변속기는 엔진브레이크 중에 2,000–2,200 rpm을 유지해서 이 맵을 못 얻습니다. 실행 폴더에는 `configs.json`(트레일러·작업·조작 구성)도 남습니다.
+
 ## 리프트 액슬
 
 ```powershell

@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <cmath>
 
 namespace ot {
@@ -56,6 +57,21 @@ struct Channel {
     std::string key() const {return index==SCS_U32_NIL?name:name+"["+std::to_string(index)+"]";}
 };
 struct ArrayHeader { uintptr_t vtable,data; uint64_t size,capacity; };
+// SDK configuration attribute value as JSON; false for types not used by any configuration.
+bool decode_attribute(const scs_value_t& value,json& decoded) {
+    switch(value.type) {
+        case SCS_VALUE_TYPE_bool:decoded=value.value_bool.value!=0;return true;
+        case SCS_VALUE_TYPE_s32:decoded=value.value_s32.value;return true;
+        case SCS_VALUE_TYPE_u32:decoded=value.value_u32.value;return true;
+        case SCS_VALUE_TYPE_u64:decoded=value.value_u64.value;return true;
+        case SCS_VALUE_TYPE_float:decoded=value.value_float.value;return true;
+        case SCS_VALUE_TYPE_double:decoded=value.value_double.value;return true;
+        case SCS_VALUE_TYPE_string:decoded=value.value_string.value;return true;
+        case SCS_VALUE_TYPE_fvector: {const auto& v=value.value_fvector;decoded={v.x,v.y,v.z};return true;}
+        case SCS_VALUE_TYPE_dvector: {const auto& v=value.value_dvector;decoded={v.x,v.y,v.z};return true;}
+        default:return false;
+    }
+}
 
 class Runtime {
 public:
@@ -116,6 +132,12 @@ private:
     uint64_t frame_=0,generation_=0;
     scs_telemetry_frame_start_t clock_{};
     std::deque<Channel> channels_;
+    // Per-wheel channels of the truck and the first trailer, re-registered on each configuration.
+    std::map<std::string,std::deque<Channel>> wheel_channels_;
+    void register_wheels(const std::string& owner,uint32_t count,const json& fields);
+    // Other SDK configurations (trailer.N, job, controls, ...) by id.
+    json configs_store_=json::object();
+    std::atomic<std::shared_ptr<const json>> configs_;
     std::vector<scs_event_t> events_;
     std::atomic<std::shared_ptr<const json>> latest_;
     std::unique_ptr<Transport> transport_;
@@ -164,6 +186,23 @@ void Runtime::initialize() {
     log("ot_core initialized: SDK callbacks registered, pipe ready, tier="+std::to_string(tier_.load()));
     if(api_.common.log) api_.common.log(SCS_LOG_TYPE_message,"[ot_core] SDK plugin ready; local pipe \\\\.\\pipe\\ot");
 }
+// SDK event callbacks permit registration; the deque keeps callback contexts stable.
+void Runtime::register_wheels(const std::string& owner,uint32_t count,const json& fields) {
+    auto& list=wheel_channels_[owner];
+    for(auto& c:list) {
+        if(c.registration==SCS_RESULT_ok) api_.unregister_from_channel(c.name.c_str(),c.index,c.type);
+        registration_.erase(c.key());
+    }
+    list.clear();
+    for(uint32_t i=0;i<count;++i) for(const auto& field:fields) {
+        list.push_back({this,field.at("name"),sdk_value_type(field.at("type")),i});
+        auto& c=list.back();
+        c.registration=api_.register_for_channel(c.name.c_str(),c.index,c.type,
+            SCS_TELEMETRY_CHANNEL_FLAG_each_frame|SCS_TELEMETRY_CHANNEL_FLAG_no_value,channel_callback,&c);
+        registration_[c.key()]=c.registration;
+    }
+    registered_.store(std::make_shared<const json>(registration_));
+}
 bool Runtime::shutdown() noexcept {
     if(input_host) input_host->release(input_host->context,OtDriveReason::unloaded);
     sampler_.stop();
@@ -171,6 +210,10 @@ bool Runtime::shutdown() noexcept {
     for(auto event:events_) api_.unregister_from_event(event);
     events_.clear();
     for(auto& channel:channels_) {
+        if(channel.registration==SCS_RESULT_ok) api_.unregister_from_channel(channel.name.c_str(),channel.index,channel.type);
+        channel.registration=SCS_RESULT_not_found;
+    }
+    for(auto& [owner,list]:wheel_channels_) for(auto& channel:list) {
         if(channel.registration==SCS_RESULT_ok) api_.unregister_from_channel(channel.name.c_str(),channel.index,channel.type);
         channel.registration=SCS_RESULT_not_found;
     }
@@ -251,38 +294,29 @@ void Runtime::event(scs_event_t event,const void* data) {
                    name!="differential.ratio" && name!="forward.ratio" && name!="reverse.ratio" && name!="rpm.limit" && name!="fuel.capacity" && name!="adblue.capacity" &&
                    name!="brake.air.pressure.warning" && name!="brake.air.pressure.emergency" && name!="shifter.type" &&
                    name!="selector.count" && name!="hshifter.slot.gear") continue;
-                const auto& value=attribute->value;json decoded;
-                switch(value.type) {
-                    case SCS_VALUE_TYPE_bool:decoded=value.value_bool.value!=0;break;
-                    case SCS_VALUE_TYPE_u32:decoded=value.value_u32.value;break;
-                    case SCS_VALUE_TYPE_float:decoded=value.value_float.value;break;
-                    case SCS_VALUE_TYPE_string:decoded=value.value_string.value;break;
-                    case SCS_VALUE_TYPE_fvector: {
-                        const auto& v=value.value_fvector;decoded={v.x,v.y,v.z};break;
-                    }
-                    default:continue;
-                }
+                json decoded;
+                if(!decode_attribute(attribute->value,decoded)) continue;
                 if(name=="wheels.count") wheel_count=decoded.get<uint32_t>();
                 attributes.push_back({{"name",name},{"index",attribute->index==SCS_U32_NIL?json(nullptr):json(attribute->index)},
                     {"value",std::move(decoded)}});
             }
-            // SDK event callbacks permit registration; deque keeps callback contexts stable.
-            while(!channels_.empty() && channels_.back().index!=SCS_U32_NIL) {
-                auto& c=channels_.back();
-                if(c.registration==SCS_RESULT_ok) api_.unregister_from_channel(c.name.c_str(),c.index,c.type);
-                registration_.erase(c.key());channels_.pop_back();
-            }
-            for(uint32_t i=0;i<wheel_count;++i) for(const auto& field:schema_.at("sdk_wheel_fields")) {
-                channels_.push_back({this,field.at("name"),sdk_value_type(field.at("type")),i});
-                auto& c=channels_.back();
-                c.registration=api_.register_for_channel(c.name.c_str(),c.index,c.type,
-                    SCS_TELEMETRY_CHANNEL_FLAG_each_frame|SCS_TELEMETRY_CHANNEL_FLAG_no_value,channel_callback,&c);
-                registration_[c.key()]=c.registration;
-            }
-            registered_.store(std::make_shared<const json>(registration_));
+            register_wheels("truck",wheel_count,schema_.at("sdk_wheel_fields"));
             wheel_count_=wheel_count;
             truck_config_.store(std::make_shared<const json>(json{{"source","SDK truck configuration"},
                 {"truck_generation",generation_},{"attributes",std::move(attributes)}}));
+        } else if(config.id) {
+            const std::string id=config.id;
+            json attributes=json::array();uint32_t wheel_count=0;
+            for(const auto* attribute=config.attributes;attribute && attribute->name;++attribute) {
+                json decoded;
+                if(!decode_attribute(attribute->value,decoded)) continue;
+                if(std::string_view(attribute->name)=="wheels.count") wheel_count=decoded.get<uint32_t>();
+                attributes.push_back({{"name",attribute->name},{"index",attribute->index==SCS_U32_NIL?json(nullptr):json(attribute->index)},
+                    {"value",std::move(decoded)}});
+            }
+            if(id=="trailer.0") register_wheels(id,wheel_count,schema_.value("sdk_trailer_wheel_fields",json::array()));
+            configs_store_[id]={{"truck_generation",generation_},{"attributes",std::move(attributes)}};
+            configs_.store(std::make_shared<const json>(configs_store_));
         }
     } else if(event==SCS_TELEMETRY_EVENT_frame_start && data) {
         ++frame_; clock_=*static_cast<const scs_telemetry_frame_start_t*>(data);
@@ -440,13 +474,17 @@ json Runtime::command(const json& request) {
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","parallel_passes"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","configs","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","parallel_passes"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"parallel_passes_allowed",gate_ok_ && allow_tier1_ && allow_parallel_passes_},
         {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false) || parallel_passes_->active()},
         {"drive",current_drive()},
         {"field_writes",false},{"camera_rig",render_probe_->camera_rig(json::object())},{"channels",*registered_.load()}};
     if(cmd=="schema") return schema_;
+    if(cmd=="configs") {
+        auto configs=configs_.load();
+        return configs?*configs:json::object();
+    }
     if(cmd=="truck_config") {
         auto config=truck_config_.load();
         if(!config) throw std::runtime_error("No SDK truck configuration has been received");

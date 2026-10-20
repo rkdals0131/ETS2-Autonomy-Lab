@@ -1,7 +1,7 @@
 """Game keys through SendInput scan codes (DirectInput sees them like real keys).
 
 Bindings are the ETS_SysID profile's (controls.sii): B engine brake, ; and ' retarder
-up and down, U lift axle, ` console. The game window must have focus.
+up and down, U lift axle, left Shift and Ctrl gear up and down, ` console. The game window must have focus.
 """
 import ctypes, time
 from ctypes import wintypes
@@ -15,6 +15,7 @@ for i, c in enumerate("1234567890"):
 SCAN[" "], SCAN["-"] = 0x39, 0x0C
 ENTER, GRAVE, SHIFT = 0x1C, 0x29, 0x2A
 ENGINE_BRAKE, RETARDER_UP, RETARDER_DOWN, LIFT_AXLE = 0x30, 0x27, 0x28, 0x16
+GEAR_UP, GEAR_DOWN = 0x2A, 0x1D  # left Shift, left Ctrl (sequential gearbox)
 
 
 class KEYBDINPUT(ctypes.Structure):

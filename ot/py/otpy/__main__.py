@@ -15,7 +15,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("loader", help="Resident loader control; module changes run at SDK frame end").add_argument(
         "action", choices=("status", "load", "unload", "reload"), default="status", nargs="?")
-    for name in ("ping", "version", "hooks", "frames", "schema", "snapshot", "state", "panic", "dump", "reload_permissions", "truck_config",
+    for name in ("ping", "version", "hooks", "frames", "schema", "snapshot", "state", "panic", "dump", "reload_permissions", "truck_config", "configs",
                  "sdk_timing", "traffic"):
         sub.add_parser(name)
     sub.add_parser("read").add_argument("field")

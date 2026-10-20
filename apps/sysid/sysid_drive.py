@@ -97,6 +97,57 @@ def lift_down(r):
     return any(grounded) if grounded else None
 
 
+class Shifter:
+    """Gear changes for a sequential gearbox (SDK controls shifter.type "manual"), one gear
+    per key press like a plain automatic: up above UP_RPM (UP_RPM_LIGHT at part throttle),
+    down below DOWN_RPM, START_GEAR from standstill. `fixed` holds one gear instead."""
+    UP_RPM, UP_RPM_LIGHT, DOWN_RPM, START_GEAR, TOP_GEAR = 1700, 1450, 1000, 3, 14
+    SETTLE_S = 1.2  # the gearbox's 0.7 s shift time plus margin before the next press
+
+    def __init__(self):
+        self.tapper = keys.Tapper(hold=0.08, gap=0.0)
+        self.last = -1e9
+        self.fixed = None
+
+    def target(self, r, thr):
+        gear, rpm = r["gear"], r["rpm"]
+        if self.fixed is not None:
+            return self.fixed
+        if r["speed"] < 1.0:
+            return self.START_GEAR
+        if rpm > (self.UP_RPM if thr > 0.5 else self.UP_RPM_LIGHT) and gear < self.TOP_GEAR:
+            return gear + 1
+        if rpm < self.DOWN_RPM and gear > 1:
+            return gear - 1
+        return gear
+
+    def update(self, r, thr):
+        self.tapper.update()
+        if not r or r["gear"] is None or r["rpm"] is None or not self.tapper.ready():
+            return
+        if time.monotonic() - self.last < self.SETTLE_S:
+            return
+        want = self.target(r, thr)
+        if want != r["gear"] and r["gear"] >= 0:
+            self.tapper.press(keys.GEAR_UP if want > r["gear"] else keys.GEAR_DOWN)
+            self.last = time.monotonic()
+
+    def release(self):
+        self.tapper.release()
+
+
+def shifter_type(client):
+    try:
+        attrs = client.request("configs").get("controls", {}).get("attributes", [])
+    except Exception:
+        return None
+    return next((a["value"] for a in attrs if a["name"] == "shifter.type"), None)
+
+
+TRAILER_CHANNELS = ["trailer.0.connected", "trailer.0.world.placement", "trailer.0.velocity.linear",
+                    "trailer.0.velocity.angular", "trailer.0.acceleration.linear"]
+
+
 class Session:
     def __init__(self, out_dir):
         self.out = out_dir
@@ -122,7 +173,11 @@ class Session:
         (out_dir / "truck_config.json").write_text(json.dumps(config, indent=1))
         self.geometry = Geometry(config)
         # Wipers: the profile runs the rain sensor (g_rain_sensor 1), so they mark rain.
-        self.extra += self.geometry.channels() + ["truck.brake.temperature", "truck.wipers"]
+        self.extra += self.geometry.channels() + ["truck.brake.temperature", "truck.wipers"] + TRAILER_CHANNELS
+        # The harness shifts a sequential gearbox itself; automatic ones shift on their own.
+        self.shifter = Shifter() if shifter_type(self.client) == "manual" else None
+        configs = self.client.request("configs")
+        (out_dir / "configs.json").write_text(json.dumps({k: v for k, v in configs.items() if v.get("attributes")}, indent=1))
 
     # status for the viewer, at most 10 Hz
     def status(self, force=False):
@@ -239,6 +294,8 @@ class Session:
             self.thr = max(0.0, min(1.0, thr))
         if brk is not None:
             self.brk = max(0.0, min(1.0, brk))
+        if self.shifter:
+            self.shifter.update(self.last, self.thr)
         self.seq += 1
         r = self.client.request("drive", action="command", owner=self.lease, drive_owner=self.lease, epoch=self.epoch,
                                 sequence=self.seq, deadline_ms=int(ticks()) + 190, axes=3,
@@ -674,6 +731,8 @@ def release(s):
         s.client.request("lease", action="release", owner=s.lease)
     except Exception as e:
         print("lease release:", e)
+    if s.shifter:
+        s.shifter.release()
     if s.focus_losses:
         (s.out / "focus_losses.json").write_text(json.dumps(s.focus_losses, indent=1))
         print("game window in the background:", s.focus_losses, flush=True)

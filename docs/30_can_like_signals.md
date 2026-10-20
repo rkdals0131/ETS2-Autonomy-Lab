@@ -80,6 +80,12 @@ ABS·ESC 작동 플래그는 찾지 못했습니다. 바퀴 각속도와 차속�
 - 타이어: 구름 저항 앞 6.5, 뒤 7.5 kg/t, 젖은 노면 접지 0.9(비가 오면 마찰이 바뀌는 근거).
 - 전역 물리(RTP 9.2가 덮어씀): 공기 저항 3.0·v², 브레이크 최대 온도 200 °C, 브레이크 균형 1.1, 횡 bristle 강성 ×1.15. 엔진·브레이크·리타더 관련 값은 기본 게임 그대로입니다.
 
+## 트레일러와 구성 (core 0.40.0)
+
+- SDK 채널: `trailer.0.connected`, `trailer.0.world.placement`, `trailer.0.velocity.linear`·`angular`, `trailer.0.acceleration.linear`, `trailer.0.cargo.damage`, 바퀴별 `trailer.0.wheel.on_ground`·`angular_velocity`·`suspension.deflection`·`lift`. 트럭 위치와 트레일러 위치로 히치 각을 직접 구할 수 있습니다(실차라면 추정해야 하는 값).
+- `ot.cmd configs`(파이프 명령 `configs`): 트럭 외 SDK 구성을 id별로 돌려줍니다. `trailer.0`(바퀴 위치·반경·리프트 가능 여부, 히치 위치, 차체 종류), `job`(화물 id·질량, 작업이 없으면 빈 값), `controls`(`shifter.type`: 자동은 `automatic`, 시퀀셜은 `manual`), `hshifter`, `substances`.
+- 2026-10-20 확인: 개인 트레일러 `vehicle.scs.box`(냉동 박스, 3축 6바퀴, 첫 축만 리프트 가능). 트레일러 좌표에서 히치 z −5.07 m, 축 z 1.54·2.86·4.16 m라 히치에서 가운데 축까지 약 7.9 m입니다. 작업이 없어 빈 트레일러이고 화물 질량도 없습니다.
+
 ## 남은 것
 
 - 순간 연료율, ABS·ESC 플래그, 엔진 부하율(EEC2)은 확정하지 못했습니다.
