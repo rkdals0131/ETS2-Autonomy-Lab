@@ -157,11 +157,11 @@ DC16 520, def `torque 2700` Nm, `torque_curve` (300, 0.1) (440, 0.4) (1000, 1) (
 | 마찰 토크(이전 측정) | −265 ~ −287 Nm, "거의 일정" | 800–1,600 rpm, 엔진브레이크 꺼짐, 클러치 연결 | [docs/30](30_can_like_signals.md#물리-검증) |
 | 엔진브레이크 토크 | 약 −3,000 Nm로 평평 | 1,100–2,200 rpm, 1,100 rpm 아래에서 줄어듦 | [docs/30](30_can_like_signals.md#기어-고정-맵-2026-10-20-시퀀셜-트레일러-연결) |
 | 엔진브레이크 토크(이전 측정) | −3,024 Nm | 2,000–2,200 rpm, 자동 변속이 이 회전수를 유지 | [docs/30](30_can_like_signals.md#물리-검증) |
-| 부분 부하 | 스로틀 0.5의 정상 토크 = 전부하의 53–58 % | 회전수가 낮을수록 큼. 스로틀–토크 비선형 | [docs/30](30_can_like_signals.md#기어-고정-맵-2026-10-20-시퀀셜-트레일러-연결) |
+| 부분 부하 | 스로틀 0.5의 정상 토크 = 전부하의 53–58 %. 맞춤식 `토크 = 마찰 + f(스로틀)·(전부하 − 마찰)`, `f ≈ 1 − (1 − 스로틀)^1.33`(0.5 → 0.60), 회전수 무관 | 비율이 회전수에 따라 다른 것은 마찰 몫 때문. [Simulink 종방향 모델](../apps/sysid/matlab/longitudinal/README.md) | [docs/30](30_can_like_signals.md#기어-고정-맵-2026-10-20-시퀀셜-트레일러-연결) |
 | 적용 스로틀 응답 | 0.07 s 안 | 입력 → `truck.effective.throttle` | 같음 |
 | 토크 응답, 전부하 계단 | 63 % 0.5–0.73 s, 90 % 0.8–1.2 s | | 같음 |
 | 토크 응답, 스로틀 0.5 계단 | 63 % 0.35–0.38 s, 90 % 0.55–0.6 s | | 같음 |
-| 토크 상승률 제한 | 약 2,500 Nm/s | 1차 지연보다 이 모델에 가까움(터보 지연에 해당) | 같음 |
+| 토크 상승률 제한 | 800 rpm 1,400–1,900 Nm/s, 1,250 rpm 이상 3,400–3,900 Nm/s, 높은 토크 쪽 1,800–2,500 Nm/s((토크, 회전수) 표, [Simulink 종방향 모델](../apps/sysid/matlab/longitudinal/README.md)) | 1차 지연보다 이 모델에 가까움(터보 지연에 해당) | 같음 |
 | 전부하 vs 사양 | 1,600–2,000 rpm에서 1 % 안(2,129 대 2,137, 1,985 대 1,988 Nm) | 자동 변속 실행, 1,000–1,600 rpm은 과도 구간 섞임 | [docs/30](30_can_like_signals.md#물리-검증) |
 
 엔진브레이크 감속은 `토크 × 기어비 × 2.59 / 0.506 / m`로 나옵니다. 트럭 단독, 자동 변속, B 유지에서 70→20 km/h 평균 2.54 m/s²(4x2는 1.11), 기어·회전수별로 10단 1500–2000 rpm 2.8, 8단 1500–2250 rpm 3.1–4.1, 10단 2250 rpm 이상 1.5 m/s²입니다([docs/29](29_reference_truck_dynamics.md#브레이크엔진브레이크리타더-brake-20261020-105939-태그-올림-brake-20261020-120355-태그-내림)).
@@ -181,8 +181,8 @@ G33CM-R, def `research/extracted/def/def/vehicle/truck/scania.s_2016/transmissio
 |---|---|---|---|---|
 | 종감속비 | 2.59 | – | def `differential_ratio`. 출력축 회전 = 구동 바퀴 각속도 × 2.59(r 1.000) | [docs/30](30_can_like_signals.md#신호-대응) |
 | 변속 시간 | 0.7 | s | def `shift_time` | [docs/30](30_can_like_signals.md#정적-사양ec1에-해당) |
-| 효율 η | 0.933 | – | `출력 토크 = η·기어비·(엔진 토크 − J·엔진 각가속도)`, 클러치 붙은 4개 단 16,888 표본, R² 0.972 | [docs/30](30_can_like_signals.md#기어-고정-맵-2026-10-20-시퀀셜-트레일러-연결), `gear-20261020-151650` |
-| 관성 J | 5.75 | kg·m² | 엔진 쪽으로 환산한 플라이휠 + 변속기 | 같음 |
+| 효율 η | 0.933(첫 맞춤) → 0.972(매끄러운 미분, R² 0.9996, rms 33 Nm, [Simulink 종방향 모델](../apps/sysid/matlab/longitudinal/README.md)) | – | `출력 토크 = η·기어비·(엔진 토크 − J·엔진 각가속도)`, 클러치 붙은 4개 단 16,888 표본, R² 0.972 | [docs/30](30_can_like_signals.md#기어-고정-맵-2026-10-20-시퀀셜-트레일러-연결), `gear-20261020-151650` |
+| 관성 J | 출력 토크 채널: 5.75(첫 맞춤) → 16.0. 실제 구동(차속): 4.6(클러치 붙음), 5.85(클러치 열림) | kg·m² | 출력 토크 채널은 보고용 계산이라 실제 구동력과 다름. 동역학에는 4.6 | 같음, [Simulink 종방향 모델](../apps/sysid/matlab/longitudinal/README.md) |
 | 효율(이전) | 0.905 | – | 타력에서 `output_torque / (engine_torque × gear_ratio)` 중앙값, 관성 항 없음 | [docs/30](30_can_like_signals.md#물리-검증) |
 | def 관성 관련 | `inertia_scaling_const 1.0`, `transmission_rel_flywheel_inertia 0.5` | – | RTP 9.2 `def/vehicle/physics.sii` | `research/extracted/mod_rtp_9.2` |
 

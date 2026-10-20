@@ -1,0 +1,903 @@
+{
+  "created": "2026-10-20 17:11",
+  "sweeps": [
+    {
+      "param": "veh.tau_body",
+      "value": 0,
+      "kinds": "brake,brake_step,throttle_step,full,half,eb",
+      "rms_v": 0.41404916714704032,
+      "rms_a": 2.6061372876904123,
+      "rms_te": 203.77487046337833
+    },
+    {
+      "param": "veh.tau_body",
+      "value": 0.1,
+      "kinds": "brake,brake_step,throttle_step,full,half,eb",
+      "rms_v": 0.27587465462478528,
+      "rms_a": 2.5761510640868037,
+      "rms_te": 202.25439336187114
+    },
+    {
+      "param": "veh.tau_body",
+      "value": 0.15,
+      "kinds": "brake,brake_step,throttle_step,full,half,eb",
+      "rms_v": 0.22480910680027,
+      "rms_a": 2.5699558277615866,
+      "rms_te": 203.7149648890607
+    },
+    {
+      "param": "veh.tau_body",
+      "value": 0.2,
+      "kinds": "brake,brake_step,throttle_step,full,half,eb",
+      "rms_v": 0.1996291662635428,
+      "rms_a": 2.5669393596668124,
+      "rms_te": 206.85710243427329
+    },
+    {
+      "param": "veh.tau_body",
+      "value": 0.25,
+      "kinds": "brake,brake_step,throttle_step,full,half,eb",
+      "rms_v": 0.20920054677437447,
+      "rms_a": 2.5658837883917229,
+      "rms_te": 210.60025557550853
+    },
+    {
+      "param": "veh.tau_body",
+      "value": 0.3,
+      "kinds": "brake,brake_step,throttle_step,full,half,eb",
+      "rms_v": 0.24919785201048761,
+      "rms_a": 2.5659463056027438,
+      "rms_te": 214.601928393283
+    },
+    {
+      "param": "veh.tau_body",
+      "value": 0.4,
+      "kinds": "brake,brake_step,throttle_step,full,half,eb",
+      "rms_v": 0.36296935719654971,
+      "rms_a": 2.5670340593546115,
+      "rms_te": 222.6695463231639
+    },
+    {
+      "param": "gb.C_clutch",
+      "value": 150000,
+      "kinds": "launch,accel,throttle_step,pre_brake",
+      "rms_v": 0.77623980962281569,
+      "rms_a": 0.20864580349039397,
+      "rms_te": 221.04248079349679
+    },
+    {
+      "param": "gb.C_clutch",
+      "value": 190000,
+      "kinds": "launch,accel,throttle_step,pre_brake",
+      "rms_v": 0.45253080583965433,
+      "rms_a": 0.17663187868112784,
+      "rms_te": 197.36491871123448
+    },
+    {
+      "param": "gb.C_clutch",
+      "value": 230000,
+      "kinds": "launch,accel,throttle_step,pre_brake",
+      "rms_v": 0.28082072578758543,
+      "rms_a": 0.17256872426325393,
+      "rms_te": 192.63654983251513
+    },
+    {
+      "param": "gb.C_clutch",
+      "value": 305000,
+      "kinds": "launch,accel,throttle_step,pre_brake",
+      "rms_v": 0.29722103725192939,
+      "rms_a": 0.18296739246507215,
+      "rms_te": 192.54596920848428
+    },
+    {
+      "param": "gb.C_clutch",
+      "value": 400000,
+      "kinds": "launch,accel,throttle_step,pre_brake",
+      "rms_v": 0.37122797315642486,
+      "rms_a": 0.18864654270695705,
+      "rms_te": 192.66647870902204
+    }
+  ],
+  "runs": [
+    {
+      "run": "gear-20261020-151650",
+      "variant": "fitted",
+      "mass": {
+        "m": 19925,
+        "crr": 0.00708,
+        "note": "per-run fit (engine-torque force balance)"
+      },
+      "kinds": [
+        {
+          "kind": "launch",
+          "segments": 1,
+          "seconds": 8,
+          "rms_v": 0.254,
+          "rms_te": 187,
+          "rms_to": 173,
+          "mean_abs_end_v": 0.505
+        },
+        {
+          "kind": "approach",
+          "segments": 7,
+          "seconds": 147,
+          "rms_v": 0.091,
+          "rms_te": 56,
+          "rms_to": 708,
+          "mean_abs_end_v": 0.095
+        },
+        {
+          "kind": "shift",
+          "segments": 4,
+          "seconds": 7,
+          "rms_v": 0.068,
+          "rms_te": 69,
+          "rms_to": 162,
+          "mean_abs_end_v": 0.081
+        },
+        {
+          "kind": "full",
+          "segments": 5,
+          "seconds": 38.5,
+          "rms_v": 0.261,
+          "rms_te": 214,
+          "rms_to": 1872,
+          "mean_abs_end_v": 0.261
+        },
+        {
+          "kind": "coast",
+          "segments": 7,
+          "seconds": 146.6,
+          "rms_v": 0.097,
+          "rms_te": 26,
+          "rms_to": 123,
+          "mean_abs_end_v": 0.115
+        },
+        {
+          "kind": "half",
+          "segments": 5,
+          "seconds": 74.2,
+          "rms_v": 0.056,
+          "rms_te": 15,
+          "rms_to": 278,
+          "mean_abs_end_v": 0.053
+        },
+        {
+          "kind": "ret",
+          "segments": 4,
+          "seconds": 71.2,
+          "rms_v": 0.094,
+          "rms_te": 19,
+          "rms_to": 106,
+          "mean_abs_end_v": 0.131
+        },
+        {
+          "kind": "eb",
+          "segments": 3,
+          "seconds": 21.3,
+          "rms_v": 0.148,
+          "rms_te": 231,
+          "rms_to": 1130,
+          "mean_abs_end_v": 0.097
+        },
+        {
+          "kind": "uturn",
+          "segments": 6,
+          "seconds": 87.6,
+          "rms_v": 0.037,
+          "rms_te": 26,
+          "rms_to": 84,
+          "mean_abs_end_v": 0.029
+        },
+        {
+          "kind": "ALL",
+          "segments": 42,
+          "seconds": 601.3,
+          "rms_v": 0.109,
+          "rms_te": 80,
+          "rms_to": 639,
+          "mean_abs_end_v": 0.116
+        }
+      ],
+      "whole": {
+        "duration_s": 620.77516800000012,
+        "rms_v": 0.76895968598343856,
+        "max_abs_v": 4.4465988330381876,
+        "rms_te": 206.39618594555694,
+        "rms_to": 857.57529697364748,
+        "distance_err_pct": -2.2470227137382808
+      }
+    },
+    {
+      "run": "gear-20261020-151650",
+      "variant": "baseline",
+      "mass": {
+        "m": 20300,
+        "crr": 0.0077,
+        "note": "docs value"
+      },
+      "kinds": [
+        {
+          "kind": "launch",
+          "segments": 1,
+          "seconds": 8,
+          "rms_v": 0.648,
+          "rms_te": 940,
+          "rms_to": 411,
+          "mean_abs_end_v": 1.744
+        },
+        {
+          "kind": "approach",
+          "segments": 7,
+          "seconds": 147,
+          "rms_v": 1.411,
+          "rms_te": 184,
+          "rms_to": 516,
+          "mean_abs_end_v": 1.724
+        },
+        {
+          "kind": "shift",
+          "segments": 4,
+          "seconds": 7,
+          "rms_v": 0.152,
+          "rms_te": 166,
+          "rms_to": 136,
+          "mean_abs_end_v": 0.186
+        },
+        {
+          "kind": "full",
+          "segments": 5,
+          "seconds": 38.5,
+          "rms_v": 0.485,
+          "rms_te": 352,
+          "rms_to": 1985,
+          "mean_abs_end_v": 0.409
+        },
+        {
+          "kind": "coast",
+          "segments": 7,
+          "seconds": 146.6,
+          "rms_v": 0.205,
+          "rms_te": 22,
+          "rms_to": 404,
+          "mean_abs_end_v": 0.13
+        },
+        {
+          "kind": "half",
+          "segments": 5,
+          "seconds": 74.2,
+          "rms_v": 1.597,
+          "rms_te": 228,
+          "rms_to": 548,
+          "mean_abs_end_v": 1.548
+        },
+        {
+          "kind": "ret",
+          "segments": 4,
+          "seconds": 71.2,
+          "rms_v": 0.29,
+          "rms_te": 14,
+          "rms_to": 395,
+          "mean_abs_end_v": 0.351
+        },
+        {
+          "kind": "eb",
+          "segments": 3,
+          "seconds": 21.3,
+          "rms_v": 0.218,
+          "rms_te": 391,
+          "rms_to": 1041,
+          "mean_abs_end_v": 0.256
+        },
+        {
+          "kind": "uturn",
+          "segments": 6,
+          "seconds": 87.6,
+          "rms_v": 0.994,
+          "rms_te": 131,
+          "rms_to": 322,
+          "mean_abs_end_v": 1.185
+        },
+        {
+          "kind": "ALL",
+          "segments": 42,
+          "seconds": 601.3,
+          "rms_v": 0.994,
+          "rms_te": 207,
+          "rms_to": 685,
+          "mean_abs_end_v": 0.822
+        }
+      ],
+      "whole": {
+        "duration_s": 620.77516800000012,
+        "rms_v": 4.9322787035746458,
+        "max_abs_v": 11.934881798441577,
+        "rms_te": 400.61160260285607,
+        "rms_to": 1167.2163979411798,
+        "distance_err_pct": -33.720407084355
+      }
+    },
+    {
+      "run": "brake-20261020-152718",
+      "variant": "fitted",
+      "mass": {
+        "m": 20420.4,
+        "crr": 0.00766,
+        "note": "per-run fit (engine-torque force balance)"
+      },
+      "kinds": [
+        {
+          "kind": "launch",
+          "segments": 1,
+          "seconds": 7.9,
+          "rms_v": 0.156,
+          "rms_te": 220,
+          "rms_to": 6,
+          "mean_abs_end_v": 0.2
+        },
+        {
+          "kind": "uturn",
+          "segments": 3,
+          "seconds": 43.6,
+          "rms_v": 0.078,
+          "rms_te": 56,
+          "rms_to": 110,
+          "mean_abs_end_v": 0.016
+        },
+        {
+          "kind": "accel",
+          "segments": 5,
+          "seconds": 88.4,
+          "rms_v": 0.254,
+          "rms_te": 223,
+          "rms_to": 315,
+          "mean_abs_end_v": 0.268
+        },
+        {
+          "kind": "steady",
+          "segments": 5,
+          "seconds": 24.7,
+          "rms_v": 0.062,
+          "rms_te": 78,
+          "rms_to": 164,
+          "mean_abs_end_v": 0.074
+        },
+        {
+          "kind": "brake",
+          "segments": 5,
+          "seconds": 50.7,
+          "rms_v": 0.121,
+          "rms_te": 256,
+          "rms_to": 412,
+          "mean_abs_end_v": 0.183
+        },
+        {
+          "kind": "ALL",
+          "segments": 19,
+          "seconds": 215.4,
+          "rms_v": 0.18,
+          "rms_te": 197,
+          "rms_to": 294,
+          "mean_abs_end_v": 0.151
+        }
+      ],
+      "whole": {
+        "duration_s": 246.77346200000102,
+        "rms_v": 0.27386556358834441,
+        "max_abs_v": 2.4796501396924531,
+        "rms_te": 212.56024390940794,
+        "rms_to": 353.67421530794621,
+        "distance_err_pct": -1.8025111642961429
+      }
+    },
+    {
+      "run": "brake-20261020-152718",
+      "variant": "baseline",
+      "mass": {
+        "m": 20300,
+        "crr": 0.0077,
+        "note": "docs value"
+      },
+      "kinds": [
+        {
+          "kind": "launch",
+          "segments": 1,
+          "seconds": 7.9,
+          "rms_v": 0.36,
+          "rms_te": 1078,
+          "rms_to": 48,
+          "mean_abs_end_v": 0.603
+        },
+        {
+          "kind": "uturn",
+          "segments": 3,
+          "seconds": 43.6,
+          "rms_v": 0.979,
+          "rms_te": 269,
+          "rms_to": 337,
+          "mean_abs_end_v": 1.29
+        },
+        {
+          "kind": "accel",
+          "segments": 5,
+          "seconds": 88.4,
+          "rms_v": 1.428,
+          "rms_te": 936,
+          "rms_to": 1026,
+          "mean_abs_end_v": 2.358
+        },
+        {
+          "kind": "steady",
+          "segments": 5,
+          "seconds": 24.7,
+          "rms_v": 0.27,
+          "rms_te": 240,
+          "rms_to": 452,
+          "mean_abs_end_v": 0.452
+        },
+        {
+          "kind": "brake",
+          "segments": 5,
+          "seconds": 50.7,
+          "rms_v": 1.801,
+          "rms_te": 212,
+          "rms_to": 425,
+          "mean_abs_end_v": 3.848
+        },
+        {
+          "kind": "ALL",
+          "segments": 19,
+          "seconds": 215.4,
+          "rms_v": 1.345,
+          "rms_te": 659,
+          "rms_to": 722,
+          "mean_abs_end_v": 1.988
+        }
+      ],
+      "whole": {
+        "duration_s": 246.77346200000102,
+        "rms_v": 3.4149610568370261,
+        "max_abs_v": 6.4452525925907462,
+        "rms_te": 641.432119066028,
+        "rms_to": 776.61980073276891,
+        "distance_err_pct": -26.549670710234377
+      }
+    },
+    {
+      "run": "sysid-20261020-153130",
+      "variant": "fitted",
+      "mass": {
+        "m": 20606.1,
+        "crr": 0.00688,
+        "note": "per-run fit (engine-torque force balance)"
+      },
+      "kinds": [
+        {
+          "kind": "launch",
+          "segments": 1,
+          "seconds": 7.9,
+          "rms_v": 0.142,
+          "rms_te": 215,
+          "rms_to": 6,
+          "mean_abs_end_v": 0.181
+        },
+        {
+          "kind": "accel",
+          "segments": 4,
+          "seconds": 47.7,
+          "rms_v": 0.261,
+          "rms_te": 42,
+          "rms_to": 140,
+          "mean_abs_end_v": 0.294
+        },
+        {
+          "kind": "steady",
+          "segments": 4,
+          "seconds": 15.9,
+          "rms_v": 0.02,
+          "rms_te": 46,
+          "rms_to": 83,
+          "mean_abs_end_v": 0.022
+        },
+        {
+          "kind": "rate_hold",
+          "segments": 8,
+          "seconds": 19.9,
+          "rms_v": 0.018,
+          "rms_te": 18,
+          "rms_to": 56,
+          "mean_abs_end_v": 0.026
+        },
+        {
+          "kind": "recover",
+          "segments": 24,
+          "seconds": 83.5,
+          "rms_v": 0.051,
+          "rms_te": 16,
+          "rms_to": 63,
+          "mean_abs_end_v": 0.042
+        },
+        {
+          "kind": "sine",
+          "segments": 12,
+          "seconds": 95.5,
+          "rms_v": 0.092,
+          "rms_te": 14,
+          "rms_to": 50,
+          "mean_abs_end_v": 0.079
+        },
+        {
+          "kind": "turn",
+          "segments": 4,
+          "seconds": 31.9,
+          "rms_v": 0.201,
+          "rms_te": 13,
+          "rms_to": 110,
+          "mean_abs_end_v": 0.248
+        },
+        {
+          "kind": "uturn",
+          "segments": 3,
+          "seconds": 43.6,
+          "rms_v": 0.763,
+          "rms_te": 177,
+          "rms_to": 467,
+          "mean_abs_end_v": 0.437
+        },
+        {
+          "kind": "coast",
+          "segments": 1,
+          "seconds": 14.9,
+          "rms_v": 0.02,
+          "rms_te": 43,
+          "rms_to": 75,
+          "mean_abs_end_v": 0.051
+        },
+        {
+          "kind": "pre_brake",
+          "segments": 3,
+          "seconds": 35.9,
+          "rms_v": 0.25,
+          "rms_te": 252,
+          "rms_to": 303,
+          "mean_abs_end_v": 0.086
+        },
+        {
+          "kind": "brake_step",
+          "segments": 3,
+          "seconds": 29.9,
+          "rms_v": 0.3,
+          "rms_te": 334,
+          "rms_to": 856,
+          "mean_abs_end_v": 0
+        },
+        {
+          "kind": "throttle_step",
+          "segments": 3,
+          "seconds": 35.9,
+          "rms_v": 0.264,
+          "rms_te": 213,
+          "rms_to": 238,
+          "mean_abs_end_v": 0.349
+        },
+        {
+          "kind": "brake_to_stop",
+          "segments": 3,
+          "seconds": 23.9,
+          "rms_v": 0.057,
+          "rms_te": 396,
+          "rms_to": 1304,
+          "mean_abs_end_v": 0
+        },
+        {
+          "kind": "ALL",
+          "segments": 73,
+          "seconds": 486.6,
+          "rms_v": 0.282,
+          "rms_te": 163,
+          "rms_to": 404,
+          "mean_abs_end_v": 0.1
+        }
+      ],
+      "whole": {
+        "duration_s": 505.81309999999939,
+        "rms_v": 0.61206721768485561,
+        "max_abs_v": 2.4728184725627589,
+        "rms_te": 162.6418759457147,
+        "rms_to": 375.67464752484443,
+        "distance_err_pct": 4.3098504147358963
+      }
+    },
+    {
+      "run": "sysid-20261020-153130",
+      "variant": "baseline",
+      "mass": {
+        "m": 20300,
+        "crr": 0.0077,
+        "note": "docs value"
+      },
+      "kinds": [
+        {
+          "kind": "launch",
+          "segments": 1,
+          "seconds": 7.9,
+          "rms_v": 0.36,
+          "rms_te": 1072,
+          "rms_to": 47,
+          "mean_abs_end_v": 0.602
+        },
+        {
+          "kind": "accel",
+          "segments": 4,
+          "seconds": 47.7,
+          "rms_v": 0.916,
+          "rms_te": 240,
+          "rms_to": 417,
+          "mean_abs_end_v": 1.323
+        },
+        {
+          "kind": "steady",
+          "segments": 4,
+          "seconds": 15.9,
+          "rms_v": 0.227,
+          "rms_te": 175,
+          "rms_to": 273,
+          "mean_abs_end_v": 0.372
+        },
+        {
+          "kind": "rate_hold",
+          "segments": 8,
+          "seconds": 19.9,
+          "rms_v": 0.087,
+          "rms_te": 105,
+          "rms_to": 201,
+          "mean_abs_end_v": 0.143
+        },
+        {
+          "kind": "recover",
+          "segments": 24,
+          "seconds": 83.5,
+          "rms_v": 0.119,
+          "rms_te": 108,
+          "rms_to": 208,
+          "mean_abs_end_v": 0.201
+        },
+        {
+          "kind": "sine",
+          "segments": 12,
+          "seconds": 95.5,
+          "rms_v": 0.42,
+          "rms_te": 107,
+          "rms_to": 216,
+          "mean_abs_end_v": 0.461
+        },
+        {
+          "kind": "turn",
+          "segments": 4,
+          "seconds": 31.9,
+          "rms_v": 0.201,
+          "rms_te": 113,
+          "rms_to": 313,
+          "mean_abs_end_v": 0.31
+        },
+        {
+          "kind": "uturn",
+          "segments": 3,
+          "seconds": 43.6,
+          "rms_v": 2.312,
+          "rms_te": 366,
+          "rms_to": 795,
+          "mean_abs_end_v": 1.73
+        },
+        {
+          "kind": "coast",
+          "segments": 1,
+          "seconds": 14.9,
+          "rms_v": 0.145,
+          "rms_te": 103,
+          "rms_to": 219,
+          "mean_abs_end_v": 0.263
+        },
+        {
+          "kind": "pre_brake",
+          "segments": 3,
+          "seconds": 35.9,
+          "rms_v": 0.822,
+          "rms_te": 1058,
+          "rms_to": 1022,
+          "mean_abs_end_v": 1.707
+        },
+        {
+          "kind": "brake_step",
+          "segments": 3,
+          "seconds": 29.9,
+          "rms_v": 2.338,
+          "rms_te": 223,
+          "rms_to": 840,
+          "mean_abs_end_v": 0
+        },
+        {
+          "kind": "throttle_step",
+          "segments": 3,
+          "seconds": 35.9,
+          "rms_v": 0.716,
+          "rms_te": 943,
+          "rms_to": 807,
+          "mean_abs_end_v": 1.322
+        },
+        {
+          "kind": "brake_to_stop",
+          "segments": 3,
+          "seconds": 23.9,
+          "rms_v": 0.434,
+          "rms_te": 333,
+          "rms_to": 1246,
+          "mean_abs_end_v": 0
+        },
+        {
+          "kind": "ALL",
+          "segments": 73,
+          "seconds": 486.6,
+          "rms_v": 1.018,
+          "rms_te": 447,
+          "rms_to": 589,
+          "mean_abs_end_v": 0.475
+        }
+      ],
+      "whole": {
+        "duration_s": 505.81309999999939,
+        "rms_v": 7.0500694468539846,
+        "max_abs_v": 13.544064895775271,
+        "rms_te": 489.14330783452675,
+        "rms_to": 718.59729732355959,
+        "distance_err_pct": -54.500290908216535
+      }
+    },
+    {
+      "run": "sysid-20261020-144933",
+      "variant": "fitted",
+      "mass": {
+        "m": 12000,
+        "crr": 0.0072,
+        "note": "docs/30 12.0 t (this run's fit 11904 kg agrees, its crr does not)"
+      },
+      "kinds": [
+        {
+          "kind": "launch",
+          "segments": 1,
+          "seconds": 7.8,
+          "rms_v": 0.763,
+          "rms_te": 117,
+          "rms_to": 1057,
+          "mean_abs_end_v": 0.648
+        },
+        {
+          "kind": "pre_brake",
+          "segments": 1,
+          "seconds": 11.8,
+          "rms_v": 0.155,
+          "rms_te": 87,
+          "rms_to": 542,
+          "mean_abs_end_v": 0.309
+        },
+        {
+          "kind": "brake_step",
+          "segments": 1,
+          "seconds": 9.8,
+          "rms_v": 0.141,
+          "rms_te": 174,
+          "rms_to": 429,
+          "mean_abs_end_v": 0
+        },
+        {
+          "kind": "throttle_step",
+          "segments": 1,
+          "seconds": 11.8,
+          "rms_v": 0.341,
+          "rms_te": 114,
+          "rms_to": 955,
+          "mean_abs_end_v": 0.089
+        },
+        {
+          "kind": "brake_to_stop",
+          "segments": 1,
+          "seconds": 7.9,
+          "rms_v": 0.17,
+          "rms_te": 695,
+          "rms_to": 1905,
+          "mean_abs_end_v": 0
+        },
+        {
+          "kind": "ALL",
+          "segments": 5,
+          "seconds": 49.2,
+          "rms_v": 0.367,
+          "rms_te": 302,
+          "rms_to": 1043,
+          "mean_abs_end_v": 0.21
+        }
+      ],
+      "whole": {
+        "duration_s": 54.031172000000879,
+        "rms_v": 0.37715250663662425,
+        "max_abs_v": 1.0841563181139398,
+        "rms_te": 286.74242355368614,
+        "rms_to": 1011.3636603096024,
+        "distance_err_pct": 3.4684379816588917
+      }
+    },
+    {
+      "run": "sysid-20261020-144933",
+      "variant": "baseline",
+      "mass": {
+        "m": 12000,
+        "crr": 0.0072,
+        "note": "docs value"
+      },
+      "kinds": [
+        {
+          "kind": "launch",
+          "segments": 1,
+          "seconds": 7.8,
+          "rms_v": 0.684,
+          "rms_te": 365,
+          "rms_to": 1292,
+          "mean_abs_end_v": 1.085
+        },
+        {
+          "kind": "pre_brake",
+          "segments": 1,
+          "seconds": 11.8,
+          "rms_v": 1.683,
+          "rms_te": 281,
+          "rms_to": 1134,
+          "mean_abs_end_v": 2.732
+        },
+        {
+          "kind": "brake_step",
+          "segments": 1,
+          "seconds": 9.8,
+          "rms_v": 0.475,
+          "rms_te": 201,
+          "rms_to": 663,
+          "mean_abs_end_v": 0
+        },
+        {
+          "kind": "throttle_step",
+          "segments": 1,
+          "seconds": 11.8,
+          "rms_v": 1.444,
+          "rms_te": 497,
+          "rms_to": 2949,
+          "mean_abs_end_v": 1.982
+        },
+        {
+          "kind": "brake_to_stop",
+          "segments": 1,
+          "seconds": 7.9,
+          "rms_v": 1.096,
+          "rms_te": 591,
+          "rms_to": 2067,
+          "mean_abs_end_v": 0
+        },
+        {
+          "kind": "ALL",
+          "segments": 5,
+          "seconds": 49.2,
+          "rms_v": 1.222,
+          "rms_te": 405,
+          "rms_to": 1856,
+          "mean_abs_end_v": 1.16
+        }
+      ],
+      "whole": {
+        "duration_s": 54.031172000000879,
+        "rms_v": 1.5731970197160581,
+        "max_abs_v": 5.6901750264374664,
+        "rms_te": 378.51858909709711,
+        "rms_to": 1786.9658586203409,
+        "distance_err_pct": -16.101172308248838
+      }
+    }
+  ]
+}
