@@ -14,6 +14,13 @@ struct Constants {
     std::array<float,4> camera,depth,mask_u,mask_v,road,color,target,bounds;
 };
 static_assert(sizeof(Constants)==256);
+// The path itself for the pixel shader's exact distance (b1): the mask's 25 cm texels made a
+// 0.6 m ribbon visibly stepped. Points relative to the mask origin, with their arc length.
+struct PathConstants {
+    std::array<float,4> info; // point count, half width (m), fade start, fade end (m of arc)
+    std::array<std::array<float,4>,overlay_max_points> points;
+};
+static_assert(sizeof(PathConstants)%16==0);
 // Depth formats the main DSV may use: typeless storage and the depth-plane view.
 bool depth_formats(DXGI_FORMAT format,DXGI_FORMAT& typeless,DXGI_FORMAT& view) {
     if(format==DXGI_FORMAT_D32_FLOAT_S8X24_UINT || format==DXGI_FORMAT_R32G8X24_TYPELESS) {typeless=DXGI_FORMAT_R32G8X24_TYPELESS;view=DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;}
@@ -71,7 +78,7 @@ void OverlayDecal::run() noexcept {
     }
 }
 void OverlayDecal::release_gpu() noexcept {
-    list_.Reset();deferred_.Reset();vs_.Reset();ps_.Reset();constants_.Reset();mask_.Reset();mask_view_.Reset();
+    list_.Reset();deferred_.Reset();vs_.Reset();ps_.Reset();constants_.Reset();path_constants_.Reset();mask_.Reset();mask_view_.Reset();
     depth_view_.Reset();sampler_.Reset();blend_.Reset();raster_.Reset();depth_state_.Reset();depth_source_.Reset();
     depth_copy_.Reset();recorded_target_.Reset();recorded_depth_=nullptr;recorded_width_=recorded_height_=0;
     uploaded_serial_=0;failed_=false;device_.Reset();
@@ -92,6 +99,8 @@ void OverlayDecal::prepare(ID3D11Device* device) {
     check(device->CreatePixelShader(ot_overlay_ps,sizeof(ot_overlay_ps),nullptr,&ps_),"CreatePixelShader(overlay)");
     D3D11_BUFFER_DESC buffer{};buffer.ByteWidth=sizeof(Constants);buffer.Usage=D3D11_USAGE_DEFAULT;buffer.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
     check(device->CreateBuffer(&buffer,nullptr,&constants_),"CreateBuffer(overlay constants)");
+    buffer.ByteWidth=sizeof(PathConstants);
+    check(device->CreateBuffer(&buffer,nullptr,&path_constants_),"CreateBuffer(overlay path)");
     D3D11_TEXTURE2D_DESC mask{};mask.Width=overlay::mask_width;mask.Height=overlay::mask_height;mask.MipLevels=1;mask.ArraySize=1;
     mask.Format=DXGI_FORMAT_R8G8_UNORM;mask.SampleDesc.Count=1;mask.Usage=D3D11_USAGE_DEFAULT;mask.BindFlags=D3D11_BIND_SHADER_RESOURCE;
     check(device->CreateTexture2D(&mask,nullptr,&mask_),"CreateTexture2D(overlay mask)");
@@ -110,7 +119,7 @@ void OverlayDecal::prepare(ID3D11Device* device) {
     D3D11_DEPTH_STENCIL_DESC depth{};depth.DepthEnable=FALSE;depth.DepthWriteMask=D3D11_DEPTH_WRITE_MASK_ZERO;depth.StencilEnable=FALSE;
     depth.DepthFunc=D3D11_COMPARISON_ALWAYS;
     check(device->CreateDepthStencilState(&depth,&depth_state_),"CreateDepthStencilState(overlay)");
-    gpu_allocations_+=10;
+    gpu_allocations_+=11;
 }
 void OverlayDecal::prepare_depth(ID3D11DeviceContext* context,ID3D11DepthStencilView* view,D3D11_TEXTURE2D_DESC& desc) {
     Com<ID3D11Resource> resource;view->GetResource(&resource);
@@ -142,7 +151,8 @@ void OverlayDecal::record(ID3D11RenderTargetView* target,UINT width,UINT height)
     c->ClearState();
     c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);c->IASetInputLayout(nullptr);
     c->VSSetShader(vs_.Get(),nullptr,0);c->VSSetConstantBuffers(0,1,constants_.GetAddressOf());
-    c->PSSetShader(ps_.Get(),nullptr,0);c->PSSetConstantBuffers(0,1,constants_.GetAddressOf());
+    ID3D11Buffer* buffers[]{constants_.Get(),path_constants_.Get()};
+    c->PSSetShader(ps_.Get(),nullptr,0);c->PSSetConstantBuffers(0,2,buffers);
     ID3D11ShaderResourceView* views[]{depth_view_.Get(),mask_view_.Get()};
     c->PSSetShaderResources(0,2,views);c->PSSetSamplers(0,1,sampler_.GetAddressOf());
     const D3D11_VIEWPORT viewport{0,0,float(width),float(height),0,1};
@@ -184,6 +194,15 @@ void OverlayDecal::draw(ID3D11DeviceContext* context,ID3D11RenderTargetView* tar
         if(!bounds) {++skips_[offscreen];return;}
         if(uploaded_serial_!=frame->serial) {
             context->UpdateSubresource(mask_.Get(),0,nullptr,frame->mask.texels.data(),overlay::mask_width*2,0);
+            auto p=std::make_unique<PathConstants>();
+            const auto used=std::min<uint32_t>(frame->mask.points_used,overlay_max_points);
+            p->info={float(used),float(path.width_m/2),float(options->fade_start),float(options->fade_end)};
+            double s=0;
+            for(uint32_t i=0;i<used;++i) {
+                if(i) s+=std::hypot(path.points[i][0]-path.points[i-1][0],path.points[i][1]-path.points[i-1][1]);
+                p->points[i]={float(path.points[i][0]-frame->mask.origin[0]),float(path.points[i][1]-frame->mask.origin[1]),float(s),0};
+            }
+            context->UpdateSubresource(path_constants_.Get(),0,nullptr,p.get(),0,0);
             uploaded_serial_=frame->serial;
         }
         Constants k{};

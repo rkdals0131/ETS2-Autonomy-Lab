@@ -15,6 +15,11 @@ cbuffer Overlay : register(b0) {
     float4 target;   // width, height, 1/width, 1/height
     float4 bounds;   // NDC rectangle x0, y0, x1, y1 covering the projected path
 };
+// The path for an exact distance per pixel (the mask's 25 cm texels stepped a thin ribbon).
+cbuffer Path : register(b1) {
+    float4 path_info;          // point count, half width (m), fade start, fade end (m of arc)
+    float4 path_points[256];   // x, z relative to the mask origin; z: arc length from the start
+};
 struct Vertex { float4 position : SV_Position; };
 // A 4-vertex strip over `bounds`: the command list stays fixed while the
 // rectangle (the scissor of the design) changes every frame.
@@ -29,17 +34,34 @@ float4 ps_main(Vertex input) : SV_Target {
     float2 uv = pixel * target.zw;
     float4 eye = mul(inverse_projection, float4(2 * uv.x - 1, 1 - 2 * uv.y, (d - depth.x) / (depth.y - depth.x), 1));
     float3 p = mul((float3x3)eye_to_world, eye.xyz / eye.w); // world offset from the camera
-    // Derivatives before any discard: the quad still has all four lanes here.
+    // Distance to the path and the arc length at the nearest point.
+    float2 q = p.xz + camera.xz;
+    float best = 1e9, arc = 0;
+    uint count = (uint)path_info.x;
+    for (uint i = 1; i < count; ++i) {
+        float2 a = path_points[i - 1].xy, ab = path_points[i].xy - a;
+        float l2 = dot(ab, ab);
+        float t = l2 > 0 ? saturate(dot(q - a, ab) / l2) : 0;
+        float dd = length(q - a - t * ab);
+        if (dd < best) { best = dd; arc = path_points[i - 1].z + t * sqrt(l2); }
+    }
+    // Derivatives before any discard: the quad still has all four lanes here. The edge is
+    // one pixel wide at every distance (fwidth of the metric distance).
     float3 n = cross(ddx(p), ddy(p));
+    float edge = max(fwidth(best), 0.01);
     // Outside this frame's exterior range: interior (dashboard, pillars, mirrors) or sky.
     if (!(d >= depth.x && d <= depth.y) || !(eye.w != 0)) discard;
     float nl = length(n);
     if (!(nl > 0) || abs(n.y) < road.z * nl) discard;          // walls, car sides, housings
     float horizontal = length(p.xz);
     if (camera.w != 0 && abs(p.y + camera.y) > road.x + horizontal * road.y) discard; // off the road height
-    float2 q = p.xz + camera.xz;
-    float2 m = path_mask.SampleLevel(mask_sampler, float2(dot(mask_u.xy, q) + mask_u.z, dot(mask_v.xy, q) + mask_v.z), 0);
-    float alpha = color.a * m.x;
+    float coverage = 1 - smoothstep(path_info.y - edge, path_info.y + edge, best);
+    // A dark rim (12 cm, at most 40 % of the half width) keeps the ribbon readable as an
+    // overlay on bright or wet road instead of a glowing paint.
+    float rim = min(0.12, 0.4 * path_info.y);
+    float inner = 1 - smoothstep(path_info.y - rim - edge, path_info.y - rim + edge, best);
+    float fade = 1 - smoothstep(path_info.z, path_info.w, arc);
+    float alpha = color.a * coverage * fade;
     if (alpha <= 0) discard;
-    return float4(color.rgb, alpha);
+    return float4(lerp(color.rgb * 0.2, color.rgb, inner), alpha);
 }

@@ -9,6 +9,7 @@
 #include "control/virtual_eps.hpp"
 #include "control/kinematic_axles.hpp"
 #include "control/lcc_mpc.hpp"
+#include "control/hud_path.hpp"
 #include <gtest/gtest.h>
 #include <array>
 #include <cmath>
@@ -339,6 +340,21 @@ TEST(LateralSim,ModelPredictive) {
     const auto speed=80/3.6;
     const auto [old,now]=compare({"MPC S-curve R300 "+speed_name(speed),PathBuilder{}.add(100,0).add(250,1/300.0).add(250,-1/300.0).add(speed*60,0).points,speed,0,(600+speed*30)/speed,0},lateral_mpc());
     EXPECT_LT(now.max_offset,.04);
+}
+
+TEST(Hud,ArcLaneAndLeadBar) {
+    // Left arc R100 from the origin heading +x: every point 100 m from the centre (0, 100).
+    auto arc=hud::arc(0,0,0,1/100.0,50);
+    ASSERT_EQ(arc.size(),26u);
+    for(const auto& [x,y]:arc) EXPECT_NEAR(std::hypot(x,y-100),100,1e-9);
+    EXPECT_NEAR(std::atan2(arc.back()[0],100-arc.back()[1]),.5,1e-9);   // 50 m of arc
+    const auto end=arc.back();hud::bar(arc);
+    ASSERT_EQ(arc.size(),29u);EXPECT_EQ(arc.back(),end);
+    EXPECT_NEAR(std::hypot(arc[26][0]-end[0],arc[26][1]-end[1]),hud::bar_half_m,1e-9);
+    // The lane ribbon stops at the path end.
+    LanePath lane(PathBuilder{}.add(30,0).points,3.5);
+    const auto ribbon=hud::lane(lane,10,100);
+    EXPECT_NEAR(ribbon.front()[0],10,1e-9);EXPECT_NEAR(ribbon.back()[0],lane.points.back().s,1e-9);
 }
 
 TEST(KinematicAxles,TagAxleMovesTheRearPoint) {

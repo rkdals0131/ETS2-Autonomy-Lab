@@ -11,7 +11,11 @@
 #include "control/lead_tracker.hpp"
 #include "control/acc_mpc.hpp"
 #include "control/lcc_mpc.hpp"
+#include "control/hud_path.hpp"
 #include <ets2_msgs/msg/actuation_state.hpp>
+#include <ets2_msgs/msg/powertrain_state.hpp>
+#include <ets2_msgs/msg/overlay_style.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <ets2_msgs/msg/wheel_state.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <algorithm>
@@ -41,8 +45,11 @@ int main(int argc,char** argv) {
         apply_driving_parameter_changes(*next,values);
         configuration.store(std::move(next));
     });
+    const bool cruise_engage=initial.engage=="cruise";
+    // start: the path file is read once now. cruise: it is the provider's follow output, read at
+    // each engagement (it may not exist yet).
     std::unique_ptr<LanePath> lane;
-    if(!initial.path_file.empty()) try {lane=std::make_unique<LanePath>(initial.path_file);} catch(const std::exception& e) {
+    if(!cruise_engage && !initial.path_file.empty()) try {lane=std::make_unique<LanePath>(initial.path_file);} catch(const std::exception& e) {
         std::cerr<<e.what()<<std::endl;rclcpp::shutdown();return 1;
     }
     if(!initial.arm || !valid_driving_parameters(initial)) {
@@ -53,7 +60,8 @@ int main(int argc,char** argv) {
     ets2_msgs::msg::DriveState::SharedPtr drive;
     ets2_msgs::msg::VehicleState::SharedPtr vehicle;
     ets2_msgs::msg::ActuationState::SharedPtr actuation;
-    Clock::time_point drive_time{},vehicle_time{},actuation_time{};
+    ets2_msgs::msg::PowertrainState::SharedPtr powertrain;
+    Clock::time_point drive_time{},vehicle_time{},actuation_time{},powertrain_time{};
     auto ds=node->create_subscription<ets2_msgs::msg::DriveState>("/ets2/drive/state",rclcpp::QoS(1),
         [&](ets2_msgs::msg::DriveState::SharedPtr value){drive=std::move(value);drive_time=Clock::now();});
     auto vs=node->create_subscription<ets2_msgs::msg::VehicleState>("/ets2/vehicle/state",rclcpp::QoS(1),
@@ -61,12 +69,17 @@ int main(int argc,char** argv) {
     // The MPC's allocator uses the engine gear (throttle map, shift freeze).
     auto as=node->create_subscription<ets2_msgs::msg::ActuationState>("/ets2/vehicle/actuation",rclcpp::QoS(1),
         [&](ets2_msgs::msg::ActuationState::SharedPtr value){actuation=std::move(value);actuation_time=Clock::now();});
+    // The game's cruise control speed (0 when off) is the engage button in cruise mode.
+    rclcpp::Subscription<ets2_msgs::msg::PowertrainState>::SharedPtr pts;
+    if(cruise_engage) pts=node->create_subscription<ets2_msgs::msg::PowertrainState>("/ets2/vehicle/powertrain",rclcpp::QoS(1),
+        [&](ets2_msgs::msg::PowertrainState::SharedPtr value){powertrain=std::move(value);powertrain_time=Clock::now();});
     const bool mpc=initial.longitudinal=="mpc",lateral_mpc=initial.lateral=="mpc";
     // ego pose is base_link (drive axle); the controller's rear point and wheelbase follow
     // the grounded axles (kinematic_axles.hpp), so a lowered lift axle moves them.
     double ego_x=0,ego_y=0,ego_yaw=0,front_axle=0;bool pose_received=false,traffic_received=false,wheels_received=false,liftable=false;
     std::map<uint32_t,AxleWheel> axle_wheels;std::map<uint32_t,bool> grounded;
     Clock::time_point pose_time{},traffic_time{};
+    builtin_interfaces::msg::Time pose_stamp; // simulation time: the HUD path's TTL runs on it
     struct Actor {uint64_t id;double x,y,yaw,speed,length,width;};std::vector<Actor> actors;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr ps;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr config;
@@ -75,12 +88,14 @@ int main(int argc,char** argv) {
     // Connected trailer (relay: SDK placement, only while connected) for the MPC's hitch angle.
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr trs;
     double trailer_yaw=0;Clock::time_point trailer_time{};
-    if(lane) {
+    // GT pose, geometry and traffic: for the lane, and in cruise mode for leads without one.
+    const bool ground_truth=lane || cruise_engage;
+    if(ground_truth) {
         ps=node->create_subscription<geometry_msgs::msg::PoseStamped>("/ets2/ground_truth/ego/pose",rclcpp::QoS(1),[&](geometry_msgs::msg::PoseStamped::SharedPtr msg) {
             const auto& p=msg->pose.position;const auto& q=msg->pose.orientation;
             if(msg->header.frame_id!="world" || !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z) || !std::isfinite(q.w))
                 throw std::runtime_error("Invalid GT ego pose");
-            ego_x=p.x;ego_y=p.y;ego_yaw=std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z));pose_received=true;pose_time=Clock::now();
+            ego_x=p.x;ego_y=p.y;ego_yaw=std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z));pose_received=true;pose_time=Clock::now();pose_stamp=msg->header.stamp;
         });
         config=node->create_subscription<std_msgs::msg::String>("/ets2/sensors/config",rclcpp::QoS(1).transient_local(),[&](std_msgs::msg::String::SharedPtr msg) {
             const auto data=nlohmann::json::parse(msg->data);double front=0;
@@ -120,6 +135,9 @@ int main(int argc,char** argv) {
     }
     auto publisher=node->create_publisher<ets2_msgs::msg::DriveCommand>("/ets2/drive/command",rclcpp::QoS(1).best_effort());
     auto service=node->create_client<ets2_msgs::srv::DriveControl>("/ets2/drive/control");
+    // HUD decal: the relay draws while this publisher exists; nothing is sent in standby.
+    auto hud_path=node->create_publisher<nav_msgs::msg::Path>("/ets2/overlay/path",rclcpp::QoS(1).best_effort());
+    auto hud_style=node->create_publisher<ets2_msgs::msg::OverlayStyle>("/ets2/overlay/style",rclcpp::QoS(1).best_effort());
     uint64_t epoch=0,sequence=0;int result=0;
     // With loader 0.42+ the MPC also owns the retarder and engine brake (axes bit 4, only
     // together with the pedals); otherwise its retarder steps are folded into the brake.
@@ -129,33 +147,61 @@ int main(int argc,char** argv) {
     uint8_t taken=0;
     const auto axes=[&]() {const auto a=configuration.load()->axes()&~taken;return uint8_t(a|(auxiliary && (a&2)?4:0));};
     const auto control=[&](bool enabled) {epoch=request_drive_control(node,service,owner,enabled,epoch,enabled?axes():0);};
-    try {
-        const auto until=Clock::now()+10s;
-        while(!stopped() && Clock::now()<until && !(drive && vehicle && (!lane || (pose_received && traffic_received && front_axle>0 && (wheels_received || !liftable))) && service->service_is_ready() && publisher->get_subscription_count())) {
-            rclcpp::spin_some(node);std::this_thread::sleep_for(10ms);
-        }
-        if(stopped()) throw std::runtime_error("Stopped before arm");
-        if(!drive || !vehicle || (lane && (!pose_received || !traffic_received || front_axle<=0 || (liftable && !wheels_received))) || !service->service_is_ready() || !publisher->get_subscription_count()) throw std::runtime_error("Bridge discovery timed out");
-        if(!drive->available || !drive->permitted || !drive->profile_supported || vehicle->paused) throw std::runtime_error("Game input is unavailable or paused");
+    // The game's cruise control speed, 0 when off; NaN while unknown (paused, or no state for 1 s),
+    // which is neither an "off" nor an "on" edge.
+    const auto cruise_speed=[&]() {
+        return powertrain && Clock::now()-powertrain_time<=1s?powertrain->cruise_control_mps:std::numeric_limits<double>::quiet_NaN();
+    };
+    const auto rear_point=[&]() {
+        const auto axles=kinematic_axles(axle_wheels,grounded);
+        return std::array<double,2>{ego_x+axles.rear_x*std::cos(ego_yaw),ego_y+axles.rear_x*std::sin(ego_yaw)};
+    };
+    // Cruise mode: the provider's follow file, if the truck is on its lane.
+    const auto load_lane=[&]()->std::unique_ptr<LanePath> {
+        if(initial.path_file.empty()) return nullptr;
+        try {
+            auto fresh=std::make_unique<LanePath>(initial.path_file);
+            const auto [x,y]=rear_point();
+            const auto p=fresh->track(x,y);
+            if(p.d<=fresh->width/2 && fresh->remaining()>50) return fresh;
+            std::cout<<"Lane file is "<<p.d<<" m from the truck ("<<fresh->remaining()<<" m ahead); LCC unavailable"<<std::endl;
+        } catch(const std::exception& e) {std::cout<<"Lane file unusable ("<<e.what()<<"); LCC unavailable"<<std::endl;}
+        return nullptr;
+    };
+    constexpr uint64_t lane_end_id=std::numeric_limits<uint64_t>::max();
+    // One armed epoch. set_speed is the cruise speed in cruise mode (else the parameter).
+    enum class End {Stopped,Released,Toggle,Reengage};
+    const auto session=[&](double set_speed)->End {
+        taken=cruise_engage && !lane?1:0;
         if(!axes()) throw std::runtime_error("Enable ACC or LCC explicitly before starting");
-        if(axes()!=3 && !drive->independent_axes) throw std::runtime_error("Independent ACC/LCC requires the updated loader; restart the game");
-        // The loader refuses to arm an axis the driver is using (its reason then reads only "disabled").
-        if(((axes()&1) && drive->steering_manual!=0) || ((axes()&2) && (drive->throttle_manual!=0 || drive->brake_manual!=0)))
-            throw std::runtime_error("Driver input on a requested axis; let go of the pedals and stick, then start again");
-        auxiliary=mpc && drive->auxiliary_brakes;
-        if(mpc) std::cout<<"Longitudinal: MPC, retarder "<<(auxiliary?"owned":"folded into the brake (loader < 0.42)")<<std::endl;
-        control(true);
-        const auto first_window_until=Clock::now()+150ms;
-        while(!stopped() && Clock::now()<first_window_until && !(drive->armed && drive->owner==owner && drive->epoch==epoch)) {
-            rclcpp::spin_some(node);std::this_thread::sleep_for(2ms);
+        // Cruise mode: the loader also refuses to arm while the driver's LB+RT is still read as
+        // throttle activity (LB freezes the throttle value at 0, so the node cannot see it);
+        // the game's cruise keeps the speed meanwhile, so retry for up to 10 s.
+        for(const auto give_up=Clock::now()+10s;;) {
+            try {control(true);break;} catch(const std::exception&) {
+                if(!cruise_engage || !(cruise_speed()>0) || Clock::now()>=give_up || stopped()) throw;
+            }
+            for(const auto until=Clock::now()+100ms;Clock::now()<until;) {rclcpp::spin_some(node);std::this_thread::sleep_for(5ms);}
         }
-        std::cout<<"Driving armed; owner="<<owner<<", epoch="<<epoch<<". Ctrl+C releases control."<<std::endl;
+        // Wait for the state that shows this epoch armed: an older state (e.g. "disconnected"
+        // from the previous relay) would otherwise read as a release in the first frame.
+        const auto confirmed=[&]{return drive->armed && drive->owner==owner && drive->epoch==epoch;};
+        const auto confirm_until=Clock::now()+1s;
+        while(!stopped() && Clock::now()<confirm_until && !confirmed()) {rclcpp::spin_some(node);std::this_thread::sleep_for(2ms);}
+        if(!stopped() && !confirmed()) throw std::runtime_error("The armed state did not arrive within 1 s");
+        std::cout<<"Driving armed; owner="<<owner<<", epoch="<<epoch<<", axes="<<unsigned(axes());
+        if(cruise_engage) std::cout<<", set "<<set_speed*3.6<<" km/h. The cruise control button disengages.";
+        else std::cout<<". Ctrl+C releases control.";
+        std::cout<<std::endl;
         auto report=Clock::now(),previous=report;double speed_integral=0,previous_speed=vehicle->speed_mps;
         VirtualEps eps;
         LeadTracker leads;AccMpc acc_mpc;LccMpc lcc_mpc;const auto started=Clock::now();
         if(lane) std::cout<<"Lateral: "<<(lateral_mpc?"MPC":"pure pursuit")<<std::endl;
-        uint64_t pedal_sequence=0;Clock::time_point driver_steering_until{};
-        constexpr uint64_t lane_end_id=std::numeric_limits<uint64_t>::max();
+        uint64_t pedal_sequence=0;Clock::time_point driver_steering_until{},next_lane_read=started+500ms,next_hud=started;
+        // Cruise mode: the game's cruise control is still on at arm. A light brake cancels it
+        // (as the driver's brake does); a later press of the button turns it on again, which
+        // reads as the driver's switch: off while ACC runs, re-engage after a brake cancel.
+        bool cancel_pending=cruise_engage,toggle_off=false,cruise_seen_off=false;auto cancel_until=started+3s;
         // Fixed 50 Hz schedule: sleep_until the next 20 ms deadline keeps the mean
         // period at 20 ms even with Windows' coarse sleep granularity; after an
         // overrun the schedule restarts from now instead of bursting to catch up.
@@ -163,7 +209,7 @@ int main(int argc,char** argv) {
             rclcpp::spin_some(node);const auto now=Clock::now();
             if(!drive->armed || drive->owner!=owner || drive->epoch!=epoch) {
                 if(drive->reason!="manual") throw std::runtime_error("Driving released: "+drive->reason);
-                std::cout<<"The driver took over; control released"<<std::endl;epoch=0;break;
+                std::cout<<"The driver took over; control released"<<std::endl;epoch=0;return End::Released;
             }
             // Loader 0.44+: the driver's brake revokes the pedals after a command that held them.
             if(pedal_sequence && drive->sequence>=pedal_sequence && !(drive->axes&2) && !(taken&2)) {
@@ -171,8 +217,22 @@ int main(int argc,char** argv) {
             }
             const auto settings=configuration.load();
             auto enabled_axes=axes();
-            if(!enabled_axes) {std::cout<<"ACC and LCC disabled; releasing control"<<std::endl;break;}
+            if(!enabled_axes) {std::cout<<"ACC and LCC disabled; releasing control"<<std::endl;return End::Released;}
             const bool acc=enabled_axes&2;bool lcc=enabled_axes&1;
+            if(const auto cruise=cruise_speed();cruise_engage && !std::isnan(cruise)) {
+                if(cruise<=0) {
+                    cruise_seen_off=true;
+                    if(cancel_pending) {cancel_pending=false;if(toggle_off) {std::cout<<"Cruise control button: off"<<std::endl;return End::Toggle;}}
+                } else if(!cancel_pending && cruise_seen_off) {
+                    if(!acc) {std::cout<<"Cruise control button: ACC again at "<<cruise*3.6<<" km/h"<<std::endl;return End::Reengage;}
+                    cancel_pending=toggle_off=true;cancel_until=now+3s;cruise_seen_off=false;
+                }
+                if(cancel_pending && cruise>0) {
+                    // The driver's throttle overrides our brake (LB+RT reads as activity at value 0, hence 3 s).
+                    if(drive->throttle_manual>0) cancel_until=std::max(cancel_until,now+1s);
+                    else if(now>cancel_until) throw std::runtime_error("The game's cruise control did not cancel on a brake pulse; it keeps the speed");
+                }
+            }
             // The driver's steering overrides LCC (the loader passes it alone); LCC resumes 1 s
             // after the stick is let go. ACC keeps running throughout.
             if(lcc && std::isfinite(drive->steering_manual) && drive->steering_manual!=0) driver_steering_until=now+1s;
@@ -181,17 +241,30 @@ int main(int argc,char** argv) {
             if(!lcc || driver_steering) eps.reset();
             if(now-drive_time>200ms || now-vehicle_time>200ms || vehicle->paused || !std::isfinite(vehicle->speed_mps))
                 throw std::runtime_error("Current game state is unavailable or paused");
+            // Cruise mode: follow the provider's revisions; a reset (lane change, new road) is
+            // read again from the truck, else LCC hands steering back.
+            if(cruise_engage && lane && now>=next_lane_read) {
+                next_lane_read=now+500ms;
+                try {lane->extend(initial.path_file);} catch(const std::exception&) {
+                    lane=load_lane();
+                    if(!lane && lcc) {
+                        if(!acc) throw std::runtime_error("LCC lane reference lost; releasing assistance");
+                        taken|=1;lcc=false;enabled_axes&=~1;eps.reset();
+                        std::cout<<"LCC lane reference lost; steering back to the driver, ACC continues"<<std::endl;
+                    }
+                }
+            }
             const auto dt=std::chrono::duration<double>(now-previous).count();
-            auto speed_target=settings->target_speed_mps;
+            auto speed_target=cruise_engage?set_speed:settings->target_speed_mps;
             auto steering_target=settings->steering_target;double steering_rate=0;
-            double path_error=0,path_offset=0,remaining=0,lead_gap=std::numeric_limits<double>::infinity();
+            double path_error=0,path_offset=0,remaining=0,lead_gap=std::numeric_limits<double>::infinity(),lead_ahead=lead_gap;
             std::optional<uint64_t> lead_id;double lead_speed=0;
             // MPC lead: bumper-to-bumper gap; front_offset is the gap reference point to the front bumper.
             double front_offset=front_axle+settings->front_overhang_m,cruise_target=speed_target;
+            if(ground_truth && (now-pose_time>200ms || now-traffic_time>200ms)) throw std::runtime_error("Current GT pose/traffic observation is unavailable");
             if(lane) {
-                if(now-pose_time>200ms || now-traffic_time>200ms) throw std::runtime_error("Current GT path/traffic observation is unavailable");
                 const auto axles=kinematic_axles(axle_wheels,grounded);
-                const auto rear_x=ego_x+axles.rear_x*std::cos(ego_yaw),rear_y=ego_y+axles.rear_x*std::sin(ego_yaw);
+                const auto [rear_x,rear_y]=rear_point();
                 const auto goal=LateralController::update(*lane,rear_x,rear_y,ego_yaw,vehicle->speed_mps,axles.wheelbase(),lateral_settings(*settings));
                 path_error=goal.distance;path_offset=goal.offset;remaining=goal.remaining;
                 if(lcc && path_error>lane->width/2) {
@@ -224,34 +297,37 @@ int main(int argc,char** argv) {
                         cruise_target=speed_target;
                         // The PID stops at the lane end on a speed ramp; the MPC sees a stopped car
                         // there, placed so its 5 m standstill gap leaves the rear point 1 m short.
-                        if(mpc) {lead_gap=remaining+4;lead_id=lane_end_id;lead_speed=0;}
+                        if(mpc) {lead_gap=remaining+4;lead_id=lane_end_id;lead_speed=0;lead_ahead=remaining;}
                         else speed_target=std::min(speed_target,std::sqrt(2*settings->stopping_deceleration_mps2*std::max(0.0,remaining-1)));
                     }
                 }
-                for(const auto& actor:actors) {
-                    double ahead,lateral,heading;
-                    if(lcc) {
-                        const auto p=lane->project(actor.x,actor.y,lane->progress);
-                        const auto a=lane->points[p.segment],b=lane->points[p.segment+1];
-                        ahead=p.s-lane->progress;lateral=p.d;heading=std::atan2(b.y-a.y,b.x-a.x);
-                    } else {
-                        // Human steering owns the current direction. Do not brake
-                        // because the original LCC path ends or the driver changes lane.
-                        const auto dx=actor.x-ego_x,dy=actor.y-ego_y;
-                        ahead=dx*std::cos(ego_yaw)+dy*std::sin(ego_yaw);
-                        lateral=std::abs(-dx*std::sin(ego_yaw)+dy*std::cos(ego_yaw));heading=ego_yaw;
-                    }
-                    if(!acc || ahead<=0 || lateral>(lane->width+actor.width)/2 || std::cos(actor.yaw-heading)<=0) continue;
-                    const auto gap=ahead-actor.length/2;
-                    if(!mpc) {
-                        const auto desired=front_axle+settings->standstill_gap_m+std::max(0.0,vehicle->speed_mps)*settings->following_time_s;
-                        speed_target=std::min(speed_target,std::max(0.0,actor.speed+settings->following_gain*(gap-desired)));
-                    }
-                    const auto bumper_gap=mpc?gap-front_offset:gap;
-                    if(bumper_gap<lead_gap) {lead_gap=bumper_gap;lead_id=actor.id;lead_speed=actor.speed;}
+            }
+            if(ground_truth && acc) for(const auto& actor:actors) {
+                double ahead,lateral,heading;
+                if(lane && lcc) {
+                    const auto p=lane->project(actor.x,actor.y,lane->progress);
+                    const auto a=lane->points[p.segment],b=lane->points[p.segment+1];
+                    ahead=p.s-lane->progress;lateral=p.d;heading=std::atan2(b.y-a.y,b.x-a.x);
+                } else {
+                    // Human steering owns the current direction. Do not brake
+                    // because the original LCC path ends or the driver changes lane.
+                    const auto dx=actor.x-ego_x,dy=actor.y-ego_y;
+                    ahead=dx*std::cos(ego_yaw)+dy*std::sin(ego_yaw);
+                    lateral=std::abs(-dx*std::sin(ego_yaw)+dy*std::cos(ego_yaw));heading=ego_yaw;
                 }
+                const auto lane_width=lane?lane->width:3.5;
+                if(ahead<=0 || lateral>(lane_width+actor.width)/2 || std::cos(actor.yaw-heading)<=0) continue;
+                const auto gap=ahead-actor.length/2;
+                if(!mpc) {
+                    const auto desired=front_axle+settings->standstill_gap_m+std::max(0.0,vehicle->speed_mps)*settings->following_time_s;
+                    speed_target=std::min(speed_target,std::max(0.0,actor.speed+settings->following_gain*(gap-desired)));
+                }
+                const auto bumper_gap=mpc?gap-front_offset:gap;
+                if(bumper_gap<lead_gap) {lead_gap=bumper_gap;lead_id=actor.id;lead_speed=actor.speed;lead_ahead=gap;}
+            }
+            if(lane) {
                 const bool lane_end_hold=mpc && acc && lead_id==lane_end_id && acc_mpc.output().mode==AccMpc::Hold;
-                if(lcc && (lane_end_hold || (remaining<=1 && (!acc || (!mpc && std::abs(vehicle->speed_mps)<0.1))))) {std::cout<<"Lane reference ended; releasing control"<<std::endl;break;}
+                if(lcc && (lane_end_hold || (remaining<=1 && (!acc || (!mpc && std::abs(vehicle->speed_mps)<0.1))))) {std::cout<<"Lane reference ended; releasing control"<<std::endl;return End::Released;}
             }
             const auto lead=leads.update(lead_id,lead_gap,lead_speed,std::chrono::duration<double>(now-started).count(),{});
             const auto error=speed_target-vehicle->speed_mps;
@@ -286,13 +362,41 @@ int main(int argc,char** argv) {
                 if(enabled_axes&4) {command.brake=acc?out.brake:0;command.retarder_step=acc?out.retarder_step:0;command.engine_brake=acc && out.engine_brake;}
                 else command.brake=acc?AccMpc::folded_brake(out):0;
             }
+            if(cancel_pending && acc && cruise_speed()>0) {command.throttle=0;command.brake=std::max(command.brake,.05f);}
             if(enabled_axes&2) pedal_sequence=command.sequence;
             publisher->publish(command);
+            // HUD at 20 Hz: path ahead up to the lead, coloured by state.
+            if(ground_truth && now>=next_hud) {
+                next_hud=now+50ms;
+                const bool marked=lead.valid && std::isfinite(lead_ahead) && lead_ahead<=150;
+                const auto reach=marked?std::max(2.0,lead_ahead):120.0;
+                hud::Points points;
+                if(lane && lcc) points=hud::lane(*lane,lane->progress,reach);
+                else {
+                    const auto v=vehicle->speed_mps,yaw_rate=vehicle->angular_velocity_base_radps[2];
+                    points=hud::arc(ego_x,ego_y,ego_yaw,v>1 && std::isfinite(yaw_rate)?yaw_rate/v:0,reach);
+                }
+                if(marked) hud::bar(points);
+                if(points.size()>=2) {
+                    ets2_msgs::msg::OverlayStyle style;style.header.stamp=pose_stamp;style.width_m=.6f;
+                    const auto set=[&](float r,float g,float b,float a) {style.color.r=r;style.color.g=g;style.color.b=b;style.color.a=a;};
+                    // Nearly opaque: a translucent ribbon took on the lit road (wet reflections) and read as glow.
+                    set(.2f,.7f,.95f,.85f);                                                      // cruise: cyan
+                    if(!acc) set(.65f,.45f,.95f,.85f);                                           // LCC only: violet
+                    else if(drive->throttle_manual>0 || driver_steering) set(.9f,.9f,.9f,.75f);  // driver overrides: white
+                    else if(mpc && (acc_mpc.output().mode==AccMpc::Emergency || acc_mpc.output().a_des_mps2<-2)) set(.95f,.2f,.15f,.9f); // hard braking: red
+                    else if(lead.valid && lead.id!=lane_end_id) set(.25f,.85f,.35f,.85f);       // following a lead: green
+                    nav_msgs::msg::Path path;path.header.frame_id="world";path.header.stamp=pose_stamp;
+                    for(const auto& [x,y]:points) {geometry_msgs::msg::PoseStamped pose;pose.pose.position.x=x;pose.pose.position.y=y;pose.pose.orientation.w=1;path.poses.push_back(pose);}
+                    hud_style->publish(style);hud_path->publish(path);
+                }
+            }
             if(now>=report) {
                 std::cout<<"speed="<<vehicle->speed_mps<<" target="<<speed_target<<" path_error="<<path_error<<" path_offset="<<path_offset<<" remaining="<<remaining<<" lead_gap="<<lead_gap<<" lead_accel="<<lead.accel_mps2
                     <<" steering_target="<<steering_target<<" steering_applied="<<drive->steering_applied<<" steering_input="<<command.steering<<" throttle="<<command.throttle<<" brake="<<command.brake
                     <<" axes="<<unsigned(drive->axes)<<" accepted_sequence="<<drive->sequence
                     <<" driver_throttle="<<drive->throttle_manual<<" driver_steering="<<drive->steering_manual<<(driver_steering?" (LCC yields)":"");
+                if(cruise_engage) std::cout<<" game_cruise="<<cruise_speed();
                 if(lane && lateral_mpc) std::cout<<" lcc_status="<<unsigned(lcc_mpc.output().status)<<" trailer="<<(now-trailer_time<=200ms)
                     <<" hitch="<<std::remainder(ego_yaw-trailer_yaw,2*std::numbers::pi);
                 if(mpc) std::cout<<" acc_mode="<<unsigned(acc_mpc.output().mode)<<" a_des="<<acc_mpc.output().a_des_mps2
@@ -304,7 +408,65 @@ int main(int argc,char** argv) {
             if(next<Clock::now()) next=Clock::now(); // overrun: restart the schedule
             std::this_thread::sleep_until(next);
         }
+        return End::Stopped;
+    };
+    const auto release=[&]() {
+        if(epoch) try {control(false);} catch(const std::exception& error) {std::cerr<<"Release: "<<error.what()<<std::endl;}
+        epoch=0;
+    };
+    const auto driver_input=[&]() {
+        return ((axes()&1) && drive->steering_manual!=0) || ((axes()&2) && (drive->throttle_manual!=0 || drive->brake_manual!=0));
+    };
+    try {
+        // Cruise mode is resident: wait for the game (it may be paused or loading) without a deadline.
+        const auto until=cruise_engage?Clock::time_point::max():Clock::now()+10s;
+        if(cruise_engage) std::cout<<"Waiting for the bridge and the game"<<std::endl;
+        const auto discovered=[&]() {
+            return drive && vehicle && (!ground_truth || (pose_received && traffic_received && front_axle>0 && (wheels_received || !liftable)))
+                && (!cruise_engage || powertrain) && service->service_is_ready() && publisher->get_subscription_count();
+        };
+        while(!stopped() && Clock::now()<until && !discovered()) {rclcpp::spin_some(node);std::this_thread::sleep_for(10ms);}
+        if(stopped()) throw std::runtime_error("Stopped before arm");
+        if(!discovered()) throw std::runtime_error("Bridge discovery timed out");
+        if(!drive->available || !drive->permitted || !drive->profile_supported || (!cruise_engage && vehicle->paused)) throw std::runtime_error("Game input is unavailable or paused");
+        if(!axes()) throw std::runtime_error("Enable ACC or LCC explicitly before starting");
+        if(axes()!=3 && !drive->independent_axes) throw std::runtime_error("Independent ACC/LCC requires the updated loader; restart the game");
+        auxiliary=mpc && drive->auxiliary_brakes;
+        if(mpc) std::cout<<"Longitudinal: MPC, retarder "<<(auxiliary?"owned":"folded into the brake (loader < 0.42)")<<std::endl;
+        if(!cruise_engage) {
+            // The loader refuses to arm an axis the driver is using (its reason then reads only "disabled").
+            if(driver_input()) throw std::runtime_error("Driver input on a requested axis; let go of the pedals and stick, then start again");
+            session(0);
+        } else {
+            if(!(axes()&2)) throw std::runtime_error("Cruise engage needs ACC enabled");
+            std::cout<<"Standby: the game's cruise control button engages"<<std::endl;
+            bool wait_off=!(cruise_speed()<=0),reengage=false;
+            while(!stopped() && rclcpp::ok()) {
+                rclcpp::spin_some(node);
+                if(!reengage) {
+                    const auto cruise=cruise_speed();
+                    if(cruise<=0) wait_off=false;
+                    if(wait_off || !(cruise>0)) {std::this_thread::sleep_for(20ms);continue;}
+                }
+                reengage=false;
+                // Pressing LB+RT pulls the throttle, and the loader refuses to arm a used
+                // axis: the game's cruise control keeps the speed until the driver lets go.
+                const auto give_up=Clock::now()+10s;
+                while(!stopped() && Clock::now()<give_up && cruise_speed()>0 && driver_input()) {rclcpp::spin_some(node);std::this_thread::sleep_for(20ms);}
+                if(stopped()) break;
+                if(!(cruise_speed()>0)) continue;
+                if(driver_input()) {std::cout<<"Driver input did not stop within 10 s; press the cruise control button again"<<std::endl;wait_off=true;continue;}
+                if(vehicle->paused) {wait_off=true;continue;}
+                taken=0;lane=load_lane();
+                End end=End::Released;
+                try {end=session(cruise_speed());} catch(const std::exception& error) {std::cerr<<error.what()<<std::endl;}
+                release();taken=0;
+                if(end==End::Stopped) break;
+                reengage=end==End::Reengage;wait_off=!reengage;
+                std::cout<<(reengage?"Re-engaging":"Standby: the game's cruise control button engages")<<std::endl;
+            }
+        }
     } catch(const std::exception& error) {std::cerr<<error.what()<<std::endl;result=1;}
-    if(epoch) try {control(false);} catch(const std::exception& error) {std::cerr<<"Release: "<<error.what()<<std::endl;}
+    release();
     rclcpp::shutdown();return result;
 }

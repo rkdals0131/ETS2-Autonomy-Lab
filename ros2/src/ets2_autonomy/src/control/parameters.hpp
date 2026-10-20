@@ -15,6 +15,11 @@ struct DrivingParameters {
     // "mpc": generated model-predictive lane centering (lcc_mpc.hpp) with the trailer;
     // "pp": the linearized pure pursuit with curvature feedforward (lateral_controller.hpp).
     std::string lateral="mpc";
+    // "start": arm at start and drive until released. "cruise": stand by; the game's cruise
+    // control button engages at the speed it sets (the game's cruise is cancelled once the
+    // node holds the pedals) and disengages on the next press; path_file is then the map
+    // provider's --follow output, read at each engagement and extended while driving.
+    std::string engage="start";
     double target_speed_mps=0,steering_target=0;
     // Relative-steering inner loop (virtual_eps.hpp) and lane feedforward (lateral_controller.hpp).
     // The steering rate and self-centering are a measured speed table inside VirtualEps.
@@ -71,12 +76,14 @@ inline DrivingParameters declare_driving_parameters(rclcpp::Node& node) {
     result.path_file=node.declare_parameter("path_file",result.path_file);
     result.longitudinal=node.declare_parameter("longitudinal",result.longitudinal);
     result.lateral=node.declare_parameter("lateral",result.lateral);
+    result.engage=node.declare_parameter("engage",result.engage);
     for(const auto& p:driving_double_parameters) result.*p.value=node.declare_parameter(p.name,result.*p.value);
     return result;
 }
 inline bool valid_driving_parameters(const DrivingParameters& values) {
     if(values.longitudinal!="mpc" && values.longitudinal!="pid") return false;
     if(values.lateral!="mpc" && values.lateral!="pp") return false;
+    if(values.engage!="start" && values.engage!="cruise") return false;
     for(const auto& p:driving_double_parameters) if(!p.accepts(values.*p.value)) return false;
     return true;
 }
@@ -84,7 +91,7 @@ inline rcl_interfaces::msg::SetParametersResult check_driving_parameter_changes(
     rcl_interfaces::msg::SetParametersResult result;result.successful=true;
     for(const auto& p:changes) {
         const auto& name=p.get_name();
-        if(name=="arm" || name=="relative_steering" || name=="path_file" || name=="longitudinal" || name=="lateral") {
+        if(name=="arm" || name=="relative_steering" || name=="path_file" || name=="longitudinal" || name=="lateral" || name=="engage") {
             result.successful=false;result.reason="Input mode and arm are startup options; restart explicitly";break;
         }
         if(name=="acc_enabled" || name=="lcc_enabled") {

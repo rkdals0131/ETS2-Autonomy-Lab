@@ -3,6 +3,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <ets2_msgs/msg/drive_command.hpp>
+#include <ets2_msgs/msg/overlay_style.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <cmath>
@@ -28,6 +29,9 @@ struct RosEndpoint::Impl {
     // HUD path (docs/24): forwarded to the relay's pose transform and shared memory.
     PathSink overlay_sink;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr overlay_paths;
+    rclcpp::Subscription<ets2_msgs::msg::OverlayStyle>::SharedPtr overlay_styles;
+    std::optional<ets2_msgs::msg::OverlayStyle> overlay_style; // executor thread only
+    std::chrono::steady_clock::time_point overlay_style_time{};
     std::atomic<bool> overlay{false};
     std::atomic<uint64_t> overlay_received{0},overlay_rejected{0};
     rclcpp::TimerBase::SharedPtr demand_timer;
@@ -107,6 +111,9 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control,PathSink overlay):
     m.node->declare_parameter("overlay_width_m",3.5);
     m.node->declare_parameter("overlay_alpha",0.22);
     m.node->declare_parameter("overlay_ttl_ms",1000);
+    // Optional style (width, colour) for the following paths, e.g. by assistance state.
+    m.overlay_styles=m.node->create_subscription<ets2_msgs::msg::OverlayStyle>("/ets2/overlay/style",rclcpp::QoS(1).best_effort(),
+        [&m](const ets2_msgs::msg::OverlayStyle::SharedPtr message) {m.overlay_style=*message;m.overlay_style_time=std::chrono::steady_clock::now();});
     m.overlay_paths=m.node->create_subscription<nav_msgs::msg::Path>("/ets2/overlay/path",rclcpp::QoS(1).best_effort(),
         [&m](const nav_msgs::msg::Path::SharedPtr message) {
             OverlayPath path;path.frame=message->header.frame_id;
@@ -115,6 +122,10 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control,PathSink overlay):
             path.width_m=static_cast<float>(m.node->get_parameter("overlay_width_m").as_double());
             path.rgba[3]=static_cast<float>(m.node->get_parameter("overlay_alpha").as_double());
             path.ttl_ms=static_cast<uint64_t>(std::max<int64_t>(0,m.node->get_parameter("overlay_ttl_ms").as_int()));
+            if(m.overlay_style && std::chrono::steady_clock::now()-m.overlay_style_time<=std::chrono::seconds(1)) {
+                const auto& style=*m.overlay_style;
+                path.width_m=style.width_m;path.rgba={style.color.r,style.color.g,style.color.b,style.color.a};
+            }
             for(const auto& pose:message->poses) path.points.push_back({pose.pose.position.x,pose.pose.position.y,pose.pose.position.z});
             if((path.frame!="base_link" && path.frame!="world") || path.points.size()<2 || !std::isfinite(path.width_m) || path.width_m<=0 ||
                path.width_m>16 || !std::isfinite(path.rgba[3]) || path.rgba[3]<0 || path.rgba[3]>1) {
@@ -165,7 +176,7 @@ RosEndpoint::~RosEndpoint() {
     m.executor->cancel();
     if(m.spin.joinable()) m.spin.join();
     m.executor->remove_node(m.node);m.executor.reset();
-    m.demand_timer.reset();m.overlay_paths.reset();m.drive_commands.reset();m.drive_service.reset();m.capture_service.reset();
+    m.demand_timer.reset();m.overlay_paths.reset();m.overlay_styles.reset();m.drive_commands.reset();m.drive_service.reset();m.capture_service.reset();
     m.publishers.clear();m.node.reset();
     rclcpp::shutdown();
 }

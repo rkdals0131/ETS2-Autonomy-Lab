@@ -177,8 +177,15 @@ ros2 param set /ets2_drive_speed target_speed_mps 0.0
 | `/ets2/overlay/path` (구독) | `nav_msgs/Path`. `frame_id`는 `base_link`(header.stamp는 그 경로를 만든 센서 stamp) 또는 `world`. 10–20 Hz, 256점 이내 권장(길면 200 m에서 자르고 256점으로 솎음). best effort 구독이라 reliable 발행자도 받음 |
 | `overlay_enabled` | 기본 false: 발행자가 있는 동안만 켬. true면 발행자가 없어도 켬 |
 | `overlay_width_m` / `overlay_alpha` / `overlay_ttl_ms` | 기본 3.5 / 0.22 / 1000. TTL 동안 새 경로가 없으면 core가 숨김(시뮬레이션 시각 기준이라 일시정지 중에는 유지) |
+| `/ets2/overlay/style` (구독) | `ets2_msgs/OverlayStyle`(폭 m, RGBA). 최근 1 s 안에 받은 스타일을 이후 경로에 적용하고, 없으면 위 파라미터와 흰색 |
 
 릴레이는 `base_link` 경로를 자기 SDK 자세 이력(`engine.vehicle.pose_physics`, 최근 128 SDK 프레임)에서 stamp 이하 가장 가까운 자세로 world로 바꿔 `Local\OT_Overlay`에 씁니다. 스택은 GT 자세를 보지 않습니다. 최신 자세보다 500 ms 넘게 오래된 stamp는 숨김으로 씁니다. stamp 0은 최신 자세로 바꿉니다(수동 시험용). 발행자가 생기면 릴레이가 core에 `overlay enable`을 보내, 센서 수집 중이면 같은 훅을 함께 쓰고 아니면 overlay 전용 훅(OM·compile)만 켭니다. **입력·상태만** 실행에서도 그리며 이때도 이 두 훅은 켜집니다. 1 Hz 상태 줄의 `overlay`에 활성 여부·기록 수·마지막 거절 이유가, `/diagnostics`의 `drive_commands`에 받은·거절한 경로 수가 나옵니다.
+
+`drive_speed`는 보조가 잡혀 있는 동안 20 Hz로 world 경로와 스타일을 냅니다. LCC가 있으면 차로 중심선, 없으면 현재 요레이트의 예측 호이고, 따라가는 선행차(또는 차로 끝)까지만 그린 뒤 그 뒤범퍼 위치에 가로 막대를 붙입니다. 폭 0.6 m, 색은 순항 청록·추종 초록·강한 감속 빨강·운전자 개입 흰색·LCC만 보라입니다. 경로 stamp는 GT 자세의 시뮬레이션 시각이라 노드가 멈추면 TTL 뒤 사라집니다.
+
+### 게임 크루즈 버튼으로 켜기 (`engage:=cruise`)
+
+`drive_speed --ros-args -p arm:=true -p engage:=cruise -p path_file:=<provider --follow 출력>`은 상주하며 기다립니다. 게임 크루즈(프로필의 LB+RT)가 켜지면 그 속도를 설정 속도로 ACC(차로 파일이 트럭 위치에서 시작하면 LCC도)를 잡고, 0.05 브레이크 펄스로 게임 크루즈를 끕니다(✔ 2026-10-21 게임: 펄스 뒤 30 ms에 크루즈 0). LB가 스로틀 값을 0으로 고정한 채 RT 조작은 loader가 운전자 입력으로 보므로, 거절되면 게임 크루즈가 켜진 동안 0.1 s 간격으로 10 s까지 다시 arm합니다. 잡힌 뒤 버튼을 다시 누르면(게임 크루즈가 다시 켜짐) 같은 펄스로 끄고 해제합니다. 브레이크로 ACC가 끝난 뒤 누르면 그 속도로 다시 잡습니다. 일시정지·해제 사유가 있어도 끝나지 않고 대기로 돌아가며, 게임이 멈춰 있으면 탐색을 기한 없이 기다립니다. 차로 파일은 잡을 때마다 새로 읽고 주행 중 0.5 s마다 provider revision을 이어 붙입니다.
 
 릴레이 실행 중 수동 시험([설계 T5](../docs/24_hud_overlay_design.md#8-시험-계획)):
 

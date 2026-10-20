@@ -64,7 +64,7 @@ private:
     Com<ID3D11CommandList> list_;
     Com<ID3D11VertexShader> vs_;
     Com<ID3D11PixelShader> ps_;
-    Com<ID3D11Buffer> constants_;
+    Com<ID3D11Buffer> constants_,path_constants_;
     Com<ID3D11Texture2D> mask_;
     Com<ID3D11ShaderResourceView> mask_view_,depth_view_;
     Com<ID3D11SamplerState> sampler_;
