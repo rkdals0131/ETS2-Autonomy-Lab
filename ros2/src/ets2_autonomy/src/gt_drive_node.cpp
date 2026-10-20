@@ -114,7 +114,10 @@ int main(int argc,char** argv) {
     // With loader 0.42+ the MPC also owns the retarder and engine brake (axes bit 4, only
     // together with the pedals); otherwise its retarder steps are folded into the brake.
     bool auxiliary=false;
-    const auto axes=[&]() {const auto a=configuration.load()->axes();return uint8_t(a|(auxiliary && (a&2)?4:0));};
+    // Axes the driver took back in this session: the brake ends ACC (loader 0.44+ keeps
+    // LCC), and a lane lost under ACC hands steering back. Neither re-engages by itself.
+    uint8_t taken=0;
+    const auto axes=[&]() {const auto a=configuration.load()->axes()&~taken;return uint8_t(a|(auxiliary && (a&2)?4:0));};
     const auto control=[&](bool enabled) {epoch=request_drive_control(node,service,owner,enabled,epoch,enabled?axes():0);};
     try {
         const auto until=Clock::now()+10s;
@@ -137,19 +140,31 @@ int main(int argc,char** argv) {
         auto report=Clock::now(),previous=report;double speed_integral=0,previous_speed=vehicle->speed_mps;
         VirtualEps eps;
         LeadTracker leads;AccMpc acc_mpc;const auto started=Clock::now();
+        uint64_t pedal_sequence=0;Clock::time_point driver_steering_until{};
         constexpr uint64_t lane_end_id=std::numeric_limits<uint64_t>::max();
         // Fixed 50 Hz schedule: sleep_until the next 20 ms deadline keeps the mean
         // period at 20 ms even with Windows' coarse sleep granularity; after an
         // overrun the schedule restarts from now instead of bursting to catch up.
         for(auto next=Clock::now();!stopped() && rclcpp::ok();) {
             rclcpp::spin_some(node);const auto now=Clock::now();
-            if(!drive->armed || drive->owner!=owner || drive->epoch!=epoch) throw std::runtime_error("Driving released: "+drive->reason);
+            if(!drive->armed || drive->owner!=owner || drive->epoch!=epoch) {
+                if(drive->reason!="manual") throw std::runtime_error("Driving released: "+drive->reason);
+                std::cout<<"The driver took over; control released"<<std::endl;epoch=0;break;
+            }
+            // Loader 0.44+: the driver's brake revokes the pedals after a command that held them.
+            if(pedal_sequence && drive->sequence>=pedal_sequence && !(drive->axes&2) && !(taken&2)) {
+                taken|=2;std::cout<<"ACC cancelled by the driver's brake"<<(configuration.load()->lcc_enabled && !(taken&1)?"; LCC continues":"")<<std::endl;
+            }
             const auto settings=configuration.load();
-            const auto enabled_axes=axes();
+            auto enabled_axes=axes();
             if(!enabled_axes) {std::cout<<"ACC and LCC disabled; releasing control"<<std::endl;break;}
-            const bool acc=enabled_axes&2,lcc=enabled_axes&1;
+            const bool acc=enabled_axes&2;bool lcc=enabled_axes&1;
+            // The driver's steering overrides LCC (the loader passes it alone); LCC resumes 1 s
+            // after the stick is let go. ACC keeps running throughout.
+            if(lcc && std::isfinite(drive->steering_manual) && drive->steering_manual!=0) driver_steering_until=now+1s;
+            const bool driver_steering=lcc && now<driver_steering_until;
             if(!acc) speed_integral=0;
-            if(!lcc) eps.reset();
+            if(!lcc || driver_steering) eps.reset();
             if(now-drive_time>200ms || now-vehicle_time>200ms || vehicle->paused || !std::isfinite(vehicle->speed_mps))
                 throw std::runtime_error("Current game state is unavailable or paused");
             const auto dt=std::chrono::duration<double>(now-previous).count();
@@ -165,11 +180,16 @@ int main(int argc,char** argv) {
                 const auto rear_x=ego_x+axles.rear_x*std::cos(ego_yaw),rear_y=ego_y+axles.rear_x*std::sin(ego_yaw);
                 const auto goal=LateralController::update(*lane,rear_x,rear_y,ego_yaw,vehicle->speed_mps,axles.wheelbase(),lateral_settings(*settings));
                 path_error=goal.distance;path_offset=goal.offset;remaining=goal.remaining;
+                if(lcc && path_error>lane->width/2) {
+                    if(!acc) throw std::runtime_error("LCC lane reference lost; releasing assistance");
+                    // E.g. the driver steered into another lane: steering goes back, ACC stays.
+                    taken|=1;lcc=false;enabled_axes&=~1;eps.reset();
+                    std::cout<<"LCC lane reference lost; steering back to the driver, ACC continues"<<std::endl;
+                }
                 if(lcc) front_offset-=axles.rear_x; // lane distances are from the rear point
                 if(lcc) {
                     steering_target=std::clamp(goal.wheel_angle/settings->steering_angle_per_unit_rad,-1.0,1.0);
                     steering_rate=goal.wheel_rate/settings->steering_angle_per_unit_rad;
-                    if(path_error>lane->width/2) throw std::runtime_error("LCC lane reference lost; releasing assistance");
                     if(acc) {
                         // Baseline curve speed limit, on the pure pursuit curvature as before.
                         if(std::abs(goal.pursuit_curvature)>0) speed_target=std::min(speed_target,std::sqrt(settings->lateral_acceleration_mps2/std::abs(goal.pursuit_curvature)));
@@ -211,8 +231,8 @@ int main(int argc,char** argv) {
             command.owner=owner;command.epoch=epoch;command.sequence=++sequence;
             command.sent_steady_ns=steady_ns();
             command.axes=enabled_axes;
-            command.steering=lcc?steering_target:0;
-            if(lcc && settings->relative_steering) {
+            command.steering=lcc && !driver_steering?steering_target:0;
+            if(lcc && !driver_steering && settings->relative_steering) {
                 if(!std::isfinite(drive->steering_applied)) throw std::runtime_error("Applied steering feedback is unavailable");
                 command.steering=eps.command(steering_target,steering_rate,drive->steering_applied,vehicle->speed_mps,dt,eps_settings(*settings));
             }
@@ -238,11 +258,13 @@ int main(int argc,char** argv) {
                 if(enabled_axes&4) {command.brake=acc?out.brake:0;command.retarder_step=acc?out.retarder_step:0;command.engine_brake=acc && out.engine_brake;}
                 else command.brake=acc?AccMpc::folded_brake(out):0;
             }
+            if(enabled_axes&2) pedal_sequence=command.sequence;
             publisher->publish(command);
             if(now>=report) {
                 std::cout<<"speed="<<vehicle->speed_mps<<" target="<<speed_target<<" path_error="<<path_error<<" path_offset="<<path_offset<<" remaining="<<remaining<<" lead_gap="<<lead_gap<<" lead_accel="<<lead.accel_mps2
                     <<" steering_target="<<steering_target<<" steering_applied="<<drive->steering_applied<<" steering_input="<<command.steering<<" throttle="<<command.throttle<<" brake="<<command.brake
-                    <<" axes="<<unsigned(drive->axes)<<" accepted_sequence="<<drive->sequence;
+                    <<" axes="<<unsigned(drive->axes)<<" accepted_sequence="<<drive->sequence
+                    <<" driver_throttle="<<drive->throttle_manual<<" driver_steering="<<drive->steering_manual<<(driver_steering?" (LCC yields)":"");
                 if(mpc) std::cout<<" acc_mode="<<unsigned(acc_mpc.output().mode)<<" a_des="<<acc_mpc.output().a_des_mps2
                     <<" retarder="<<int(command.retarder_step)<<" engine_brake="<<command.engine_brake<<" lead="<<(!lead.valid?"none":lead.id==lane_end_id?"lane_end":std::to_string(lead.id));
                 std::cout<<std::endl;

@@ -237,6 +237,7 @@ bool RenderProbe::disable_locked(bool clear_rig) {
         decal_.release_gpu();
         for(auto& view:composition_) view.Reset();
         for(auto& view:main_depth_) view.Reset();
+        frame_depth_.Reset();last_dsv_=0;last_dsv_main_=false;composition_size_={};dsv_cache_={};
         armed_graph_=-1;usage_cache_={};usage_next_=0;overlay_reset_=false;
     } else last_error_="Camera submission still draining; payload must stay loaded";
     return last_error_.empty();
@@ -564,7 +565,9 @@ json RenderProbe::overlay_status() {
 }
 json RenderProbe::overlay_json() {
     return {{"enabled",overlay_.load()},{"render_mode",mode_},{"mapped",overlay_block_!=nullptr},{"sdk_time_us",sdk_time_us_.load()},
-        {"binds",{{"scene",scene_binds_.load()},{"composition",composition_binds_.load()}}},
+        {"binds",{{"composition",composition_binds_.load()},{"composition_with_depth",composition_with_depth_.load()},
+            {"by_target_count",[&]{json c=json::array();for(const auto& n:bind_counts_) c.push_back(n.load());return c;}()},
+            {"with_depth",bind_depths_.load()}}},
         // The first single-target bind after the composition pass, by detector (docs/24 §2).
         {"blit_detection",{{"compiled_span_only",blit_compiled_span_.load()},{"backbuffer_usage_only",blit_backbuffer_usage_.load()},
             {"both",blit_both_.load()},{"neither",blit_neither_.load()},{"draw_calls",blit_draws_.load()},{"no_camera",blit_no_camera_.load()}}},
@@ -581,29 +584,59 @@ bool RenderProbe::backbuffer_usage(uintptr_t view) noexcept {
     usage_cache_[usage_next_++%usage_cache_.size()]={view,backbuffer};
     return backbuffer;
 }
+namespace {
+std::array<uint32_t,2> view_size(ID3D11View* view) {
+    Microsoft::WRL::ComPtr<ID3D11Resource> resource;view->GetResource(&resource);
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;D3D11_TEXTURE2D_DESC desc{};
+    if(!resource || FAILED(resource.As(&texture))) return {};
+    texture->GetDesc(&desc);return {desc.Width,desc.Height};
+}
+bool same_size(ID3D11View* view,const std::array<uint32_t,2>& size) {return size[0] && view_size(view)==size;}
+}
 void RenderProbe::overlay_observe(const safetyhook::Context& context) noexcept {
-    // Every bind while the decal is on: a shared-lock scan of the few main
-    // spans for 1- and 4-target binds; everything else returns here.
+    // Every bind while the decal is on; binds without a command token cannot be placed.
     const auto count=static_cast<uint32_t>(context.rdx);
     const auto index=static_cast<uint32_t>(context.r13);
-    if((count!=1 && count!=4) || !index) return;
+    if(count>8 || !index) return;
     const auto start=qpc_now();
-    if(overlay_reset_.exchange(false)) {armed_graph_=-1;usage_cache_={};usage_next_=0;}
-    uintptr_t cursor{},data{};uint16_t id{};
-    std::array<uintptr_t,4> targets{};
+    if(overlay_reset_.exchange(false)) {armed_graph_=-1;usage_cache_={};usage_next_=0;frame_depth_.Reset();last_dsv_=0;composition_size_={};dsv_cache_={};}
+    uintptr_t cursor{},data{},depth{};uint16_t id{};
+    std::array<uintptr_t,8> targets{};
     if(!read_memory(context.rbp-0x30,cursor) || !read_memory(cursor,id) || !read_memory(context.r12,data) ||
        !copy_memory(context.r8,targets.data(),count*sizeof(uintptr_t))) return;
+    ++bind_counts_[count];
+    // On 1.61.1.9 no bind falls inside the `scene defattr` span (measured 2026-10-20: 0 of
+    // about 60 binds a frame; 5 four-target and 1 six-target binds a frame elsewhere), so the
+    // main depth is the last DSV of the composition target's size bound before
+    // main0/composition_out. Exterior and interior passes share it with split viewport depths.
+    if(read_memory(context.rbp+0xA8,depth) && depth) {
+        ++bind_depths_;
+        if(depth!=last_dsv_) {
+            // A few DSVs alternate every frame: remember their size match.
+            last_dsv_=depth;
+            const auto cached=std::find_if(dsv_cache_.begin(),dsv_cache_.end(),[&](const auto& e){return e.view==depth;});
+            if(cached!=dsv_cache_.end()) last_dsv_main_=cached->main;
+            else {
+                last_dsv_main_=same_size(reinterpret_cast<ID3D11View*>(depth),composition_size_);
+                if(composition_size_[0]) dsv_cache_[dsv_next_++%dsv_cache_.size()]={depth,last_dsv_main_};
+            }
+        }
+        if(last_dsv_main_ && frame_depth_.Get()!=reinterpret_cast<ID3D11DepthStencilView*>(depth)) frame_depth_=reinterpret_cast<ID3D11DepthStencilView*>(depth);
+    }
+    // Only the composition (1 or 4 targets) and blit (1 target) binds need the pass.
+    if(count!=1 && count!=4) {overlay_timing_.add(qpc_now()-start);return;}
     const auto pass=pass_commands_.main_at(id,data+(index-1)*4);
-    if(pass && pass->main==MainPass::scene && count==4) {
-        uintptr_t depth{};
-        if(read_memory(context.rbp+0xA8,depth) && main_depth_[pass->graph].Get()!=reinterpret_cast<ID3D11DepthStencilView*>(depth))
-            main_depth_[pass->graph]=reinterpret_cast<ID3D11DepthStencilView*>(depth);
-        ++scene_binds_;
-    } else if(pass && pass->main==MainPass::composition) {
+    if(pass && pass->main==MainPass::composition && (count==1 || count==4)) {
         for(uint32_t slot=0;slot<count;++slot) if(pass->targets[slot]==RenderTarget::color && targets[slot]) {
             const auto view=reinterpret_cast<ID3D11RenderTargetView*>(targets[slot]);
-            if(composition_[pass->graph].Get()!=view) composition_[pass->graph]=view;
+            if(composition_[pass->graph].Get()!=view) {
+                composition_[pass->graph]=view;
+                const auto size=view_size(view);
+                if(size!=composition_size_) {composition_size_=size;last_dsv_=0;frame_depth_.Reset();dsv_cache_={};}
+            }
+            main_depth_[pass->graph]=frame_depth_;
             armed_graph_=static_cast<int>(pass->graph);++composition_binds_;
+            if(frame_depth_) ++composition_with_depth_;
         }
     } else if(armed_graph_>=0 && count==1) {
         // The next single target after main0/composition_out: blit_to_target by

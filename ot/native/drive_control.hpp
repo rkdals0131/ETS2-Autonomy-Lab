@@ -15,6 +15,17 @@ struct DriveAuxFrame {
 };
 // The resident input callback and command worker share only this small state.
 // Values are supplied by the native boundary after decoding and range checks.
+//
+// Driver takeover (manual activity bits ot_manual_*), per owned axis:
+// - steering: the driver steers alone while active (the command is not added); the
+//   session stays armed, so the controller decides whether to resume.
+// - throttle: the driver overrides upward. The game sums both inputs, so the command adds
+//   only what exceeds the driver's pedal (max of the two); brake 0 and the auxiliary
+//   brakes are handed back while the pedal is pressed.
+// - brake: ends the longitudinal assistance for this epoch: pedals and auxiliary brakes
+//   are revoked, later commands keep only the other axes, and with none left the session
+//   is released as manual.
+// Arming is refused while the driver is active on a requested axis.
 class DriveControl {
 public:
     // A retarderN input selects step N while it is held. The step is pulsed when the
@@ -34,17 +45,18 @@ public:
         const bool axes_ok=axes && axes<=allowed_axes && (!(axes&ot_drive_auxiliary) || (axes&ot_drive_pedals));
         if(request.action==OtDriveAction::arm) {
             if(!status_.available || !status_.permitted || !status_.profile_supported || !source_available_ || paused_ || status_.armed ||
-               !axes_ok || (manual_axes_&axes)) accepted=false;
-            else {axes_=axes;++status_.epoch;copy(status_.owner,request.owner);status_.armed=1;status_.reason=OtDriveReason::armed;status_.deadline_ms=now+200;status_.sequence=0;}
+               !axes_ok || (manual_owned(manual_axes_)&axes)) accepted=false;
+            else {axes_=axes;revoked_=0;++status_.epoch;copy(status_.owner,request.owner);status_.armed=1;status_.reason=OtDriveReason::armed;status_.deadline_ms=now+200;status_.sequence=0;}
         } else if(request.action==OtDriveAction::command || request.action==OtDriveAction::disarm) {
             if(!status_.armed || request.epoch!=status_.epoch || std::strcmp(status_.owner,request.owner)) accepted=false;
             else if(request.action==OtDriveAction::disarm) release_locked(OtDriveReason::disarmed);
             else if(request.sequence<=status_.sequence || request.deadline_ms<=now || request.deadline_ms>now+200 || !axes_ok ||
                     ((axes&ot_drive_auxiliary) && (!aux || aux->retarder<0 || aux->retarder>ot_drive_retarder_steps))) accepted=false;
-            else if(manual_axes_&axes) {release_locked(OtDriveReason::manual);accepted=false;}
+            else if(!(axes&~revoked_)) {release_locked(OtDriveReason::manual);accepted=false;}
             else {
-                axes_=axes;status_.sequence=request.sequence;status_.deadline_ms=request.deadline_ms;status_.steering=(axes&ot_drive_steering)?request.steering:0;status_.throttle=(axes&ot_drive_pedals)?request.throttle:0;status_.brake=(axes&ot_drive_pedals)?request.brake:0;status_.active=1;status_.reason=OtDriveReason::command;
-                if(axes&ot_drive_auxiliary) {aux_=*aux;aux_.engine_brake=aux->engine_brake!=0;aux_active_=true;}
+                const auto granted=axes&~revoked_;
+                axes_=granted;status_.sequence=request.sequence;status_.deadline_ms=request.deadline_ms;status_.steering=(granted&ot_drive_steering)?request.steering:0;status_.throttle=(granted&ot_drive_pedals)?request.throttle:0;status_.brake=(granted&ot_drive_pedals)?request.brake:0;status_.active=1;status_.reason=OtDriveReason::command;
+                if(granted&ot_drive_auxiliary) {aux_=*aux;aux_.engine_brake=aux->engine_brake!=0;aux_active_=true;}
                 else if(aux_active_) end_aux_locked();
             }
         }
@@ -58,9 +70,17 @@ public:
         manual_axes_=manual_axes;
         status_.manual_steering=manual[0];status_.manual_throttle=manual[1];status_.manual_brake=manual[2];
         if(status_.armed && !source_available) release_locked(OtDriveReason::input_unavailable);
-        if(status_.armed && (manual_axes_&axes_)) release_locked(OtDriveReason::manual);
-        aux_frame_=aux_locked(now);
-        return status_.active?std::array<float,3>{-status_.steering,status_.throttle,status_.brake}:std::array<float,3>{};
+        if(status_.armed && (manual_axes_&ot_manual_brake) && (axes_&ot_drive_pedals)) {
+            revoked_|=ot_drive_pedals|ot_drive_auxiliary;axes_&=~revoked_;
+            status_.throttle=status_.brake=0;end_aux_locked();
+            if(!axes_) release_locked(OtDriveReason::manual);
+        }
+        const bool throttle_override=status_.armed && (manual_axes_&ot_manual_throttle) && (axes_&ot_drive_pedals);
+        aux_frame_=aux_locked(now,throttle_override);
+        if(!status_.active) return {};
+        std::array<float,3> result{(manual_axes_&ot_manual_steering)?0.f:-status_.steering,status_.throttle,status_.brake};
+        if(throttle_override) {result[1]=std::max(0.f,status_.throttle-manual[1]);result[2]=0;}
+        return result;
     }
     // The auxiliary inputs for the frame that the last frame() call computed.
     DriveAuxFrame aux_frame() {std::lock_guard lock(mutex_);return aux_frame_;}
@@ -70,6 +90,10 @@ private:
     template<size_t N> static void copy(char(&target)[N],const char* source) {
         const auto count=std::min(std::strlen(source),N-1);std::memcpy(target,source,count);target[count]=0;
     }
+    // Owned axes that driver activity touches.
+    static uint32_t manual_owned(uint32_t manual) {
+        return ((manual&ot_manual_steering)?ot_drive_steering:0u)|((manual&(ot_manual_throttle|ot_manual_brake))?ot_drive_pedals:0u);
+    }
     void expire(uint64_t now) {if(status_.armed && now>=status_.deadline_ms) release_locked(OtDriveReason::expired);}
     void end_aux_locked() {
         // Hand the retarder back off: a step left on would brake against the driver.
@@ -78,24 +102,27 @@ private:
     }
     void release_locked(OtDriveReason reason) {
         status_.armed=status_.active=0;status_.deadline_ms=0;status_.steering=status_.throttle=status_.brake=0;
-        axes_=0;end_aux_locked();
+        axes_=revoked_=0;end_aux_locked();
         status_.reason=reason;status_.owner[0]=0;
     }
-    DriveAuxFrame aux_locked(uint64_t now) {
-        if(release_pulse_) {release_pulse_=false;pulse_step_=0;pulse_until_=now+kRetarderPulseMs;last_pulse_=now;}
-        else if(aux_active_ && (aux_.retarder!=pulse_step_ || now-last_pulse_>=kRetarderRefreshMs)) {
+    // suspended: the driver's throttle override hands the retarder (step 0 once) and the
+    // engine brake back; the commanded step is pulsed again when it ends.
+    DriveAuxFrame aux_locked(uint64_t now,bool suspended) {
+        const bool on=aux_active_ && !suspended;
+        if(release_pulse_ || (aux_active_ && suspended && pulse_step_>0)) {release_pulse_=false;pulse_step_=0;pulse_until_=now+kRetarderPulseMs;last_pulse_=now;}
+        else if(on && (aux_.retarder!=pulse_step_ || now-last_pulse_>=kRetarderRefreshMs)) {
             pulse_step_=aux_.retarder;pulse_until_=now+kRetarderPulseMs;last_pulse_=now;
         }
         DriveAuxFrame result;
         if(now<pulse_until_) result.retarder_pulse=pulse_step_;
-        result.engine_brake=aux_active_ && aux_.engine_brake;
+        result.engine_brake=on && aux_.engine_brake;
         return result;
     }
     OtDriveStatus snapshot_locked(uint64_t now) const {auto result=status_;result.command_window_ms=status_.armed?now+200:0;return result;}
     std::mutex mutex_;
     OtDriveStatus status_;
     bool source_available_=false,paused_=true;
-    uint32_t axes_=0,manual_axes_=0;
+    uint32_t axes_=0,manual_axes_=0,revoked_=0; // revoked_: axes the driver's brake took back this epoch
     OtDriveAux aux_{};
     bool aux_active_=false,release_pulse_=false;
     int32_t pulse_step_=-1;

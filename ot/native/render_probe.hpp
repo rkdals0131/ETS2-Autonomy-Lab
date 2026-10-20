@@ -139,8 +139,18 @@ private:
     struct UsageEntry {uintptr_t view;bool backbuffer;};
     std::array<UsageEntry,64> usage_cache_{};
     size_t usage_next_=0;
-    std::atomic<uint64_t> scene_binds_{0},composition_binds_{0},blit_compiled_span_{0},blit_backbuffer_usage_{0},
+    std::atomic<uint64_t> composition_binds_{0},composition_with_depth_{0},blit_compiled_span_{0},blit_backbuffer_usage_{0},
         blit_both_{0},blit_neither_{0},blit_draws_{0},blit_no_camera_{0};
+    // Binds by render-target count 0..8, and how many carried a DSV.
+    std::array<std::atomic<uint64_t>,9> bind_counts_{};
+    std::atomic<uint64_t> bind_depths_{0};
+    // Render thread only: the main depth candidate of the current frame (see overlay_observe).
+    Com<ID3D11DepthStencilView> frame_depth_;
+    uintptr_t last_dsv_=0;bool last_dsv_main_=false;
+    std::array<uint32_t,2> composition_size_{};
+    struct DsvEntry {uintptr_t view;bool main;};
+    std::array<DsvEntry,16> dsv_cache_{};
+    size_t dsv_next_=0;
 
 };
 }

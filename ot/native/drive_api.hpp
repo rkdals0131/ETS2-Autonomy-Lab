@@ -38,3 +38,5 @@ struct OtDriveHost {
 };
 inline constexpr uint32_t ot_drive_steering=1,ot_drive_pedals=2,ot_drive_all=3,ot_drive_auxiliary=4,ot_drive_all_aux=7;
 inline constexpr int32_t ot_drive_retarder_steps=5;
+// Driver activity in ManualInput::Sample::active_axes, one bit per profile input.
+inline constexpr uint32_t ot_manual_steering=1,ot_manual_throttle=2,ot_manual_brake=8;

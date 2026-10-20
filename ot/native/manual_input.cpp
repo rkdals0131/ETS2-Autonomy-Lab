@@ -1,4 +1,5 @@
 #include "manual_input.hpp"
+#include "drive_api.hpp"
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -125,7 +126,7 @@ struct ManualInput::Impl {
     }
     std::array<float,3> values(const PhysicalInput& input,const std::array<float,3>& semantic={},uint32_t* active_axes=nullptr) const {
         std::array<float,3> result{};const char* names[]={"steering","forward","backward"};
-        for(size_t i=0;i<3;++i) {bool active=false;result[i]=eval(bindings.at(names[i]),input,semantic,0,&active).value_or(0);if(active_axes && active) *active_axes|=i==0?1u:2u;if(!std::isfinite(result[i])) throw std::runtime_error("Invalid control formula");}
+        for(size_t i=0;i<3;++i) {bool active=false;result[i]=eval(bindings.at(names[i]),input,semantic,0,&active).value_or(0);if(active_axes && active) *active_axes|=i==0?ot_manual_steering:i==1?ot_manual_throttle:ot_manual_brake;if(!std::isfinite(result[i])) throw std::runtime_error("Invalid control formula");}
         return result;
     }
 };

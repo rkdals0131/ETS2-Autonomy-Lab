@@ -1,5 +1,6 @@
 #include "drive_control.hpp"
 #include "manual_input.hpp"
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <source_location>
@@ -8,6 +9,10 @@
 
 static void check(bool value,std::source_location at=std::source_location::current()) {
     if(!value) throw std::runtime_error("Driving contract failed at line "+std::to_string(at.line()));
+}
+static bool near(const std::array<float,3>& a,const std::array<float,3>& b) {
+    for(size_t i=0;i<3;++i) if(std::abs(a[i]-b[i])>1e-6f) return false;
+    return true;
 }
 int main(int argc,char** argv) try {
     using namespace ot;
@@ -39,26 +44,45 @@ int main(int argc,char** argv) try {
     command.sequence=2;command.deadline_ms=1300;check(!control.request(command,1050,state)); // Cannot extend beyond the issued 200 ms window.
     command.deadline_ms=1050;check(!control.request(command,1050,state));
     control.frame(1200,true,{},false);check(!control.request(command,1200,state));check(state.reason==OtDriveReason::expired);
-    // Combined manual values may cancel; activity still revokes ownership.
+    // Combined manual values may cancel; activity still counts. The driver's brake takes the
+    // pedals back for the epoch and leaves steering; with nothing left the session ends.
     control.frame(1201,true,{},false);check(control.request(arm,1201,state));
-    control.frame(1202,true,{},true);check(!control.request(command,1202,state));check(state.reason==OtDriveReason::manual);
-    check(!control.request(arm,1203,state));control.frame(1204,true,{},false);check(control.request(arm,1204,state));
-    control.paused(true);control.paused(false);check(!control.request(command,1205,state));check(!state.armed);
-    check(control.request(arm,1206,state));control.frame(1207,false,{},false);check(!control.request(command,1207,state));
+    command.epoch=state.epoch;command.sequence=1;command.deadline_ms=1390;uint32_t granted=0;
+    control.frame(1202,true,{},ot_manual_brake);check(control.request(command,1202,state,ot_drive_all,&granted));
+    check(granted==ot_drive_steering && state.armed);check(control.frame(1203,true,{},0)==std::array<float,3>{-.4f,0,0});
+    command.sequence=2;check(!control.request(command,1204,state,ot_drive_pedals));check(state.reason==OtDriveReason::manual && !state.armed);
+    control.frame(1205,true,{},ot_manual_throttle);check(!control.request(arm,1205,state));control.frame(1206,true,{},0);check(control.request(arm,1206,state));
+    control.paused(true);control.paused(false);check(!control.request(command,1207,state));check(!state.armed);
+    check(control.request(arm,1208,state));control.frame(1209,false,{},false);check(!control.request(command,1209,state));
     check(state.reason==OtDriveReason::input_unavailable);
     // ACC leaves human steering untouched; LCC leaves human pedals untouched.
-    control.frame(1300,true,{.5f,0,0},ot_drive_steering);
+    control.frame(1300,true,{.5f,0,0},ot_manual_steering);
     check(control.request(arm,1300,state,ot_drive_pedals));
     command.epoch=state.epoch;command.sequence=1;command.deadline_ms=1490;
     uint32_t owned=0;check(control.request(command,1310,state,ot_drive_pedals,&owned));check(owned==ot_drive_pedals);
-    check(control.frame(1311,true,{.5f,0,0},ot_drive_steering)==std::array<float,3>{0,.9f,.2f});
-    control.frame(1312,true,{},ot_drive_pedals);check(!control.request(command,1313,state));check(state.reason==OtDriveReason::manual);
-    control.frame(1400,true,{0,.5f,0},ot_drive_pedals);check(control.request(arm,1400,state,ot_drive_steering));
+    check(control.frame(1311,true,{.5f,0,0},ot_manual_steering)==std::array<float,3>{0,.9f,.2f});
+    // The driver's throttle overrides upward (the game sums both): max of the two, no brake.
+    check(near(control.frame(1312,true,{0,.5f,0},ot_manual_throttle),{0,.4f,0}));
+    check(control.frame(1313,true,{0,.95f,0},ot_manual_throttle)==std::array<float,3>{0,0,0});
+    check(control.frame(1314,true,{},0)==std::array<float,3>{0,.9f,.2f});
+    control.frame(1315,true,{0,0,.3f},ot_manual_brake);check(!control.request(command,1316,state));check(state.reason==OtDriveReason::manual);
+    control.frame(1400,true,{0,.5f,0},ot_manual_throttle);check(control.request(arm,1400,state,ot_drive_steering));
     command.epoch=state.epoch;command.sequence=1;command.deadline_ms=1590;
     check(control.request(command,1410,state,ot_drive_steering));
-    check(control.frame(1411,true,{0,.5f,0},ot_drive_pedals)==std::array<float,3>{-.4f,0,0});
-    // Enabling an axis under physical intervention releases; stale modes cannot renew.
-    command.sequence=2;check(!control.request(command,1412,state,ot_drive_all));check(state.reason==OtDriveReason::manual);
+    check(control.frame(1411,true,{0,.5f,0},ot_manual_throttle)==std::array<float,3>{-.4f,0,0});
+    // Steering activity under LCC: the driver steers alone and the session stays armed.
+    check(control.frame(1412,true,{.3f,0,0},ot_manual_steering)==std::array<float,3>{0,0,0});
+    check(control.request(OtDriveRequest{},1413,state,ot_drive_all,&owned));check(state.armed && owned==ot_drive_steering);
+    check(control.frame(1414,true,{},0)==std::array<float,3>{-.4f,0,0});
+    // Adding the pedals under the driver's throttle is an override, not a release.
+    command.sequence=2;check(control.request(command,1415,state,ot_drive_all,&owned));check(owned==ot_drive_all);
+    check(near(control.frame(1416,true,{0,.5f,0},ot_manual_throttle),{-.4f,.4f,0}));
+    // After the driver's brake the pedals stay revoked for the epoch; steering continues.
+    control.frame(1417,true,{0,0,.2f},ot_manual_brake);check(control.request(OtDriveRequest{},1418,state,ot_drive_all,&owned));
+    check(state.armed && owned==ot_drive_steering);
+    command.sequence=3;check(control.request(command,1419,state,ot_drive_all,&owned));check(owned==ot_drive_steering);
+    check(control.frame(1420,true,{},0)==std::array<float,3>{-.4f,0,0});
+    control.release(OtDriveReason::disarmed);
     control.frame(1500,true,{},0);check(control.request(arm,1500,state,ot_drive_pedals));
     command.epoch=state.epoch;command.sequence=1;command.deadline_ms=1690;
     check(control.request(command,1510,state,ot_drive_all));check(control.request(OtDriveRequest{},1511,state,ot_drive_all,&owned));check(owned==ot_drive_all);
@@ -86,7 +110,11 @@ int main(int argc,char** argv) try {
         aux.frame(2011+DriveControl::kRetarderRefreshMs,true,{},0);check(aux.aux_frame().retarder_pulse==3);  // refreshed
         want={1,0};c.sequence=4;c.deadline_ms=2600;check(aux.request(c,2512,state,acc,nullptr,&want,nullptr,ot_drive_all_aux));
         aux.frame(2513,true,{},0);check((aux.aux_frame()==DriveAuxFrame{1,false}));
-        aux.frame(2590,true,{},ot_drive_pedals);  // the driver's pedal releases everything
+        // The driver's throttle hands the retarder back (step 0 once) and resumes it after.
+        aux.frame(2520,true,{0,.3f,0},ot_manual_throttle);check((aux.aux_frame()==DriveAuxFrame{0,false}));
+        aux.frame(2575,true,{0,.3f,0},ot_manual_throttle);check(aux.aux_frame().retarder_pulse==-1);
+        aux.frame(2576,true,{},0);check((aux.aux_frame()==DriveAuxFrame{1,false}));
+        aux.frame(2590,true,{},ot_manual_brake);  // the driver's brake ends the pedal session
         check((aux.aux_frame()==DriveAuxFrame{0,false}));  // step 0 pulsed once
         aux.frame(2590+DriveControl::kRetarderPulseMs,true,{},0);check((aux.aux_frame()==DriveAuxFrame{-1,false}));
         uint32_t after=9;OtDriveAux echo{};check(aux.request(OtDriveRequest{},2800,state,ot_drive_all,&after,nullptr,&echo,ot_drive_all_aux));
@@ -125,5 +153,5 @@ int main(int argc,char** argv) try {
         check(loads("keyboard.a?0 & (! keyboard.d?0)"));check(!loads("keyboard.a?0 && keyboard.d?0"));check(!loads("keyboard.a?0 || keyboard.d?0"));
         std::filesystem::remove(path);
     }
-    std::cout<<"Driving owner, epoch, expiry, takeover, auxiliary brake and SDK frame contracts passed\n";
+    std::cout<<"Driving owner, epoch, expiry, takeover and override, auxiliary brake and SDK frame contracts passed\n";
 } catch(const std::exception& e) {std::cerr<<e.what()<<"\n";return 1;}

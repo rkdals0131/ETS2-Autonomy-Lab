@@ -4,7 +4,7 @@
 
 ## 0. 구현 상태
 
-✔ 2026-10-20 구현(core 0.43.0·릴레이·otpy, 게임 시험 전). 게임 1.61.1.9 schema(`ot/schema/1.61.1.9/fields.json`)에 맞췄습니다. 아래 본문의 ✔는 설계 근거이고, 구현이 게임에서 맞게 동작하는지는 §8 T1–T6이 끝날 때까지 △입니다.
+✔ 2026-10-20 구현(core 0.43.0·릴레이·otpy). 같은 날 밤 게임 첫 시험에서 데칼이 그려지지 않아 core 0.44.0에서 깊이 버퍼를 잡는 방법을 바꿨습니다(아래 "게임 첫 시험"). 게임 1.61.1.9 schema(`ot/schema/1.61.1.9/fields.json`)에 맞췄습니다. 아래 본문의 ✔는 설계 근거이고, 구현이 게임에서 맞게 동작하는지는 §8 T1–T6이 끝날 때까지 △입니다.
 
 | 부분 | 구현 | 확인 |
 | --- | --- | --- |
@@ -21,9 +21,21 @@
 - 시저: 명령 리스트를 고정하려고 RS 시저 대신 VS가 상수 버퍼의 NDC 사각형만 덮는 4정점 strip을 그립니다. 래스터 범위는 같습니다. 사각형은 경로 점(최대 64개 표본)의 폭·높이 허용 상자를 투영하고, 카메라 뒤 점은 near plane에서 자릅니다.
 - `OverlayBlock`의 reserved 일부를 `double ground_y`(경로 시작점 노면의 SCS Y, NaN이면 높이 판정 생략)로 씁니다. §5의 `ground_z`를 core가 자세 없이 얻는 방법입니다. 끝에 명시 padding 32 B를 두어 크기는 4224 B입니다.
 - 마스크 축은 시작점에서 마스크 길이 안의 가장 먼 점으로 향하는 chord, 횡 중심은 그 범위 경로의 중앙, 뒤쪽 여유 4 m입니다. 반경 500 m 곡선이 32 m 폭에 들어갑니다(반경 60 m U턴은 `clipped`). 호 길이 페이드(기본 80→120 m)는 R에 굽고 G는 호 길이/160 m입니다.
-- composition_out RTV는 그 pass의 bind에서, DSV는 `scene defattr` bind에서 graph별로 잡습니다. 블릿 bind 때 바인드된 RTV를 묻지 않습니다(tonemap 끝에 unbind되면 비어 있음).
+- composition_out RTV는 그 pass의 bind에서 graph별로 잡습니다. DSV는 처음에 `scene defattr` bind에서 잡았으나 1.61.1.9에서는 그 span에 bind가 하나도 들어오지 않아(아래 "게임 첫 시험"), 0.44.0부터 composition_out bind 직전에 마지막으로 bind된 composition 크기의 DSV를 씁니다. 블릿 bind 때 바인드된 RTV를 묻지 않습니다(tonemap 끝에 unbind되면 비어 있음).
 - 메인 카메라에 projection modifier가 있어도 그립니다(해석하지 않은 값이 sub-pixel jitter일 것으로 봄, `last_draw.projection_modifier_flag`로 보고).
 - 릴레이 자세 이력은 64개가 아니라 128개입니다(SDK 프레임율이 렌더보다 높을 때 500 ms를 덮도록). stamp가 0인 경로는 최신 자세로 바꿉니다(수동 `ros2 topic pub` 시험용).
+
+### 게임 첫 시험 (2026-10-20 밤, core 0.43.0 → 0.44.0)
+
+장소는 회사 마당 생울타리 앞 정차(지도 provider가 지원하지 않는 도로), 실내 시점, 1920×1080입니다. provider 경로를 만들 수 없어 트럭 진행 방향 직선 경로와 왼쪽으로 꺾는 경로를 임시로 만들어 썼습니다.
+
+- T1: ✔ `scene defattr`·`def.tonemap.drr.rfx`·`blit_to_target` 모두 매 프레임 compile되고, `scene_cameras`의 `viewport_depth` [0.01, 0.9]·P[10],P[11] = −1.00025, −0.40005가 §1과 같습니다. `blit_detection`은 618회 모두 `both`(`neither`·`*_only` 0)입니다.
+- 0.43.0에서 데칼이 그려지지 않았습니다: `skips.depth`가 매 프레임. `binds.scene` 0. 진단 core로 세어 보니 overlay hook을 지나는 bind는 프레임당 타깃 0개 5·1개 약 41·2개 5·4개 5·6개 1회이고 DSV는 약 30회(1920×1080, `DXGI_FORMAT_D32_FLOAT_S8X24_UINT`)였습니다. 토큰 인덱스와 무관하게 `scene defattr` span 안의 bind는 0회였습니다. 원인(실행 경로가 달라졌는지, span 토큰이 다른지)은 확인하지 않았습니다.
+- 0.44.0: composition_out bind 직전 마지막 composition 크기 DSV를 메인 깊이로 씁니다(외부·실내 pass가 viewport 깊이를 나눠 같은 깊이를 씀). 6,514프레임 모두 그려졌고 `skips.depth` 0입니다. 캡처(`overlay capture --png`)에서 트럭 앞 왼쪽 포장면에 띠가 깔리고 A필러·핸들·대시보드에 가려집니다.
+- △ 디더링 투명(나뭇잎·생울타리) 픽셀에 점처럼 묻습니다. 그 픽셀의 색은 잎인데 깊이는 뒤 지면이라 마스크 안으로 판정되는 것으로 봅니다(추정).
+- △ T4 렌더 스레드 콜백은 프레임당 약 0.22 ms로 기준(0.1 ms)을 넘습니다. 히스토그램상 거의 전부 프레임당 한 번의 데칼 그리기(깊이 CopyResource와 `ExecuteCommandList(list, TRUE)`의 상태 복원)이고, bind 처리 자체는 1 µs 안팎입니다.
+- ✘ 0.44.0 첫 빌드는 진단을 넓히면서 타깃 수 상한을 8로 올리고 타깃 배열은 4칸으로 둬서 스택을 덮어썼고, 데칼을 켠 직후 게임이 종료됐습니다(19:45 `NONCONTINUABLE_EXCEPTION`). 배열을 8칸으로 고친 빌드부터 정상입니다.
+- 남은 시험: 실제 차로에서 T2(차로 중심 정렬), T3(주행 중 1 px), T5, T6.
 
 ## 1. 메인 프레임 구조(실측)
 

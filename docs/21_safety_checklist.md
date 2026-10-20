@@ -27,9 +27,18 @@
 | 7 | 릴레이 종료(런처 중지) | `disconnected` | `bridge/windows/main.cpp:DriveEnd`(소멸자가 `drive disconnect`), `core.cpp:Runtime::command`의 drive disconnect, lease 반납 `core.cpp:Runtime::release_runtime` | 2026-10-12 | 0.31.1 | ✔ `disconnected` 뒤 165 ms에 Tier 0, 사유 유지(core 10 ms 폴링). bag에는 릴레이가 상태 발행을 멈춘 뒤라 전이가 없다. 0.31.0은 실패: 아래 "발견" 2 | `bridge/recordings/20261012-220911-19814b0c/bag` |
 | 8 | 패드 USB 분리 | `input_unavailable` | `input_device.cpp:InputDevice::sample`(connected 전이) | 2026-10-12 | 0.31.0 | ✔ `input_unavailable`(exit 2). 0.47 s 뒤 게임이 스스로 일시정지해 사유가 `paused`로 바뀜(해제 상태 유지) | `bridge/recordings/20261012-220053-eaf9d6bd/bag` |
 
+| 9 | loader 0.44 ACC armed(axes=2 또는 6) 중 가속 페달 | 해제 없음. 게임 입력은 운전자 값과 명령 중 큰 쪽(게임이 둘을 더하므로 명령은 초과분만), 브레이크 0, 리타더 0단 펄스·엔진브레이크 끔. 페달을 떼면 명령 단 다시 펄스 | `drive_control.hpp:DriveControl::frame`(throttle_override), `aux_locked(suspended)` | | 0.44.0 | 게임 확인 전(로직 시험만) | |
+| 10 | loader 0.44 ACC armed 중 브레이크 페달 | 페달·보조 브레이크 축 회수(그 epoch 동안), 남은 축이 없으면 `manual`. `drive_speed`는 "ACC cancelled by the driver's brake" 뒤 LCC만 계속 | `DriveControl::frame`의 `revoked_`, `gt_drive_node.cpp`(pedal_sequence) | | 0.44.0 | 게임 확인 전 | |
+| 11 | loader 0.44 LCC armed 중 조향 | 해제 없음. 조작하는 동안 명령 조향 0(운전자만), `drive_speed`는 놓은 뒤 1 s 지나 LCC 재개. 차로 기준을 벗어나면 ACC가 켜져 있을 때 조향만 돌려줌 | `DriveControl::frame`, `gt_drive_node.cpp`(driver_steering_until) | | 0.44.0 | 게임 확인 전 | |
+| 12 | loader 0.44 운전자 입력 중 arm | 요청 축에 운전자 입력이 있으면 거절(이전과 같음) | `DriveControl::request`의 `manual_owned` | | 0.44.0 | 게임 확인 전 | |
+
 완료 기준: 8개 모두 기대 reason으로 전이하고, `/ets2/vehicle/actuation`의 applied 값이 다음 SDK 프레임부터 사람 입력을 따른다. 각 행의 bag 경로가 채워진다. 실패 항목은 [포팅 계획 §6](20_windows_native_port_plan.md#6-의존-그래프와-이어받는-작업)에 등록한다.
 
 ✔ 2026-10-12 **W02 완료**(#7은 core 0.31.1). applied 추종은 `/ets2/drive/state`의 `*_applied`로 #1·#2에서 확인. Windows 네이티브 릴레이(입력·상태만). 런처 기록 세 개는 모두 metadata.yaml로 닫혔다.
+
+## loader 0.44.0 운전자 개입 계약 (2026-10-20 밤)
+
+사용자 요청으로 #1·#2의 "어느 축이든 운전자 입력이면 전부 해제"를 바꿨다. `ManualInput`의 활동 비트를 조향·가속·브레이크로 나누고(`drive_api.hpp:ot_manual_*`), 가속은 상향 오버라이드, 조향은 운전자 우선(세션 유지), 브레이크만 종방향 보조 종료로 둔다. `ot_drive_test`가 fixture와 실제 프로필로 통과했다(2026-10-20). 0.31 loader에서는 #1·#2 동작이 그대로라, `drive_speed`는 `manual` 해제를 오류가 아닌 "The driver took over"로 끝낸다. 게임 확인(#9–#11)은 loader 설치(게임 재시작) 뒤에 한다.
 
 ## 발견
 
