@@ -116,6 +116,7 @@ class Session:
         self.unfocused_speed = 0.0
         self.edge = None
         self.focus_losses: list[dict] = []
+        self.tier1 = False
         self.attempt = 0  # increases on every step retry; frames carry it so analyses can drop aborted attempts
         config =self.client.request("truck_config")
         (out_dir / "truck_config.json").write_text(json.dumps(config, indent=1))
@@ -200,6 +201,9 @@ class Session:
              "focus": game_in_front(self.reader.producer_pid), "attempt": self.attempt}
         if self.extra:
             r["x"] = {k: v(k) for k in self.extra}
+        drivetrain = (s.get("engine") or {}).get("drivetrain") or {}
+        if drivetrain.get("available"):
+            r["dt"] = {k: val for k, val in drivetrain.items() if k not in ("available", "phase", "source")}
         self.log.write(json.dumps(r) + "\n")
         self.last = r
         global WHEELBASE, REAR_Z
@@ -523,8 +527,21 @@ def main():
         print("log", out / "frames.jsonl", flush=True)
 
 
+def observe_drivetrain(s):
+    """Tier 1 for the run, so every frame also logs engine and output torque, shaft
+    speeds and wheel brake torques under "dt" (core 0.39.0 drivetrain read); runs go on
+    without it when Tier 1 is not allowed."""
+    if s.tier1:
+        return
+    try:
+        s.tier1 = s.client.request("tier", value=1, owner=s.lease).get("tier") == 1
+    except Exception as e:
+        print("drivetrain not logged:", e, flush=True)
+
+
 def wait_focus_and_arm(s):
     """Wait up to 180 s for the game window to stay in front for 2 s, then arm steering and pedals."""
+    observe_drivetrain(s)
     s.message = "click the game window; arming 2 s after it has focus"
     user32 = ctypes.windll.user32
     until, since = time.monotonic() + 180, None
@@ -648,6 +665,11 @@ def release(s):
             s.client.request("drive", action="disarm", owner=s.lease, drive_owner=s.lease, epoch=s.epoch)
     except Exception as e:
         print("disarm:", e)
+    try:
+        if s.tier1:
+            s.client.request("tier", value=0, owner=s.lease)
+    except Exception as e:
+        print("tier 0:", e)
     try:
         s.client.request("lease", action="release", owner=s.lease)
     except Exception as e:

@@ -1,5 +1,6 @@
 #include "ot.hpp"
 #include "../include/geometry.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <set>
@@ -69,6 +70,47 @@ json read_world_traffic(const json& schema) {
             {"speed_mps",speed},{"length_m",bounds[5]-bounds[2]},{"width_m",bounds[3]-bounds[0]}});
     }
     result["available"]=true;return result;
+}
+
+// Driveline and brake values a truck's CAN bus carries (J1939 EEC1 engine speed and actual
+// torque, ETC1 output shaft speed, ERC1 retarder and engine brake, EBC wheel brakes) that
+// the SDK does not publish. Found by correlating the vehicle's memory with SDK channels and
+// checked against physics (docs/30): the output torque through the final drive and wheel
+// radius explains the acceleration with the def rolling resistance and the truck's mass.
+json read_vehicle_drivetrain(uintptr_t actor,const json& schema,uint32_t wheels) {
+    if(!schema.contains("vehicle_drivetrain")) return {{"available",false},{"reason","not_in_schema"}};
+    const auto& s=schema.at("vehicle_drivetrain");
+    const auto offset=[&](const char* name) {return s.at(name).get<uintptr_t>();};
+    auto missing=[](const char* reason) {return json{{"available",false},{"reason",reason}};};
+    uintptr_t vehicle{},physics{},instruments{},brakes{};
+    if(!read_memory(actor+schema.at("vehicle_physics").at("actor_vehicle_offset").get<uintptr_t>(),vehicle) || !vehicle ||
+       !read_memory(vehicle+offset("physics_offset"),physics) || !physics ||
+       !read_memory(vehicle+offset("instruments_offset"),instruments) || !instruments ||
+       !read_memory(physics+offset("wheel_brake_torque_pointer_offset"),brakes) || !brakes)
+        return missing("drivetrain_unavailable");
+    json result={{"available",true},{"phase","sdk_frame_end"},{"source","vehicle_physics_memory"}};
+    const std::pair<const char*,uintptr_t> fields[]{
+        {"engine_speed_radps",physics+offset("engine_speed_offset")},
+        {"output_shaft_speed_radps",physics+offset("output_shaft_speed_offset")},
+        {"engine_torque_nm",physics+offset("engine_torque_offset")},
+        {"output_torque_nm",physics+offset("output_torque_offset")},
+        {"gear_ratio",physics+offset("gear_ratio_offset")},
+        {"clutch",physics+offset("clutch_offset")},
+        {"retarder_level",instruments+offset("retarder_level_offset")},
+        {"engine_brake",instruments+offset("engine_brake_offset")}};
+    for(const auto& [name,address]:fields) {
+        float value{};
+        if(!read_memory(address,value) || !std::isfinite(value) || std::abs(value)>1e7f) return missing("invalid_drivetrain_value");
+        result[name]=value;
+    }
+    json torque=json::array();
+    for(uint32_t i=0;i<std::min<uint32_t>(wheels,16);++i) {
+        float value{};
+        if(!read_memory(brakes+i*sizeof(float),value) || !std::isfinite(value) || std::abs(value)>1e7f) return missing("invalid_wheel_brake_torque");
+        torque.push_back(value);
+    }
+    result["wheel_brake_torque_nm"]=std::move(torque);
+    return result;
 }
 
 json read_vehicle_physics(uintptr_t actor,const json& schema) {

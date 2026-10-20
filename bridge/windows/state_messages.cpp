@@ -80,6 +80,24 @@ Packet state_messages(const json& state,const std::string& session,const V& base
             c<<available<<(available?sdk.at(key).at("value").get<int32_t>():int32_t{0});
         }
     });
+    append_cdr(packet,"/ets2/vehicle/powertrain",1024,[&](Cdr& c){
+        header(c,us,"base_link");c<<state.at("frame_id").get<uint64_t>();
+        for(const auto* key:{"truck.engine.rpm","truck.effective.clutch","truck.cruise_control","truck.oil.temperature",
+                            "truck.oil.pressure","truck.water.temperature","truck.battery.voltage","truck.fuel.amount",
+                            "truck.fuel.consumption.average","truck.adblue","truck.brake.air.pressure","truck.brake.temperature"}) c<<channel(state,key);
+        const auto& sdk=state.at("sdk");
+        const auto flag=[&](const char* key) {return sdk.contains(key) && sdk.at(key).value("available",false) && sdk.at(key).at("value").get<bool>();};
+        const bool retarder=sdk.contains("truck.brake.retarder") && sdk.at("truck.brake.retarder").value("available",false);
+        c<<(retarder?sdk.at("truck.brake.retarder").at("value").get<uint32_t>():uint32_t{0});
+        c<<flag("truck.brake.motor")<<flag("truck.brake.parking")<<flag("truck.lift_axle");
+        const auto nan=std::numeric_limits<double>::quiet_NaN();
+        const json* drivetrain=state.contains("engine") && state.at("engine").contains("drivetrain") ? &state.at("engine").at("drivetrain") : nullptr;
+        const bool available=drivetrain && drivetrain->value("available",false);
+        c<<available;
+        for(const auto* key:{"engine_speed_radps","engine_torque_nm","output_shaft_speed_radps","output_torque_nm","gear_ratio","retarder_level","engine_brake"})
+            c<<(available?drivetrain->at(key).get<double>():nan);
+        c<<(available?drivetrain->at("wheel_brake_torque_nm").get<std::vector<double>>():std::vector<double>{});
+    });
     if(state.contains("drive")) {
         const auto& drive=state.at("drive");
         append_cdr(packet,"/ets2/drive/state",2048,[&](Cdr& c){

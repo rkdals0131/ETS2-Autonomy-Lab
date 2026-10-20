@@ -5,7 +5,7 @@
 
 namespace bridge {
 // ets2_msgs/package.xml version whose layouts the relay serializes (checked by tests/topics_test).
-inline constexpr std::string_view msgs_version="0.2.0";
+inline constexpr std::string_view msgs_version="0.3.0";
 // state: reliable, published from the SDK-frame path. latched: transient local.
 struct Topic {std::string name,type;bool state=false,latched=false;};
 inline std::vector<Topic> topics() {
@@ -13,6 +13,7 @@ inline std::vector<Topic> topics() {
         {"/clock","rosgraph_msgs/msg/Clock",true},
         {"/ets2/vehicle/state","ets2_msgs/msg/VehicleState",true},
         {"/ets2/vehicle/actuation","ets2_msgs/msg/ActuationState",true},
+        {"/ets2/vehicle/powertrain","ets2_msgs/msg/PowertrainState",true},
         {"/ets2/drive/state","ets2_msgs/msg/DriveState",true},
         {"/ets2/imu/data_raw","sensor_msgs/msg/Imu",true},
         {"/ets2/wheels/state","ets2_msgs/msg/WheelState",true},

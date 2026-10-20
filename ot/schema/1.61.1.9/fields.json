@@ -128,6 +128,20 @@
     "backend_world_pose_offset": 320,
     "evidence": "research/live/2026-10-08-render-path/telemetry-physx-body-pose.txt"
   },
+  "vehicle_drivetrain": {
+    "physics_offset": 336,
+    "instruments_offset": 6176,
+    "engine_speed_offset": 736,
+    "output_shaft_speed_offset": 748,
+    "engine_torque_offset": 756,
+    "output_torque_offset": 724,
+    "gear_ratio_offset": 708,
+    "clutch_offset": 816,
+    "wheel_brake_torque_pointer_offset": 608,
+    "retarder_level_offset": 1000,
+    "engine_brake_offset": 1008,
+    "evidence": "research/live/2026-10-20-can-scan, research/live/2026-10-20-can-probe*; docs/30"
+  },
   "vehicle_fields": {
     "pose_physics": {"type": "world_placement_wxyz", "writable": false},
     "origin_shift": {"type": "float3", "writable": false}

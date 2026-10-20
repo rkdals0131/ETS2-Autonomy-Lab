@@ -104,6 +104,7 @@ private:
     scs_telemetry_init_params_v100_t api_;
     json schema_,config_=json::object(),values_=json::object(),registration_=json::object();
     std::atomic<std::shared_ptr<const json>> truck_config_;
+    std::atomic<uint32_t> wheel_count_{0};
     std::atomic<std::shared_ptr<const json>> registered_;
     std::string executable_hash_,gate_error_;
     bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,allow_camera_rig_=false,allow_parallel_passes_=false,paused_=true;
@@ -279,6 +280,7 @@ void Runtime::event(scs_event_t event,const void* data) {
                 registration_[c.key()]=c.registration;
             }
             registered_.store(std::make_shared<const json>(registration_));
+            wheel_count_=wheel_count;
             truck_config_.store(std::make_shared<const json>(json{{"source","SDK truck configuration"},
                 {"truck_generation",generation_},{"attributes",std::move(attributes)}}));
         }
@@ -338,7 +340,8 @@ json Runtime::engine_snapshot() {
        !read_memory(controller+schema_.at("player_offset").get<uintptr_t>(),actor) || !actor)
         return {{"available",false},{"reason","player_unavailable"}};
     json engine={{"available",true},{"phase","sdk_frame_end_before_render_preparation"},
-        {"vehicle",read_vehicle_physics(actor,schema_)},{"mirrors",json::array()}};
+        {"vehicle",read_vehicle_physics(actor,schema_)},{"drivetrain",read_vehicle_drivetrain(actor,schema_,wheel_count_)},
+        {"mirrors",json::array()}};
     if(observe_traffic_) engine["traffic"]=read_world_traffic(schema_);
     ArrayHeader array{};
     if(!read_memory(actor+schema_.at("interior_offset").get<uintptr_t>(),interior) || !interior ||
@@ -437,7 +440,7 @@ json Runtime::command(const json& request) {
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","render_probe","frames","stream","manual_dump","panic","drive","parallel_passes"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","parallel_passes"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"parallel_passes_allowed",gate_ok_ && allow_tier1_ && allow_parallel_passes_},
         {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false) || parallel_passes_->active()},

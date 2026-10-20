@@ -21,6 +21,7 @@ Windows 릴레이 노드(`ros2/src/ets2_relay`, 소스 `bridge/windows`)가 XCDR
 | /ets2/ground_truth/traffic | world 교통 GT TrafficState (baseline 전용) | R |
 | /ets2/vehicle/state | SDK 시각·속도·입력·벡터 상태 VehicleState | R |
 | /ets2/vehicle/actuation | 운전자 입력·적용 조향/페달·기어 ActuationState | R |
+| /ets2/vehicle/powertrain | 엔진·변속·제동 PowertrainState(SDK + Tier 1 구동계, [docs/30](30_can_like_signals.md)) | R |
 | /ets2/drive/state | owner·epoch·sequence·arm·유효창·적용값 DriveState | R |
 | /ets2/drive/command | 역방향 normalized 3축 DriveCommand, `sent_steady_ns` 필수 | BE depth 1 |
 | /ets2/imu/data_raw | 섀시 고정 IMU, specific force·각속도, orientation 없음 | R |

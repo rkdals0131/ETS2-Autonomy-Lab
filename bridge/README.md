@@ -90,6 +90,7 @@ Windows Foxglove에서 `ws://127.0.0.1:8765`에 연결합니다.
 - 박스: `/ets2/ground_truth/{camera}/markers`
 - 상태: `/ets2/vehicle/state`, `/diagnostics`, `/tf`, `/clock`
 - 조작과 기어: `/ets2/vehicle/actuation`의 운전자 입력·실제 적용 입력·기어
+- 파워트레인(실차 CAN에 해당): `/ets2/vehicle/powertrain`의 온도·압력·연료·리타더·엔진브레이크와, Tier 1일 때 실제 엔진 토크·변속기 출력 토크·축 회전·바퀴별 브레이크 토크([docs/30](../docs/30_can_like_signals.md))
 - 추가 센서: `/ets2/imu/data_raw`, `/ets2/wheels/state`, `/ets2/wheels/odometry`, `/ets2/gnss/fix`
 
 라이다는 Color map → range → Turbo로 설정하고 가까운 장면은 0–30m 또는 0–50m 범위를 사용합니다. 원본 RGB·depth와 `/perception/image_raw`는 ROS 소비자가 직접 구독합니다. [토픽·시각 계약](../docs/16_ros2_bridge.md).
