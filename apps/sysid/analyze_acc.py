@@ -141,6 +141,46 @@ def tip_summary(name, rows):
     return out
 
 
+def ladder_summary(rows):
+    """Per retarder step: time from the SDK step change to 63 % of the change in the
+    retarder level (Tier 1) and in the output torque, and the deceleration over the step."""
+    out = {}
+    t = time_of(rows)
+    v = series(rows, lambda r: r["speed"])
+    d = decel(t, v, 0.5)
+    sdk = series(rows, lambda r: (r.get("x") or {}).get("truck.brake.retarder"))
+    level = series(rows, lambda r: (r.get("dt") or {}).get("retarder_level"))
+    to = series(rows, lambda r: (r.get("dt") or {}).get("output_torque_nm"))
+    changes = [i for i in range(1, len(sdk)) if sdk[i] != sdk[i - 1] and np.isfinite(sdk[i])]
+    for n, i in enumerate(changes):
+        j_end = changes[n + 1] if n + 1 < len(changes) else len(rows)
+        seg = slice(i, j_end)
+        def t63(x):
+            x0, x1 = np.nanmedian(x[max(0, i - 10):i]), np.nanmedian(x[max(i, j_end - 30):j_end])
+            if not np.isfinite(x0) or not np.isfinite(x1) or abs(x1 - x0) < 1e-6:
+                return None
+            k = next((k for k in range(i, j_end) if (x[k] - x0) / (x1 - x0) >= 0.63), None)
+            return None if k is None else round(float(t[k] - t[i]), 3)
+        key = f"{int(sdk[i - 1])}->{int(sdk[i])}@{v[i] * 3.6:.0f}kmh"
+        out[key] = {"level_t63_s": t63(level), "torque_t63_s": t63(to),
+                    "level": round(float(np.nanmedian(level[seg][-30:])), 3),
+                    "decel_mps2": round(float(np.nanmedian(d[seg][len(d[seg]) // 2:])), 3)}
+        print(f"   ladder {key}: {out[key]}")
+    return out
+
+
+def blend_summary(name, rows):
+    t, v = time_of(rows), series(rows, lambda r: r["speed"])
+    d = decel(t, v, 0.5)
+    window = (v < 65 / 3.6) & (v > 35 / 3.6)
+    out = {"decel_mps2": round(float(np.nanmedian(d[window])), 3) if window.any() else None,
+           "retarder_level": round(float(np.nanmedian(series(rows, lambda r: (r.get("dt") or {}).get("retarder_level"))[window])), 2) if window.any() else None,
+           "engine_brake_on": round(float(np.nanmean(series(rows, lambda r: 1.0 if (r.get("x") or {}).get("truck.brake.motor") else 0.0))), 2),
+           "gears": sorted({int(g) for g in series(rows, lambda r: r["gear"])[window] if np.isfinite(g)})}
+    print(f"== {name}: {out}")
+    return out
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("run")
@@ -156,9 +196,14 @@ def main():
     phases = defaultdict(list)
     for r in rows:
         phases[r["phase"]].append(r)
-    summary = {"stops": {}, "standstill": {}, "launch": {}, "tips": {}}
+    summary = {"stops": {}, "standstill": {}, "launch": {}, "tips": {}, "ladder": {}, "blend": {}}
+    ladder = [r for r in rows if r["phase"].startswith("ladder:")]
+    if ladder:
+        summary["ladder"] = ladder_summary(ladder)
     for name, g in phases.items():
         kind = name.split(":")[0]
+        if kind == "blend":
+            summary["blend"][name] = blend_summary(name, g)
         if kind == "stop":
             summary["stops"][name] = stop_summary(name, g, trailer_radius, a.mass_kg)
         elif kind in ("standstill", "released"):

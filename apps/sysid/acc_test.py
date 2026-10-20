@@ -11,12 +11,16 @@
   stops     from 80 km/h, brake 0.3 / 0.5 / 0.75 / 1.0 to a stop, then standstill as above
             (deceleration limit; with the truck's and the trailer's wheel brake torques the
             forces can be balanced)
+  retarder  from 75 km/h, the retarder one step up every 4 s to 5 and back down (how fast
+            the retarder level and the output torque follow a step)
+  blend     from 70 km/h, retarder 0 / 3 / 5 with brake 0 / 0.02 / 0.05 / 0.1 (do the
+            decelerations add up, for an ACC that mixes them)
 
 The game's automatic engine brake and retarder keep the profile's settings, as an ACC
 would meet them. Every frame logs the drivetrain under "dt" (Tier 1, core 0.41.0: also
 the trailer's wheel brake torques).
 
-Usage: py -3 acc_test.py [--blocks launch,lowstop,tips,stops] [--view]
+Usage: py -3 acc_test.py [--blocks launch,lowstop,tips,stops,retarder,blend] [--view]
 """
 import argparse, time
 
@@ -96,6 +100,68 @@ def tips(s, gear):
     s.drive(10, 0.0, s.hold(), f"brake_to_stop:{gear}")
 
 
+def reach(s, kmh, label):
+    """Full throttle on the heading until `kmh`, then 4 s at that speed."""
+    v = kmh / 3.6
+    s.phase = f"accel:{label}"
+    r, end = s.frame(), time.monotonic() + 90
+    while r["speed"] < v - 0.5 and time.monotonic() < end:
+        s.send(sd.steer_to(r, sd.heading_hold(r, s.goal)), 1.0, 0.0)
+        r = s.frame()
+    s.drive(4, v, s.hold(), f"steady:{label}")
+
+
+def hold_retarder(s, label, step, brake, seconds, stop_kmh=25.0):
+    """Throttle 0, the retarder lever at `step` and the service brake at `brake` for
+    `seconds` (or down to `stop_kmh`), then the lever back to 0."""
+    lever = keys.Lever(keys.RETARDER_UP, keys.RETARDER_DOWN)
+    ret = lambda r: (r.get("x") or {}).get("truck.brake.retarder")
+    try:
+        s.phase, s.thr, s.brk = label, 0.0, brake
+        end = time.monotonic() + seconds
+        r = s.frame()
+        while time.monotonic() < end and r["speed"] > stop_kmh / 3.6:
+            s.send(sd.steer_to(r, sd.heading_hold(r, s.goal)), 0.0, brake)
+            r = s.frame()
+            lever.update(ret(r), step)
+        s.phase = f"release:{label}"
+        until = time.monotonic() + 6
+        while ret(r) and time.monotonic() < until:
+            s.send(sd.steer_to(r, sd.heading_hold(r, s.goal)), 0.0, 0.0)
+            r = s.frame()
+            lever.update(ret(r), 0)
+    finally:
+        lever.tapper.release()
+
+
+def retarder_ladder(s):
+    """From 75 km/h, the retarder one step up every 4 s to 5, then one step down every 4 s
+    (step responses of the retarder level and the output torque)."""
+    s.ensure_room(1600)
+    reach(s, 75, "ladder")
+    lever = keys.Lever(keys.RETARDER_UP, keys.RETARDER_DOWN)
+    ret = lambda r: (r.get("x") or {}).get("truck.brake.retarder")
+    try:
+        r = s.frame()
+        for step in (1, 2, 3, 4, 5, 4, 3, 2, 1, 0):
+            s.phase = f"ladder:{step}"
+            end = time.monotonic() + 4.0
+            while time.monotonic() < end:
+                s.send(sd.steer_to(r, sd.heading_hold(r, s.goal)), 0.0, 0.0)
+                r = s.frame()
+                lever.update(ret(r), step)
+    finally:
+        lever.tapper.release()
+    s.drive(10, 0.0, s.hold(), "brake_to_stop:ladder")
+
+
+def blend(s, step, brake):
+    s.ensure_room(1600)
+    reach(s, 70, f"blend:{step}:{brake}")
+    hold_retarder(s, f"blend:{step}:{brake}", step, brake, 8.0)
+    s.drive(10, 0.0, s.hold(), f"brake_to_stop:{step}:{brake}")
+
+
 def plan(s, blocks):
     steps = [Step("launch", "start", 10, lambda: sd.launch(s))]
     if "launch" in blocks:
@@ -107,6 +173,12 @@ def plan(s, blocks):
     if "tips" in blocks and s.shifter:
         for g in (4, 6, 8):
             steps.append(Step(f"gear {g}: throttle tip-in and tip-out x3", "driveline", 60, lambda g=g: tips(s, g)))
+    if "retarder" in blocks:
+        steps.append(Step("retarder 1 to 5 and back, 4 s per step, from 75 km/h", "retarder", 70, lambda: retarder_ladder(s)))
+    if "blend" in blocks:
+        for step, b in ((0, 0.02), (0, 0.05), (0, 0.1), (3, 0.0), (3, 0.05), (3, 0.1), (5, 0.0), (5, 0.05), (5, 0.1)):
+            steps.append(Step(f"retarder {step} with brake {b} from 70 km/h", "blend", 50,
+                              lambda st=step, b=b: blend(s, st, b)))
     if "stops" in blocks:
         for b in (0.3, 0.5, 0.75, 1.0):
             steps.append(Step(f"brake {b} from 80 km/h to a stop", "stop", 70, lambda b=b: stop_from(s, 80, b)))

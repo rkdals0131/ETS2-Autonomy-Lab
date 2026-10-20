@@ -45,11 +45,11 @@ py -3 apps/sysid/analyze_gear.py bridge/recordings/gear-<시각>
 ## ACC용 종방향
 
 ```powershell
-py -3 apps/sysid/acc_test.py [--blocks launch,lowstop,tips,stops]
+py -3 apps/sysid/acc_test.py [--blocks launch,lowstop,tips,stops,retarder,blend]
 py -3 apps/sysid/analyze_acc.py bridge/recordings/acc-<시각>
 ```
 
-ACC가 만나는 구간만 잽니다. 정지 출발(스로틀 0.2–1.0, 클러치 슬립과 변속 중 토크 공백), 20 km/h에서 브레이크 0.1–0.4로 정지, 80 km/h에서 0.3–1.0으로 정지(감속 정상값·63 % 시간·정지 거리·바퀴 잠김), 정지 뒤 브레이크 유지 3 s와 놓은 뒤 4 s(밀림), 시퀀셜이면 4·6·8단 팁인·팁아웃(구동계 비틀림)입니다. 결과는 [docs/31](../../docs/31_plant_parameters.md#acc용-측정-2026-10-20-밤)에 있습니다.
+ACC가 만나는 구간만 잽니다. 정지 출발(스로틀 0.2–1.0, 클러치 슬립과 변속 중 토크 공백), 20 km/h에서 브레이크 0.1–0.4로 정지, 80 km/h에서 0.3–1.0으로 정지(감속 정상값·63 % 시간·정지 거리·바퀴 잠김), 정지 뒤 브레이크 유지 3 s와 놓은 뒤 4 s(밀림), 시퀀셜이면 4·6·8단 팁인·팁아웃(구동계 비틀림), 리타더 1→5→0 계단(단 응답), 리타더 0·3·5와 브레이크 0–0.1 조합(감속이 더해지는지)입니다. 결과는 [docs/31](../../docs/31_plant_parameters.md#acc용-측정-2026-10-20-밤)에 있습니다.
 
 ## 리프트 액슬
 
