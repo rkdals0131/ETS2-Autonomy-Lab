@@ -109,8 +109,14 @@ class Shifter:
         self.last = -1e9
         self.fixed = None
 
+    @staticmethod
+    def selected(r):
+        """The gear the keys act on: braking to a stop the game opens the clutch to neutral
+        (engine gear 0) and keeps the selected gear in the displayed gear."""
+        return r["gear_shown"] if r["gear"] == 0 and (r.get("gear_shown") or 0) > 0 else r["gear"]
+
     def target(self, r, thr):
-        gear, rpm = r["gear"], r["rpm"]
+        gear, rpm = self.selected(r), r["rpm"]
         if self.fixed is not None:
             return self.fixed
         if r["speed"] < 1.0:
@@ -127,9 +133,9 @@ class Shifter:
             return
         if time.monotonic() - self.last < self.SETTLE_S:
             return
-        want = self.target(r, thr)
-        if want != r["gear"] and r["gear"] >= 0:
-            self.tapper.press(keys.GEAR_UP if want > r["gear"] else keys.GEAR_DOWN)
+        want, gear = self.target(r, thr), self.selected(r)
+        if want != gear and gear >= 0:
+            self.tapper.press(keys.GEAR_UP if want > gear else keys.GEAR_DOWN)
             self.last = time.monotonic()
 
     def release(self):
@@ -250,7 +256,7 @@ class Session:
              "core_steer": d["steering"], "manual_steer": d["manual_steering"], "input_steer": v("truck.input.steering"),
              "eff_steer": v("truck.effective.steering"), "eff_thr": v("truck.effective.throttle"), "eff_brk": v("truck.effective.brake"),
              "w0": v("truck.wheel.steering[0]"), "w1": v("truck.wheel.steering[1]"), "speed": v("truck.speed"),
-             "gear": v("truck.engine.gear"), "rpm": v("truck.engine.rpm"), "v_lin": v("truck.local.velocity.linear"),
+             "gear": v("truck.engine.gear"), "gear_shown": v("truck.displayed.gear"), "rpm": v("truck.engine.rpm"), "v_lin": v("truck.local.velocity.linear"),
              "v_ang": v("truck.local.velocity.angular"), "a_lin": v("truck.local.acceleration.linear"),
              "pos": pl["position_m"] if pl else None, "rot": pl["euler_rotations"] if pl else None, "paused": s["paused"],
              "focus": game_in_front(self.reader.producer_pid), "attempt": self.attempt}
