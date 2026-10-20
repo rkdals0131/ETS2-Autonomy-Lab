@@ -53,6 +53,7 @@ class Session:
         self.steer = self.thr = self.brk = 0.0
         self.phase, self.hb, self.vi, self.last = "init", 0.0, 0.0, None
         self.goal = 0.0
+        self.extra: list[str] = []  # more SDK channels to log per frame, under "x"
         self.steps: list[Step] = []
         self.index, self.step_start, self.state, self.message = -1, 0.0, "waiting", ""
         self.status_time = 0.0
@@ -104,6 +105,8 @@ class Session:
              "gear": v("truck.engine.gear"), "rpm": v("truck.engine.rpm"), "v_lin": v("truck.local.velocity.linear"),
              "v_ang": v("truck.local.velocity.angular"), "a_lin": v("truck.local.acceleration.linear"),
              "pos": pl["position_m"] if pl else None, "rot": pl["euler_rotations"] if pl else None, "paused": s["paused"]}
+        if self.extra:
+            r["x"] = {k: v(k) for k in self.extra}
         self.log.write(json.dumps(r) + "\n")
         self.last = r
         if self.epoch and d["epoch"] == self.epoch:
@@ -398,7 +401,9 @@ def wait_focus_and_arm(s):
 
 def rearm(s):
     """Arm again after an Expired release (same lease); the caller retries its step."""
-    s.seen, s.stale = False, 0
+    # No epoch while waiting: frame() would otherwise count the released old epoch as an
+    # arm that never appeared and stop after 30 frames.
+    s.epoch, s.seen, s.stale = 0, False, 0
     # Wait for the hitch to pass: 1 s of frames no more than 100 ms apart.
     calm_since, last = time.monotonic(), s.frame()["t"]
     until = time.monotonic() + 20

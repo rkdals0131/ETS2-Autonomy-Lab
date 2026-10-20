@@ -7,13 +7,23 @@ py -3 apps/sysid/sysid_drive.py --view               # 20,40,60,80 km/h 전체
 py -3 apps/sysid/sysid_drive.py --speeds 60 --view   # 일부 속도만
 ```
 
-`--view`를 주면 새 PowerShell 창에서 `sysid_view.py`(rich 사용)가 단계 목록, 현재 단계와 전체 진행률, 속도·조향·페달·패드 가장자리까지 거리를 보여 줍니다. 끝나면 Enter를 눌러 창을 닫습니다. `py -3 apps/sysid/sysid_view.py <run>/status.json`으로 따로 열 수도 있습니다.
+`--view`를 주면 새 PowerShell 창에서 `sysid_view.py`(rich 사용)가 단계 목록, 현재 단계와 전체 진행률, 속도·조향·페달·패드 가장자리까지 거리를 보여 줍니다. 끝나면 5초 뒤(중단이면 30초 뒤, 기록이 20초 멈추면 그때) 창이 저절로 닫힙니다. `py -3 apps/sysid/sysid_view.py <run>/status.json`으로 따로 열 수도 있습니다.
 
 ## 단계
 
 - 속도별(기본 20/40/60/80 km/h): 가속·정속 → 조향 속도 펄스 ±0.3(약 2 m/s² 횡가속 크기로 시간 조절) 후 명령 0 유지 2.5 s → 조향 위치 사인 0.2/0.5/1.0 Hz 3주기(약 1.5 m/s²) → 정상 선회 8 s(약 2 m/s²).
 - 종방향: 타력 15 s, 60 km/h에서 브레이크 0.2/0.5/1.0 계단, 정지에서 스로틀 0.3/0.6/1.0 계단.
 - 직진은 출발 방향의 heading 유지입니다. 앞쪽 여유가 부족하면 30 km/h, 반경 60 m로 유턴합니다.
+
+## 브레이크 분해
+
+```powershell
+py -3 apps/sysid/brake_test.py --view                 # A(프로필 설정) + B(자동 엔진브레이크 끔)
+py -3 apps/sysid/brake_test.py --phases B --view      # B만
+py -3 apps/sysid/analyze_brake.py bridge/recordings/brake-<시각>
+```
+
+80 km/h에서 10 km/h까지 타력, 서비스 브레이크 계단, 엔진브레이크(B 키 유지), 둘의 조합을 잽니다. B 단계 전에 트럭을 세우고 제어를 푼 뒤 게임 콘솔(`` ` ``)에 `g_motor_brake_auto 0`을 입력하고, 끝나거나 중단되면 1로 되돌립니다. W/A/S/D가 운전 키라 콘솔 입력은 정지·해제 상태에서만 합니다. 브레이크·엔진브레이크·공기압·브레이크 온도·변속 채널은 프레임의 `x`에 기록됩니다. 결과는 [docs/29](../../docs/29_reference_truck_dynamics.md#브레이크-분해-2026-10-20-core-0380-채널)에 있습니다.
 
 ## 실행 조건과 해제
 
