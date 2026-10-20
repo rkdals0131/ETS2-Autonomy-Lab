@@ -1,0 +1,108 @@
+{
+  "scenarios": [
+    {
+      "name": "lead_brake_4",
+      "samples": 901,
+      "max_abs_diff_closedloop_vs_normal": [
+        5.5511151231257827E-16,
+        0,
+        0,
+        0,
+        9.6103680569115113E-16,
+        0
+      ],
+      "max_abs_diff_normal_vs_sil": [
+        1.8873791418627661E-15,
+        2.2204460492503131E-16,
+        0,
+        0,
+        3.4472424914611111E-14,
+        0
+      ],
+      "outputs": [
+        "throttle",
+        "brake",
+        "retarder_step",
+        "engine_brake",
+        "a_des_mps2",
+        "mode"
+      ],
+      "step_time_us": {
+        "section": "step [0.05 0]",
+        "mean_us": 3467.0344062153163,
+        "max_us": 4787.8,
+        "calls": 901
+      }
+    },
+    {
+      "name": "stop_and_go_hold",
+      "samples": 1401,
+      "max_abs_diff_closedloop_vs_normal": [
+        8.1046280797636427E-15,
+        0,
+        0,
+        0,
+        5.0515147620444623E-15,
+        0
+      ],
+      "max_abs_diff_normal_vs_sil": [
+        2.6645352591003757E-14,
+        4.3090531143263888E-15,
+        0,
+        0,
+        7.0388139761234925E-14,
+        0
+      ],
+      "outputs": [
+        "throttle",
+        "brake",
+        "retarder_step",
+        "engine_brake",
+        "a_des_mps2",
+        "mode"
+      ],
+      "step_time_us": {
+        "section": "step [0.05 0]",
+        "mean_us": 3625.8277658815132,
+        "max_us": 5301.3,
+        "calls": 1401
+      }
+    },
+    {
+      "name": "lead_emergency_stop",
+      "samples": 601,
+      "max_abs_diff_closedloop_vs_normal": [
+        0,
+        1.033895191682177E-15,
+        0,
+        0,
+        1.7541523789077473E-14,
+        0
+      ],
+      "max_abs_diff_normal_vs_sil": [
+        1.3322676295501878E-15,
+        8.5764728652293343E-14,
+        0,
+        0,
+        6.4304117586289067E-13,
+        0
+      ],
+      "outputs": [
+        "throttle",
+        "brake",
+        "retarder_step",
+        "engine_brake",
+        "a_des_mps2",
+        "mode"
+      ],
+      "step_time_us": {
+        "section": "step [0.05 0]",
+        "mean_us": 3479.7134775374375,
+        "max_us": 5116.1,
+        "calls": 601
+      }
+    }
+  ],
+  "tolerance": 1E-9,
+  "pass": true
+}
