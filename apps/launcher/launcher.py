@@ -120,7 +120,7 @@ class Controller:
         self.state = {"phase": "stopped", "message": "시작을 누르면 게임 릴레이와 Foxglove 서버를 띄웁니다.",
                       "game": "확인 중", "config": str(self.config), "relay": {}, "foxglove": False,
                       "recording": {"phase": "idle"}, "recording_error": ""}
-        self.relay = self.foxglove = self.drive = self.provider = self.job = None
+        self.relay = self.foxglove = self.drive = self.provider = self.follow = self.job = None
         self.relay_stop = self.drive_stop_event = None
         self.recording = None
         self.mode_change = None
@@ -262,6 +262,7 @@ class Controller:
                 self.provider.wait(timeout=3)
             self.provider = self.drive_request = None
             self._release_drive()
+            self._stop_follow()
             return
         if self.snapshot()["phase"] != "running" or not self.input_only:
             raise RuntimeError("입력·상태만으로 브리지를 시작한 뒤 GT 주행을 눌러 주세요.")
@@ -287,6 +288,35 @@ class Controller:
         self.drive_request = {"path": str(output), "speed_mps": speed, "acc": bool(acc), "lcc": bool(lcc)}
         self.provider = self.spawn([str(dotnet), str(provider), "--game", str(game), "--out", str(output), "--distance-m", "1000"], "lane")
         self.update(message="현재 도로의 실제 차로 기준선을 준비합니다.")
+
+    def _stop_follow(self):
+        if self.follow and self.follow.poll() is None:
+            self.follow.terminate()
+            self.follow.wait(timeout=3)
+        self.follow = None
+
+    def _drive_cruise(self, acc=True, lcc=True):
+        """Resident assistance: the map provider follows the truck and drive_speed waits for the
+        game's cruise control button (LB+RT), which engages at the cruise speed and disengages."""
+        if self.snapshot()["phase"] != "running" or not self.input_only:
+            raise RuntimeError("입력·상태만으로 브리지를 시작한 뒤 크루즈 버튼 대기를 눌러 주세요.")
+        if (self.drive and self.drive.poll() is None) or self.provider:
+            raise RuntimeError("주행 보조가 이미 실행 중입니다. 입력 해제 후 다시 눌러 주세요.")
+        if not acc:
+            raise ValueError("크루즈 버튼 대기는 ACC가 켜져 있어야 합니다.")
+        dotnet = PROJECT_ROOT / "research" / "tools" / "dotnet10" / "dotnet.exe"
+        provider = BRIDGE_ROOT / "build" / "map_lane_provider" / "Release" / "net10.0" / "map_lane_provider.dll"
+        if not dotnet.is_file() or not provider.is_file():
+            raise RuntimeError("지도 provider 빌드가 필요합니다: bridge/map_lane_provider/README.md")
+        output = BRIDGE_ROOT / "recordings" / "gt-path" / "follow-lane.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        game = Path(LoaderClient(timeout=2).status()["module_path"]).parents[4]
+        self.follow = self.spawn([str(dotnet), str(provider), "--game", str(game), "--follow", "--out", str(output), "--distance-m", "1000"], "follow")
+        self.drive_stop_event = StopEvent("drive")
+        self.drive = self.spawn(["ros2", "run", "ets2_autonomy", "drive_speed", "--stop-event", self.drive_stop_event.name,
+                                 "--ros-args", "-p", "arm:=true", "-p", "engage:=cruise", "-p", "path_file:=" + str(output),
+                                 "-p", "acc_enabled:=true", "-p", "lcc_enabled:=" + str(bool(lcc)).lower()], "drive")
+        self.update(message="크루즈 버튼 대기: 게임에서 LB+RT로 켜고 다시 누르면 끕니다. 브레이크는 ACC만 끕니다.")
 
     def _start_drive(self, request):
         self.drive_stop_event = StopEvent("drive")
@@ -351,7 +381,7 @@ class Controller:
         finally:
             if self.job:
                 self.job.close()  # Foxglove, provider and anything left in the job end here.
-            for process in (self.relay, self.foxglove, self.provider, self.mode_change):
+            for process in (self.relay, self.foxglove, self.provider, self.follow, self.mode_change):
                 if process:
                     try:
                         process.wait(timeout=3)
@@ -359,7 +389,7 @@ class Controller:
                         errors.append(f"PID {process.pid} 종료 확인 실패")
             if self.relay_stop:
                 self.relay_stop.close()
-            self.relay = self.foxglove = self.provider = self.mode_change = self.job = self.relay_stop = None
+            self.relay = self.foxglove = self.provider = self.follow = self.mode_change = self.job = self.relay_stop = None
         self.update(phase="error" if errors else phase, foxglove=False,
                     message="; ".join(errors) if errors else message, relay_pid=None, foxglove_pid=None)
 
@@ -367,7 +397,7 @@ class Controller:
         now = time.monotonic()
         while not self.lines.empty():
             source, pid, line = self.lines.get()
-            process = {"relay": self.relay, "foxglove": self.foxglove, "lane": self.provider,
+            process = {"relay": self.relay, "foxglove": self.foxglove, "lane": self.provider, "follow": self.follow,
                        "drive": self.drive, "mode": self.mode_change}.get(source)
             if not process or process.pid != pid:
                 continue
@@ -394,6 +424,7 @@ class Controller:
         if self.drive and self.drive.poll() is not None:
             self.log(f"drive: GT 주행 종료 (code={self.drive.returncode})")
             self._release_drive()
+            self._stop_follow()
         if self.recording:
             self.update(recording=self.recording.poll())
         if not self.desired:
@@ -443,6 +474,8 @@ class Controller:
                     elif action == "start":
                         self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False), values.get("cpu_layout"),
                                     values.get("mirrors_off"))
+                    elif action == "drive_cruise":
+                        self._drive_cruise(values.get("acc", True), values.get("lcc", True))
                     elif action in ("drive_start", "drive_stop"):
                         self._drive(action, values.get("speed_kmh", 30), values.get("acc", True), values.get("lcc", True))
                     elif action in ("record_start", "record_stop"):
@@ -552,11 +585,13 @@ def show_window(controller):
     ttk.Checkbutton(driving_controls, text="LCC 차로", variable=lcc_enabled).pack(side="left", padx=5)
     drive_start = ttk.Button(driving_controls, text="선택 적용 / 켜기", command=lambda: controller.request("drive_start", speed_kmh=drive_speed.get(), acc=acc_enabled.get(), lcc=lcc_enabled.get()))
     drive_start.pack(side="left")
+    drive_cruise = ttk.Button(driving_controls, text="크루즈 버튼 대기 (LB+RT)", command=lambda: controller.request("drive_cruise", acc=acc_enabled.get(), lcc=lcc_enabled.get()))
+    drive_cruise.pack(side="left", padx=(8, 0))
     drive_stop = ttk.Button(driving_controls, text="입력 해제", command=lambda: controller.request("drive_stop"))
     drive_stop.pack(side="left", padx=8)
     drive_status = ttk.Label(driving_box, text="입력·상태만 시작 → GT 주행 → 게임 전경", wraplength=730)
     drive_status.pack(anchor="w", pady=(5, 0))
-    ttk.Label(driving_box, text="ACC만: 직접 조향 · LCC만: 직접 가감속. 자동 축을 직접 조작하면 모든 보조가 해제됩니다.", wraplength=730).pack(anchor="w")
+    ttk.Label(driving_box, text="가속 페달은 잠시 덮어쓰기, 조향은 잡는 동안 운전자 우선, 브레이크는 ACC만 해제합니다(loader 0.44). 크루즈 버튼 대기: 게임 크루즈(LB+RT)를 켜면 그 속도로 잡고 다시 누르면 끕니다.", wraplength=730).pack(anchor="w")
     recording_box = ttk.LabelFrame(frame, text="주행 기록", padding=8)
     recording_box.pack(fill="x", pady=(12, 0))
     recording_actions = ttk.Frame(recording_box)
@@ -630,6 +665,7 @@ def show_window(controller):
         put(summary, text=state["message"])
         relay = state["relay"]
         put(drive_start, state="normal" if phase == "running" and not closing else "disabled")
+        put(drive_cruise, state="normal" if phase == "running" and not closing else "disabled")
         put(drive_stop, state="normal" if phase == "running" and not closing else "disabled")
         mask, reason = observed_drive(relay, time.monotonic() - controller.last_relay)
         put(drive_status, text=f"실제 상태: ACC {'켜짐' if mask & 2 else '꺼짐'} · LCC {'켜짐' if mask & 1 else '꺼짐'} · {reason}")
