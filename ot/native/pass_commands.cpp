@@ -151,6 +151,22 @@ const VehicleLayout& vehicle_layout() {
     }();
     return value;
 }
+// Main-view names (docs/24 §1): the main namespace, the unnamed backbuffer
+// and the passes the decal uses. Strings are compared only after a namespace
+// prefix matched, so other passes cost one 8-byte read per output as before.
+struct MainNames {std::string space,backbuffer_space,scene_pass,blit_pass,scene_image,color_image,backbuffer_image;};
+const MainNames& main_names() {
+    static const MainNames value=[] {
+        const auto s=json::parse(OT_SCHEMA).at("render_graph");
+        MainNames n{s.at("main_namespace").get<std::string>(),s.at("backbuffer_namespace").get<std::string>(),
+            s.at("main_scene_pass").get<std::string>(),s.at("blit_pass").get<std::string>(),
+            s.at("main_scene_image").get<std::string>(),s.at("main_color_image").get<std::string>(),
+            s.at("backbuffer_image").get<std::string>()};
+        if(n.space.size()>7 || n.backbuffer_space.size()>7) throw std::runtime_error("Main namespaces must fit the 8-byte prefix");
+        return n;
+    }();
+    return value;
+}
 RenderCameraSample camera_at_compile(uintptr_t pass,uintptr_t base) {
     RenderCameraSample result;result.qpc=qpc_now();
     try {
@@ -367,7 +383,7 @@ std::vector<PassCommands::Block> PassCommands::blocks(uintptr_t output) {
             throw std::runtime_error("Compiled command block changed or is invalid");
     return result;
 }
-RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const std::shared_ptr<const json>& sdk,uint32_t camera_mask,bool diagnostic) {
+RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const std::shared_ptr<const json>& sdk,uint32_t camera_mask,bool diagnostic,bool main) {
     DrawBatch draw_batch;
     {
         std::lock_guard lock(draws_mutex_);
@@ -392,12 +408,29 @@ RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const
             bool mirror_output=false,geometry_output=false;
             unsigned camera_slot=9;
             std::array<RenderTarget,8> targets{};
+            MainPass kind=MainPass::none;uint64_t color_slot=0;
             for(uint64_t j=0;j<outputs.size;++j) {
                 const auto id=read<uint32_t>(outputs.data+j*8);
                 if(id>=images.size) continue;
                 const auto label=read<uintptr_t>(images.data+id*0x7F0+0xA8);
                 std::array<char,8> prefix{};
-                if(label && copy_memory(label,prefix.data(),prefix.size()) &&
+                const bool labelled=label && copy_memory(label,prefix.data(),prefix.size());
+                if(main && kind==MainPass::none && !(labelled && std::memcmp(prefix.data(),"mirror",6)==0)) {
+                    const auto& names=main_names();
+                    const auto space=[&](const std::string& n) {
+                        return labelled?std::memcmp(prefix.data(),n.c_str(),n.size()+1)==0:(!label && n.empty());
+                    };
+                    const bool in_main=space(names.space),in_back=space(names.backbuffer_space);
+                    std::array<char,24> image{};
+                    const auto address=in_main || in_back?read<uintptr_t>(images.data+id*0x7F0+8):0;
+                    if(address && copy_memory(address,image.data(),image.size())) {
+                        const auto is=[&](const std::string& n) {return n.size()<image.size() && std::memcmp(image.data(),n.c_str(),n.size()+1)==0;};
+                        if(in_main && is(names.scene_image)) kind=MainPass::scene;
+                        else if(in_main && is(names.color_image)) {kind=MainPass::composition;color_slot=j;}
+                        else if(in_back && is(names.backbuffer_image)) kind=MainPass::blit;
+                    }
+                }
+                if(labelled &&
                    std::memcmp(prefix.data(),"mirror",6)==0 && prefix[6]>='0' && prefix[6]<='8' &&
                    prefix[7]=='\0' && (camera_mask&(1u<<(prefix[6]-'0')))) {
                     // Streaming consumes the geometry and final-color targets.
@@ -420,10 +453,31 @@ RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const
             // pass+0xC0 names the implementation (e.g. deferred or quad_drawer),
             // not the camera. Filter on output image namespaces before building
             // strings or samples. Empty boundaries in begin retire reused ranges.
-            if(!mirror_output) return {};
+            std::string main_name;
+            if(kind!=MainPass::none && !mirror_output) {
+                // Several main0 passes write attributes_0 (scene/interior); the name decides.
+                main_name=string_at(read<uintptr_t>(pass+0x20));
+                const auto& names=main_names();
+                if((kind==MainPass::scene && main_name!=names.scene_pass) || (kind==MainPass::blit && main_name!=names.blit_pass))
+                    kind=MainPass::none;
+            }
+            if(!mirror_output && kind==MainPass::none) return {};
             auto result=std::make_shared<RenderPassSample>();
             result->pass=pass;result->input=input;result->graph=b;
             result->camera_slot=camera_slot;result->targets=targets;result->geometry=geometry_output;
+            if(!mirror_output) {
+                // Camera only: no vehicles, diagnostic strings or links on the main path.
+                result->main=kind;result->name=std::move(main_name);
+                result->space=kind==MainPass::blit?main_names().backbuffer_space:main_names().space;
+                if(kind==MainPass::composition && color_slot<result->targets.size()) result->targets[color_slot]=RenderTarget::color;
+                if(kind==MainPass::scene) {
+                    result->camera=camera_at_compile(pass,base);
+                    if(!result->camera.available) ++main_compiled_[3];
+                    main_scene_[b].store(result);
+                } else if(kind==MainPass::blit) result->scene=main_scene_[b].load();
+                ++main_compiled_[kind==MainPass::scene?0:kind==MainPass::composition?1:2];
+                return result;
+            }
             if(diagnostic) {
                 result->name=string_at(read<uintptr_t>(pass+0x20));
                 result->space=string_at(read<uintptr_t>(pass+0xC0));
@@ -459,9 +513,16 @@ RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const
     }
     return {};
 }
-void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,uint32_t vehicle_mask,std::shared_ptr<const json> sdk,uint32_t camera_mask,bool diagnostic) noexcept {
+void PassCommands::retire_main(uint16_t id) {
+    // Caller holds mutex_. Most retired ids never held a main span.
+    if(!main_ids_.erase(id)) return;
+    AcquireSRWLockExclusive(&main_lock_);
+    std::erase_if(main_spans_,[id](const MainSpan& s){return s.id==id;});
+    ReleaseSRWLockExclusive(&main_lock_);
+}
+void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,uint32_t vehicle_mask,std::shared_ptr<const json> sdk,uint32_t camera_mask,bool diagnostic,bool main) noexcept {
     try {
-        auto pass=describe(input,vehicle_mask,sdk,camera_mask,diagnostic);
+        auto pass=describe(input,vehicle_mask,sdk,camera_mask,diagnostic,main);
         if(!pass) {
             // Unlabelled appends cannot overlap an earlier labelled span. Pool
             // reuse does: retire the old spans at the engine's empty boundary,
@@ -472,7 +533,7 @@ void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16
                 if(read<Block>(header.data+i*sizeof(Block)).size) {empty=false;break;}
             std::lock_guard lock(mutex_);
             ++inputs_;pending_.erase(frame);
-            if(empty) compiled_.erase(id);
+            if(empty) {compiled_.erase(id);retire_main(id);}
             return;
         }
         auto before=blocks(output);
@@ -481,12 +542,12 @@ void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16
         ++inputs_;++named_;
         // The engine resets an allocated compiled buffer before filling it.
         // Its first empty boundary retires the previous use of this pool ID.
-        if(empty) compiled_.erase(id);
+        if(empty) {compiled_.erase(id);retire_main(id);}
         pending_.insert_or_assign(frame,Pending{output,id,std::move(before),std::move(pass)});
     } catch(const std::exception& e) {
         {std::lock_guard lock(draws_mutex_);draws_.erase(input);}
         std::lock_guard lock(mutex_);++errors_;error_=e.what();
-        pending_.erase(frame);compiled_.erase(id);
+        pending_.erase(frame);compiled_.erase(id);retire_main(id);
     }
 }
 void PassCommands::end(uintptr_t frame) noexcept {
@@ -497,6 +558,7 @@ void PassCommands::end(uintptr_t frame) noexcept {
         auto pending=std::move(found->second);pending_.erase(found);
         const auto after=blocks(pending.output);
         auto& spans=compiled_[pending.id];
+        const auto first_span=spans.size();
         for(const auto& block:after) {
             const auto old=std::find_if(pending.before.begin(),pending.before.end(),
                 [&](const Block& b){return b.data==block.data;});
@@ -504,10 +566,20 @@ void PassCommands::end(uintptr_t frame) noexcept {
             if(first>block.size) throw std::runtime_error("Compiled command cursor moved backwards");
             if(first<block.size) spans.push_back({block.data+first*4,block.data+block.size*4,pending.pass});
         }
+        if(pending.pass->main!=MainPass::none && first_span<spans.size()) {
+            main_ids_.insert(pending.id);
+            AcquireSRWLockExclusive(&main_lock_);
+            for(auto i=first_span;i<spans.size();++i) main_spans_.push_back({pending.id,spans[i].begin,spans[i].end,spans[i].pass});
+            // Bounded even if a buffer is never reset: the newest spans win.
+            if(main_spans_.size()>64) main_spans_.erase(main_spans_.begin(),main_spans_.end()-64);
+            ReleaseSRWLockExclusive(&main_lock_);
+        }
     } catch(const std::exception& e) {
         std::lock_guard lock(mutex_);++errors_;error_=e.what();
         // A failed compilation observation must not leave partial labels usable.
         compiled_.clear();pending_.erase(frame);
+        main_ids_.clear();
+        AcquireSRWLockExclusive(&main_lock_);main_spans_.clear();ReleaseSRWLockExclusive(&main_lock_);
     }
 }
 RenderPassPtr PassCommands::lookup(uint16_t id,uintptr_t token) noexcept {
@@ -521,10 +593,34 @@ RenderPassPtr PassCommands::lookup(uint16_t id,uintptr_t token) noexcept {
             }
     ++unmatched_;return {};
 }
+RenderPassPtr PassCommands::main_at(uint16_t id,uintptr_t token) noexcept {
+    RenderPassPtr result;
+    AcquireSRWLockShared(&main_lock_);
+    for(const auto& span:main_spans_) if(span.id==id && token>=span.begin && token<span.end) {result=span.pass;break;}
+    ReleaseSRWLockShared(&main_lock_);
+    return result;
+}
 void PassCommands::clear() {
     {std::lock_guard lock(draws_mutex_);draws_.clear();}
-    std::lock_guard lock(mutex_);pending_.clear();compiled_.clear();
+    std::lock_guard lock(mutex_);pending_.clear();compiled_.clear();main_ids_.clear();
+    AcquireSRWLockExclusive(&main_lock_);main_spans_.clear();ReleaseSRWLockExclusive(&main_lock_);
+    for(auto& scene:main_scene_) scene.store(nullptr);
+    for(auto& count:main_compiled_) count=0;
     inputs_=named_=matches_=unmatched_=errors_=0;error_.clear();
+}
+json PassCommands::main_status() {
+    json cameras=json::array();
+    for(unsigned b=0;b<main_scene_.size();++b) {
+        const auto scene=main_scene_[b].load();
+        cameras.push_back(scene?json{{"graph_buffer",b},{"pass_name",scene->name},{"camera_at_compile",scene->camera.describe()}}:json(nullptr));
+    }
+    AcquireSRWLockShared(&main_lock_);
+    json spans=json::array();
+    for(const auto& span:main_spans_) spans.push_back({{"compiled_buffer_id",span.id},{"begin",span.begin},{"end",span.end},
+        {"pass",span.pass->name},{"graph_buffer",span.pass->graph}});
+    ReleaseSRWLockShared(&main_lock_);
+    return {{"compiled",{{"scene",main_compiled_[0].load()},{"composition",main_compiled_[1].load()},{"blit",main_compiled_[2].load()}}},
+        {"scene_camera_errors",main_compiled_[3].load()},{"scene_cameras",cameras},{"spans",spans}};
 }
 json PassCommands::status() {
     std::lock_guard lock(mutex_);

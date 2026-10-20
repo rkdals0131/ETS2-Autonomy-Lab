@@ -5,6 +5,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(ets2_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(fastcdr REQUIRED)
 find_package(nlohmann_json REQUIRED)
 set(BRIDGE ${CMAKE_CURRENT_SOURCE_DIR}/../../../bridge)
@@ -12,13 +13,13 @@ add_executable(ets2_relay
   ${BRIDGE}/windows/main.cpp ${BRIDGE}/windows/ros_endpoint.cpp ${BRIDGE}/windows/game_ipc.cpp
   ${BRIDGE}/windows/vehicle_profile.cpp ${BRIDGE}/windows/motion_sensors.cpp ${BRIDGE}/windows/state_source.cpp
   ${BRIDGE}/windows/render_capture.cpp ${BRIDGE}/windows/state_messages.cpp ${BRIDGE}/windows/image_messages.cpp
-  ${BRIDGE}/windows/gpu_readback.cpp)
+  ${BRIDGE}/windows/gpu_readback.cpp ${BRIDGE}/windows/overlay_writer.cpp)
 target_compile_features(ets2_relay PRIVATE cxx_std_20)
 target_include_directories(ets2_relay PRIVATE ${BRIDGE}/common)
 target_compile_definitions(ets2_relay PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 # Warnings apply to this project, not to the ROS and conda headers.
 target_compile_options(ets2_relay PRIVATE /W4 /EHsc /utf-8 /permissive- /external:anglebrackets /external:W0)
-target_link_libraries(ets2_relay PRIVATE rclcpp::rclcpp ${std_srvs_TARGETS} ${ets2_msgs_TARGETS}
+target_link_libraries(ets2_relay PRIVATE rclcpp::rclcpp ${std_srvs_TARGETS} ${ets2_msgs_TARGETS} ${nav_msgs_TARGETS}
   fastcdr nlohmann_json::nlohmann_json windowscodecs ole32 d3d11 dxgi)
 install(TARGETS ets2_relay DESTINATION lib/${PROJECT_NAME})
 if(BUILD_TESTING)
@@ -29,7 +30,14 @@ if(BUILD_TESTING)
   target_include_directories(ros_endpoint_test PRIVATE ${BRIDGE}/common ${BRIDGE}/windows)
   target_compile_definitions(ros_endpoint_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
   target_compile_options(ros_endpoint_test PRIVATE /EHsc /utf-8 /permissive- /external:anglebrackets /external:W0)
-  target_link_libraries(ros_endpoint_test rclcpp::rclcpp ${std_srvs_TARGETS} ${ets2_msgs_TARGETS} ${std_msgs_TARGETS}
+  target_link_libraries(ros_endpoint_test rclcpp::rclcpp ${std_srvs_TARGETS} ${ets2_msgs_TARGETS} ${std_msgs_TARGETS} ${nav_msgs_TARGETS}
     fastcdr nlohmann_json::nlohmann_json)
+  # HUD path transform and OT_Overlay writes, without the game or ROS.
+  ament_add_gtest(overlay_writer_test test/overlay_writer_test.cpp ${BRIDGE}/windows/overlay_writer.cpp TIMEOUT 60)
+  target_compile_features(overlay_writer_test PRIVATE cxx_std_20)
+  target_include_directories(overlay_writer_test PRIVATE ${BRIDGE}/common ${BRIDGE}/windows)
+  target_compile_definitions(overlay_writer_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+  target_compile_options(overlay_writer_test PRIVATE /W4 /EHsc /utf-8 /permissive- /external:anglebrackets /external:W0)
+  target_link_libraries(overlay_writer_test nlohmann_json::nlohmann_json ole32)
 endif()
 ament_package()

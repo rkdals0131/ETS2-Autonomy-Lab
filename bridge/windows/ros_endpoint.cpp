@@ -4,6 +4,7 @@
 #include <std_srvs/srv/set_bool.hpp>
 #include <ets2_msgs/msg/drive_command.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <cmath>
 #include <chrono>
 #include <condition_variable>
@@ -24,6 +25,11 @@ struct RosEndpoint::Impl {
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr capture_service;
     rclcpp::Service<ets2_msgs::srv::DriveControl>::SharedPtr drive_service;
     rclcpp::Subscription<ets2_msgs::msg::DriveCommand>::SharedPtr drive_commands;
+    // HUD path (docs/24): forwarded to the relay's pose transform and shared memory.
+    PathSink overlay_sink;
+    rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr overlay_paths;
+    std::atomic<bool> overlay{false};
+    std::atomic<uint64_t> overlay_received{0},overlay_rejected{0};
     rclcpp::TimerBase::SharedPtr demand_timer;
     std::atomic<std::shared_ptr<const Demand>> demand{std::make_shared<const Demand>()};
     std::atomic<bool> capture{true};
@@ -41,8 +47,8 @@ struct RosEndpoint::Impl {
     std::jthread spin,forward;
 };
 
-RosEndpoint::RosEndpoint(int argc,char** argv,Control control):impl_(std::make_unique<Impl>()) {
-    auto& m=*impl_;m.control=std::move(control);
+RosEndpoint::RosEndpoint(int argc,char** argv,Control control,PathSink overlay):impl_(std::make_unique<Impl>()) {
+    auto& m=*impl_;m.control=std::move(control);m.overlay_sink=std::move(overlay);
     // The relay's console handler and stop event own shutdown.
     rclcpp::init(argc,argv,rclcpp::InitOptions(),rclcpp::SignalHandlerOptions::None);
     m.node=std::make_shared<rclcpp::Node>("ets2_relay");
@@ -96,10 +102,34 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control):impl_(std::make_u
             }
             m.drive_ready.notify_one();
         });
+    // The decal is requested while a path publisher exists, or always with overlay_enabled.
+    m.node->declare_parameter("overlay_enabled",false);
+    m.node->declare_parameter("overlay_width_m",3.5);
+    m.node->declare_parameter("overlay_alpha",0.22);
+    m.node->declare_parameter("overlay_ttl_ms",1000);
+    m.overlay_paths=m.node->create_subscription<nav_msgs::msg::Path>("/ets2/overlay/path",rclcpp::QoS(1).best_effort(),
+        [&m](const nav_msgs::msg::Path::SharedPtr message) {
+            OverlayPath path;path.frame=message->header.frame_id;
+            const auto& stamp=message->header.stamp;
+            path.stamp_us=stamp.sec<0?0:uint64_t(stamp.sec)*1000000+stamp.nanosec/1000;
+            path.width_m=static_cast<float>(m.node->get_parameter("overlay_width_m").as_double());
+            path.rgba[3]=static_cast<float>(m.node->get_parameter("overlay_alpha").as_double());
+            path.ttl_ms=static_cast<uint64_t>(std::max<int64_t>(0,m.node->get_parameter("overlay_ttl_ms").as_int()));
+            for(const auto& pose:message->poses) path.points.push_back({pose.pose.position.x,pose.pose.position.y,pose.pose.position.z});
+            if((path.frame!="base_link" && path.frame!="world") || path.points.size()<2 || !std::isfinite(path.width_m) || path.width_m<=0 ||
+               path.width_m>16 || !std::isfinite(path.rgba[3]) || path.rgba[3]<0 || path.rgba[3]>1) {
+                ++m.overlay_rejected;
+                RCLCPP_WARN_THROTTLE(m.node->get_logger(),*m.node->get_clock(),2000,"Rejected overlay path: frame '%s', %zu points",path.frame.c_str(),path.points.size());
+                return;
+            }
+            ++m.overlay_received;
+            if(m.overlay_sink) m.overlay_sink(path);
+        });
     m.demand_timer=m.node->create_wall_timer(200ms,[&m] {
         auto demand=std::make_shared<Demand>();
         for(const auto& [name,entry]:m.publishers) if(entry->publisher->get_subscription_count()>0) demand->insert(name);
         m.demand.store(std::move(demand));
+        m.overlay=m.node->get_parameter("overlay_enabled").as_bool() || m.overlay_paths->get_publisher_count()>0;
     });
     m.forward=std::jthread([&m] {
         for(;;) {
@@ -135,7 +165,7 @@ RosEndpoint::~RosEndpoint() {
     m.executor->cancel();
     if(m.spin.joinable()) m.spin.join();
     m.executor->remove_node(m.node);m.executor.reset();
-    m.demand_timer.reset();m.drive_commands.reset();m.drive_service.reset();m.capture_service.reset();
+    m.demand_timer.reset();m.overlay_paths.reset();m.drive_commands.reset();m.drive_service.reset();m.capture_service.reset();
     m.publishers.clear();m.node.reset();
     rclcpp::shutdown();
 }
@@ -174,8 +204,10 @@ json RosEndpoint::publish_stats() {
 }
 std::shared_ptr<const Demand> RosEndpoint::demand() const {return impl_->demand.load();}
 bool RosEndpoint::capture_wanted() const {return impl_->capture.load();}
+bool RosEndpoint::overlay_wanted() const {return impl_->overlay.load();}
 json RosEndpoint::diagnostics() {
     return {{"command_age",impl_->command_age.snapshot()},{"forwarded_commands",impl_->forwarded.load()},
-        {"stale_commands",impl_->stale.load()},{"rejected_commands",impl_->rejected.load()}};
+        {"stale_commands",impl_->stale.load()},{"rejected_commands",impl_->rejected.load()},
+        {"overlay_paths",impl_->overlay_received.load()},{"rejected_overlay_paths",impl_->overlay_rejected.load()}};
 }
 }

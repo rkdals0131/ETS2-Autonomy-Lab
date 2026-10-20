@@ -109,6 +109,20 @@ def main():
                        help="actor: simulation pose; model: captured model transform with actor-box origin correction")
     boxes.add_argument("--output", required=True, help="New JSON file containing projected edges and depth counts")
     boxes.add_argument("--overlay", help="New PNG showing projected boxes on captured RGB")
+    overlay = sub.add_parser("overlay", help="HUD trajectory decal (docs/24): show a world path file under a lease, "
+                             "clear the shared path, status, or capture two drawn frames")
+    overlay.add_argument("action", choices=("show", "clear", "status", "capture"), nargs="?",
+                         help="Default: show with --file, otherwise status")
+    overlay.add_argument("--file", help="World path JSON (frame_id world, points [[x, y], ...]), e.g. a map provider output")
+    overlay.add_argument("--width", type=float, default=3.5, help="Ribbon width in m")
+    overlay.add_argument("--alpha", type=float, default=0.22)
+    overlay.add_argument("--duration", type=float, help="With show: release after this many seconds; default holds until Ctrl+C")
+    overlay.add_argument("--detector", choices=("compiled_span", "backbuffer_usage"), default="compiled_span",
+                         help="blit_to_target detection: (b) compiled span (default) or (a) DXGI back-buffer usage")
+    overlay.add_argument("--z-tolerance", type=float, help="Road height tolerance in m (core default 1.0)")
+    overlay.add_argument("--slope-deg", type=float, help="Road slope tolerance in degrees (core default 8)")
+    overlay.add_argument("--out", help="With capture: absolute or relative directory; default the core log directory")
+    overlay.add_argument("--png", action="store_true", help="With capture: also write PNGs (NumPy, Pillow)")
     watch = sub.add_parser("watch", help="Print newest shared state as JSON lines; Ctrl+C closes the reader")
     watch.add_argument("--hz", type=float, default=10.0)
     watch.add_argument("--duration", type=float, help="Stop after this many seconds")
@@ -146,6 +160,30 @@ def main():
                 parser.error("stream start requires --duration")
             options = dict(hz=args.hz, duration=args.duration, format=args.format, color_gain=args.color_gain) if args.action == "start" else {}
             result = client.request("stream", action=args.action, **options)
+        elif args.command == "overlay":
+            from . import overlay as hud
+            action = args.action or ("show" if args.file else "status")
+            if action == "show":
+                if not args.file:
+                    parser.error("overlay show requires --file")
+                if not (math.isfinite(args.width) and 0 < args.width <= 16 and math.isfinite(args.alpha) and 0 <= args.alpha <= 1):
+                    parser.error("--width must be in (0, 16] m and --alpha in [0, 1]")
+                if args.duration is not None and (not math.isfinite(args.duration) or args.duration <= 0):
+                    parser.error("--duration must be finite and positive")
+                options = {"detector": args.detector}
+                if args.z_tolerance is not None:
+                    options["z_tolerance_m"] = args.z_tolerance
+                if args.slope_deg is not None:
+                    options["slope_deg"] = args.slope_deg
+                print("HUD overlay held under a bridge lease; Ctrl+C releases it.", file=sys.stderr, flush=True)
+                return hud.show(client, args.file, args.width, args.alpha, args.duration, options,
+                                report=lambda text: print(text, flush=True))
+            elif action == "clear":
+                result = hud.clear()
+            elif action == "capture":
+                result = hud.capture(client, args.out, args.png)
+            else:
+                result = client.request("overlay", action="status")
         elif args.command == "watch":
             if not 0 < args.hz <= 240:
                 parser.error("--hz must be in (0, 240]")

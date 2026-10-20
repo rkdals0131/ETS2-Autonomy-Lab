@@ -54,6 +54,9 @@ public:
     json status() const;
     json publish_bundle(json manifest,const std::vector<BundleBlob>& blobs);
     json bundle_status() const;
+    // Local\OT_Overlay, created on first use and kept for the core's lifetime;
+    // an existing mapping (a writer kept it open across a reload) is reused.
+    OverlayBlock* overlay_block();
 private:
     json bundle_status_locked() const;
     mutable std::mutex bundle_mutex_;
@@ -70,6 +73,9 @@ private:
     Handle bundle_mapping_;
     RingHeader* bundles_ = nullptr;
     uint32_t bundle_capacity_=0,bundle_cursor_=0;
+    std::mutex overlay_mutex_;
+    Handle overlay_mapping_;
+    OverlayBlock* overlay_ = nullptr;
     PSECURITY_DESCRIPTOR security_ = nullptr;
     std::thread worker_;
     uint32_t cursor_ = 0;

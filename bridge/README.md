@@ -168,6 +168,26 @@ ros2 param set /ets2_drive_speed target_speed_mps 0.0
 
 2026-10-10 FH4 실제 제품 실행은 894/894 표본이 전경이었고, 목표 30 km/h에 최대 **28.62 km/h**였습니다. 조향 목표 .02에 applied는 약 **.0180**까지 따라갔으며, 0 복귀·제동 후 **.00228**이었습니다. 속도 목표 0으로 **.01253 m/s**까지 감속한 뒤 종료했고 최종 관측은 정지·disarmed·출력 3축 0이었습니다. 이 수치는 이전 P 속도·직접 위치 목표 실행이며, 현재 GT 도로 실행은 위 결과에 따릅니다.
 
+## HUD 궤적 오버레이
+
+스택의 계획 궤적을 게임 메인 화면의 도로 위에 반투명한 띠로 그립니다([설계](../docs/24_hud_overlay_design.md)). core 0.43.0이 필요하고, 게임에서의 확인(T1–T6)은 아직입니다. 이전 core에서는 릴레이가 경고 한 줄을 남기고 오버레이 없이 계속 실행합니다.
+
+| 토픽·파라미터 | 계약 |
+| --- | --- |
+| `/ets2/overlay/path` (구독) | `nav_msgs/Path`. `frame_id`는 `base_link`(header.stamp는 그 경로를 만든 센서 stamp) 또는 `world`. 10–20 Hz, 256점 이내 권장(길면 200 m에서 자르고 256점으로 솎음). best effort 구독이라 reliable 발행자도 받음 |
+| `overlay_enabled` | 기본 false: 발행자가 있는 동안만 켬. true면 발행자가 없어도 켬 |
+| `overlay_width_m` / `overlay_alpha` / `overlay_ttl_ms` | 기본 3.5 / 0.22 / 1000. TTL 동안 새 경로가 없으면 core가 숨김(시뮬레이션 시각 기준이라 일시정지 중에는 유지) |
+
+릴레이는 `base_link` 경로를 자기 SDK 자세 이력(`engine.vehicle.pose_physics`, 최근 128 SDK 프레임)에서 stamp 이하 가장 가까운 자세로 world로 바꿔 `Local\OT_Overlay`에 씁니다. 스택은 GT 자세를 보지 않습니다. 최신 자세보다 500 ms 넘게 오래된 stamp는 숨김으로 씁니다. stamp 0은 최신 자세로 바꿉니다(수동 시험용). 발행자가 생기면 릴레이가 core에 `overlay enable`을 보내, 센서 수집 중이면 같은 훅을 함께 쓰고 아니면 overlay 전용 훅(OM·compile)만 켭니다. **입력·상태만** 실행에서도 그리며 이때도 이 두 훅은 켜집니다. 1 Hz 상태 줄의 `overlay`에 활성 여부·기록 수·마지막 거절 이유가, `/diagnostics`의 `drive_commands`에 받은·거절한 경로 수가 나옵니다.
+
+릴레이 실행 중 수동 시험([설계 T5](../docs/24_hud_overlay_design.md#8-시험-계획)):
+
+```powershell
+pixi run -- ros2 topic pub -r 10 /ets2/overlay/path nav_msgs/msg/Path "{header: {frame_id: base_link}, poses: [{pose: {position: {x: 0.0}}}, {pose: {position: {x: 40.0}}}, {pose: {position: {x: 80.0}}}]}"
+```
+
+릴레이 없이 world 경로 파일(지도 provider JSON)만 그릴 때는 `.\ot\ot.cmd overlay --file <path.json>`을 씁니다. 이 명령은 lease를 직접 잡으므로 런처·릴레이를 중지한 상태에서 실행합니다([ot 문서](../ot/README.md#hud-궤적-데칼)).
+
 ## 기록과 재생
 
 런처에서 브리지를 **시작**하고 연결이 확인되면 기록 종류를 선택해 **기록 시작**을 누릅니다.
@@ -224,7 +244,7 @@ pixi run relay bridge/config/bridge.local.json            # 또는 apps\launch.c
 
 - **snowymoon.io 조명 모드**(`bin/win_x64/dxgi.dll` 프록시): ✔ 2026-10-12, 센서 수집 중 안티앨리어싱(TAA/DLSS)을 켜면 메인 화면이 센서 렌더 주기로 한 프레임씩 깨집니다. 안티앨리어싱을 끄거나 브리지를 끄면 정상입니다. △ 시간 누적 AA 히스토리가 센서 카메라 프레임으로 오염되는 것으로 보이며, AA를 끄면 snowymoon 효과 대부분도 함께 빠집니다.
 - **`r_mirror_view_distance`**: 게임 미러와 센서 뷰 모두의 시야거리라 메인 스레드 비용을 크게 좌우합니다. ✔ 2026-10-12 정차·뷰어 켬에서 400 → 250 m로 CPU busy 57.4 → 43.2 ms. 전방 라이다 최대 거리에 맞춰 **250**을 권장합니다(콘솔 `uset r_mirror_view_distance 250`, 종료 시 `config.cfg`에 저장).
-- 권장: 센서를 수집하는 개발·기록 세션에서는 snowymoon을 끕니다. 센서 RGB의 조명이 모드 설정에 따라 바뀌면 인지 데이터가 달라지기 때문입니다. **입력·상태만** 실행은 렌더 hook을 켜지 않으므로 해당하지 않습니다.
+- 권장: 센서를 수집하는 개발·기록 세션에서는 snowymoon을 끕니다. 센서 RGB의 조명이 모드 설정에 따라 바뀌면 인지 데이터가 달라지기 때문입니다. **입력·상태만** 실행은 HUD 오버레이를 켜지 않는 한 렌더 hook을 켜지 않으므로 해당하지 않습니다. HUD 데칼도 순정 렌더의 메인 그래프 구조를 전제로 하므로 이런 모드가 켜져 있으면 지원 범위 밖입니다.
 
 ## 운영 구조
 

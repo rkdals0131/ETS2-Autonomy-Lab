@@ -12,13 +12,16 @@ public:
     using Control=std::function<json(json)>;
     RenderCapture(Control control,const json& rig,const json& patterns,const json& settings);
     ~RenderCapture();
-    uint64_t reconcile(bool enabled,const json& outputs,double remaining_seconds);
+    // overlay: keep the HUD decal on (docs/24 §7), with or without a sensor stream.
+    uint64_t reconcile(bool enabled,const json& outputs,double remaining_seconds,bool overlay=false);
     void stop();
     bool active() const {return stream_id_!=0;}
+    bool overlay_active() const {return overlay_on_;}
 private:
     Control control_;
     json rig_,options_,outputs_=json::object();
     uint64_t stream_id_=0;
-    bool hooks_owned_=false;
+    bool hooks_owned_=false,overlay_on_=false,overlay_unsupported_=false;
+    void stop_stream();
 };
 }

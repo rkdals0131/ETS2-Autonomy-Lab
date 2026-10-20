@@ -1,4 +1,6 @@
 #include "render_capture.hpp"
+#include "game_ipc.hpp"
+#include <iostream>
 
 namespace bridge {
 json capture_outputs(const json& rig,const json& patterns,const Demand& demand) {
@@ -39,21 +41,42 @@ void RenderCapture::stop() {
         control_({{"cmd","render_probe"},{"enabled",false}});
         hooks_owned_=false;
     }
+    stream_id_=0;outputs_=json::object();overlay_on_=false;
+}
+void RenderCapture::stop_stream() {
+    if(!stream_id_) return;
+    // The decal stays: drop to the overlay-only hooks instead of turning all off.
+    if(overlay_on_) control_({{"cmd","render_probe"},{"enabled",true},{"mode","overlay"}});
+    else stop();
     stream_id_=0;outputs_=json::object();
 }
-uint64_t RenderCapture::reconcile(bool enabled,const json& outputs,double remaining_seconds) {
-    if(!enabled || outputs.empty()) {stop();return 0;}
-    if(stream_id_ && outputs==outputs_) return stream_id_;
-    auto request=options_;request["cmd"]="stream";request["outputs"]=outputs;
-    if(!stream_id_) {
-        // Mark ownership before enabling so partially installed hooks are
-        // released if either enabling or rig setup throws.
-        hooks_owned_=true;
-        control_({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true},{"draw_metadata",false}});
-        control_(rig_);
-        request["action"]="start";request["duration"]=remaining_seconds;
-        stream_id_=control_(std::move(request)).at("stream_id").get<uint64_t>();
-    } else {request["action"]="update";control_(std::move(request));}
-    outputs_=outputs;return stream_id_;
+uint64_t RenderCapture::reconcile(bool enabled,const json& outputs,double remaining_seconds,bool overlay) {
+    if(!enabled || outputs.empty()) stop_stream();
+    else if(!stream_id_ || outputs!=outputs_) {
+        auto request=options_;request["cmd"]="stream";request["outputs"]=outputs;
+        if(!stream_id_) {
+            // Mark ownership before enabling so partially installed hooks are
+            // released if either enabling or rig setup throws.
+            hooks_owned_=true;
+            control_({{"cmd","render_probe"},{"enabled",true},{"vehicle_metadata",true},{"draw_metadata",false},{"overlay",overlay_on_}});
+            control_(rig_);
+            request["action"]="start";request["duration"]=remaining_seconds;
+            stream_id_=control_(std::move(request)).at("stream_id").get<uint64_t>();
+        } else {request["action"]="update";control_(std::move(request));}
+        outputs_=outputs;
+    }
+    if(overlay!=overlay_on_ && !overlay_unsupported_) {
+        try {
+            if(overlay) hooks_owned_=true;
+            // Enable maps Local\OT_Overlay, then keeps the stream's hooks or uses overlay mode.
+            control_({{"cmd","overlay"},{"action",overlay?"enable":"disable"}});
+            overlay_on_=overlay;
+        } catch(const CoreError& e) {
+            // An older core or missing permission: the relay keeps running without the decal.
+            overlay_unsupported_=true;
+            std::cerr<<"HUD overlay unavailable: "<<e.what()<<std::endl;
+        }
+    }
+    return stream_id_;
 }
 }

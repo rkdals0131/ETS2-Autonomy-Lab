@@ -5,6 +5,7 @@
 #include "state_source.hpp"
 #include "render_capture.hpp"
 #include "ros_endpoint.hpp"
+#include "overlay_writer.hpp"
 #include <filesystem>
 #include <fstream>
 #include <wincodec.h>
@@ -78,7 +79,15 @@ int main(int argc,char** argv) {
         const auto owned=[&](json request){request["owner"]=owner;return command(std::move(request));};
         owned({{"cmd","tier"},{"value",1}});
         StateSource source(vehicle,config,core_version);
-        RosEndpoint ros(argc,argv,owned);
+        // HUD path: the stack's base_link path becomes world with the relay's own
+        // SDK pose history; the core draws it (docs/24).
+        PoseHistory poses;OverlayWriter overlay_writer;
+        std::mutex overlay_mutex;std::string overlay_reason;
+        RosEndpoint ros(argc,argv,owned,[&](const OverlayPath& path) {
+            std::string reason;
+            overlay_writer.write(overlay_content(path,poses,&reason));
+            std::lock_guard lock(overlay_mutex);overlay_reason=std::move(reason);
+        });
         const auto run=[&](double remaining) {
         struct DriveEnd {std::function<json(json)> control;~DriveEnd(){try{control({{"cmd","drive"},{"action","disconnect"}});}catch(...) {}}} drive_end{owned};
         const auto session=uuid_string();
@@ -105,6 +114,7 @@ int main(int argc,char** argv) {
                     if(frame!=last_frame) {
                         last_frame=frame;last_stamp=telemetry.at("paused_simulation_time_us").get<uint64_t>();
                         packet=state_messages(telemetry,session,base,gt_localization_tf);append_motion_messages(packet,sample->motion,*ros.demand(),last_gnss_us);
+                        if(const auto pose=engine_base_pose(telemetry,base)) poses.push(last_stamp,*pose);
                     }
                 }
                 if(ticks()-diagnostic_time>=1000) {add_diagnostics(packet,{{"stamp_us",last_stamp},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
@@ -144,7 +154,7 @@ int main(int argc,char** argv) {
             Packet packet;if(send_queue.pop(packet)) {if(packet.meta.at("native_stream")!=stream_id.load()) continue;const auto begin=microseconds();ros.publish(packet);send_time.add(begin);++sent;bytes_sent+=packet.data.size();}
             else std::this_thread::sleep_for(2ms);
         }});
-        const auto start=ticks();uint64_t report=0;Demand previous_demand;json outputs=json::object();
+        const auto start=ticks();uint64_t report=0;Demand previous_demand;json outputs=json::object();bool overlay_was=false;
         while(workers.alive && !stopped && lease_ok && ticks()-start<remaining*1000) {
             const auto requested=ros.demand();
             if(*requested!=previous_demand) {
@@ -154,9 +164,13 @@ int main(int argc,char** argv) {
             }
             {
                 std::lock_guard access(capture_access);
-                const auto next=capture.reconcile(ros.capture_wanted(),outputs,remaining-(ticks()-start)/1000.0);
+                const bool overlay=ros.overlay_wanted();
+                const auto next=capture.reconcile(ros.capture_wanted(),outputs,remaining-(ticks()-start)/1000.0,overlay);
                 if(next!=stream_id) {stream_id=next;read_queue.clear();send_queue.clear();}
                 capture_active=capture.active();
+                // A path left behind by a stopped publisher must not reappear later.
+                if(overlay_was && !overlay) overlay_writer.clear();
+                overlay_was=overlay;
             }
             if(ticks()-report>=1000) {
                 // The launcher reads this line; ACC/LCC ownership comes from the same SDK sample.
@@ -171,6 +185,8 @@ int main(int argc,char** argv) {
                 std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
                 {"session",session},{"capture_active",capture_active.load()},{"demand_topics",requested->size()},{"paused",paused},{"drive",drive},
                 {"diagnostic_sensor_stage",sensor_stage},{"consumed_bundles",consumed.load()},
+                {"overlay",{{"active",capture.overlay_active()},{"writer",overlay_writer.status()},
+                    {"last_reason",[&]{std::lock_guard lock(overlay_mutex);return overlay_reason;}()}}},
                 {"encoded_bundles",encoded.load()},{"encoded_bytes",encoded_bytes.load()},
                 {"camera_hz",camera_hz},{"lidar_hz",lidar_hz},
                 {"queue_dropped",dropped.load()},{"drive_commands",ros.diagnostics()},{"slow_publishes",ros.publish_stats()},

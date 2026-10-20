@@ -8,7 +8,7 @@ namespace ot {
 Transport::Transport(std::function<json(const json&)> handler,std::function<void()> panic,int key,std::wstring pipe_name,std::function<void()> poll)
     : handler_(std::move(handler)),panic_(std::move(panic)),poll_(std::move(poll)),panic_key_(key),pipe_name_(std::move(pipe_name)),
       stop_event_(CreateEventW(nullptr,TRUE,FALSE,nullptr)) {}
-Transport::~Transport() { stop(); if(ring_) UnmapViewOfFile(ring_); if(bundles_) UnmapViewOfFile(bundles_); if(security_) LocalFree(security_); }
+Transport::~Transport() { stop(); if(ring_) UnmapViewOfFile(ring_); if(bundles_) UnmapViewOfFile(bundles_); if(overlay_) UnmapViewOfFile(overlay_); if(security_) LocalFree(security_); }
 void Transport::start(bool shared) {
     if(!stop_event_) throw std::runtime_error("Stop event creation failed");
     HANDLE token_raw{};
@@ -200,6 +200,23 @@ json Transport::publish_bundle(json manifest,const std::vector<BundleBlob>& blob
     }
     InterlockedIncrement64(&bundles_->dropped);
     return {{"published",false},{"reason","queue_full"},{"ring",bundle_status_locked()}};
+}
+OverlayBlock* Transport::overlay_block() {
+    std::lock_guard lock(overlay_mutex_);
+    if(overlay_) return overlay_;
+    if(!security_) throw std::runtime_error("Transport is not started");
+    SECURITY_ATTRIBUTES sa{sizeof(sa),security_,FALSE};
+    overlay_mapping_.h=CreateFileMappingW(INVALID_HANDLE_VALUE,&sa,PAGE_READWRITE,0,sizeof(OverlayBlock),L"Local\\OT_Overlay");
+    if(!overlay_mapping_) throw std::runtime_error("Cannot create Local\\OT_Overlay");
+    const bool existed=GetLastError()==ERROR_ALREADY_EXISTS;
+    overlay_=static_cast<OverlayBlock*>(MapViewOfFile(overlay_mapping_.h,FILE_MAP_ALL_ACCESS,0,0,sizeof(OverlayBlock)));
+    if(!overlay_) {
+        CloseHandle(overlay_mapping_.h);overlay_mapping_.h=nullptr;
+        throw std::runtime_error("Cannot map Local\\OT_Overlay; close an older writer");
+    }
+    // A writer may have kept the previous core's block; keep its path.
+    if(!existed || !overlay_header_valid(overlay_)) overlay_initialize(overlay_);
+    return overlay_;
 }
 json Transport::bundle_status() const {
     std::lock_guard lock(bundle_mutex_);

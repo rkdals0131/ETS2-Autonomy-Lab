@@ -6,6 +6,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <ets2_msgs/msg/drive_command.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <mutex>
 
 using namespace std::chrono_literals;
@@ -29,7 +30,9 @@ uint64_t steady_ns(std::chrono::nanoseconds offset=0ns) {
 
 TEST(RosEndpoint,PublishesDemandsAndForwardsDrive) {
     FakeCore core;
-    bridge::RosEndpoint endpoint(0,nullptr,[&](json request){return core(std::move(request));});
+    std::mutex paths_mutex;std::vector<bridge::OverlayPath> paths;
+    bridge::RosEndpoint endpoint(0,nullptr,[&](json request){return core(std::move(request));},
+        [&](const bridge::OverlayPath& path){std::lock_guard lock(paths_mutex);paths.push_back(path);});
     auto node=std::make_shared<rclcpp::Node>("ros_endpoint_test");
 
     // A subscription becomes sensor demand within the 200 ms poll.
@@ -100,6 +103,23 @@ TEST(RosEndpoint,PublishesDemandsAndForwardsDrive) {
     EXPECT_LT(diagnostics.at("command_age").at("max_ms").get<double>(),50.0);
 
     EXPECT_TRUE(endpoint.capture_wanted());
+
+    // HUD path: a publisher requests the overlay; base_link paths reach the sink
+    // with their stamp, other frames are rejected here.
+    EXPECT_FALSE(endpoint.overlay_wanted());
+    auto overlay=node->create_publisher<nav_msgs::msg::Path>("/ets2/overlay/path",rclcpp::QoS(1).best_effort());
+    ASSERT_TRUE(spin_until(node,[&]{return endpoint.overlay_wanted();}));
+    nav_msgs::msg::Path path;path.header.frame_id="map";path.poses.resize(2);path.poses[1].pose.position.x=80;
+    path.header.stamp.sec=12;path.header.stamp.nanosec=345678000;
+    const auto delivered=[&]{std::lock_guard lock(paths_mutex);return paths.size();};
+    ASSERT_TRUE(spin_until(node,[&]{overlay->publish(path);return endpoint.diagnostics().at("rejected_overlay_paths").get<uint64_t>()>0;}));
+    EXPECT_EQ(delivered(),0u);
+    path.header.frame_id="base_link";
+    ASSERT_TRUE(spin_until(node,[&]{overlay->publish(path);return delivered()>0;}));
+    std::lock_guard lock(paths_mutex);
+    EXPECT_EQ(paths.front().frame,"base_link");EXPECT_EQ(paths.front().stamp_us,12345678u);
+    ASSERT_EQ(paths.front().points.size(),2u);EXPECT_EQ(paths.front().points[1][0],80);
+    EXPECT_FLOAT_EQ(paths.front().width_m,3.5f);EXPECT_EQ(paths.front().ttl_ms,1000u);
 }
 
 int main(int argc,char** argv) {

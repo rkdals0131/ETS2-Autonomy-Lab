@@ -10,6 +10,8 @@ using Bytes=std::vector<uint8_t>;
 // XCDRv1 messages back to back in data; meta.messages lists topic/offset/length.
 struct Packet {json meta;Bytes data;};
 using Demand=std::set<std::string>;
+// /ets2/overlay/path as received (docs/24 §4): base_link with the sensor stamp, or world.
+struct OverlayPath {std::string frame;uint64_t stamp_us=0;std::vector<V> points;float width_m=3.5f;std::array<float,4> rgba{1,1,1,.22f};uint64_t ttl_ms=1000;};
 struct SensorBundle {json manifest;Bytes data;size_t blob_offset=0;};
 SensorBundle decode_bundle(Bytes data);
 Packet state_messages(const json& state,const std::string& session,const std::array<double,3>& base,bool gt_localization_tf);

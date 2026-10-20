@@ -7,9 +7,11 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend><depend>std_srvs</depend><depend>ets2_msgs</depend>
   <depend>fastcdr</depend><depend>nlohmann-json-dev</depend>
+  <!-- nav_msgs/Path: the HUD path subscription (docs/24). -->
+  <depend>nav_msgs</depend>
   <!-- GenericPublisher type support for the relay-serialized topics. -->
   <exec_depend>sensor_msgs</exec_depend><exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>nav_msgs</exec_depend><exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>vision_msgs</exec_depend><exec_depend>rosgraph_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend><exec_depend>diagnostic_msgs</exec_depend>
   <exec_depend>tf2_msgs</exec_depend>

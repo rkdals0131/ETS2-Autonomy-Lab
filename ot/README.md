@@ -1,6 +1,6 @@
 # ot — 게임 DLL과 개발 도구
 
-저장소의 core·loader는 0.42.0, 설치본 core는 0.41.0(2026-10-20, 게임 1.61.1.9 주소), 상주 loader는 0.31.0입니다. 0.42.0은 운전 API에 보조 제동(축 4: 리타더 단 0–5와 엔진브레이크, ABI-1 `request_aux` 꼬리)을 더하고 loader의 `ot_drive` 장치에 semantical `retarder0`–`retarder5`·`motorbrake` 입력을 등록합니다. loader가 바뀌므로 게임을 정상 종료하고 설치한 뒤 재시작해야 하며, 예전 loader와 새 core, 새 loader와 예전 core 조합은 보조 제동 없이 그대로 동작합니다([운전 명령 API](../bridge/README.md#운전-명령-api)). 0.41.0은 Tier 1 `engine.drivetrain`에 첫 트레일러의 바퀴별 브레이크 토크를 더합니다. 0.40.0은 첫 트레일러 채널(`trailer.0.*`, 바퀴별 채널 포함)과 트럭 외 SDK 구성(`configs`: 트레일러, 작업·화물, 조작의 변속 방식 등)을 받습니다. 0.39.0은 Tier 1 `engine.drivetrain`에 실제 엔진 토크·변속기 출력 토크·축 회전·바퀴별 브레이크 토크를 더했습니다([docs/30](../docs/30_can_like_signals.md)). 0.38.0은 설치 후 Tier 1·렌더 훅·카메라 리그·릴레이를 확인했습니다. 0.37.0(실차 CAN에 해당하는 SDK 채널·트럭 구성 값)과 0.38.0도 core만 바뀝니다. 0.31.1(lease 반납을 `panic` 대신 `disconnected`로 기록), 0.32.0(자세만 남은 카메라는 미리보기 주기로만 렌더, `sdk_timing`), 0.33.0(GT 메타데이터도 rider, 리그 `native_mirrors`, `main_profile`·`traffic` 명령), 0.34.0(`main_profile` 호출 스택), 0.34.1(`main_profile`의 `thread_id`로 다른 게임 스레드 샘플), 0.35.0(`parallel_passes` defer), 0.36.0(`parallel`·`alternate`)은 core만 바뀌어 설치된 loader 0.31.0을 그대로 씁니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
+저장소의 core는 0.43.0, 설치본 core는 0.41.0(2026-10-20, 게임 1.61.1.9 주소), 상주 loader는 0.31.0입니다. 0.43.0은 HUD 궤적 데칼([docs/24](../docs/24_hud_overlay_design.md): `overlay` 명령, `Local\OT_Overlay`, render_probe `overlay` 모드)을 더합니다. core만 바뀌며(같이 빌드되는 loader는 번호만 0.43.0이고 동작은 0.42.0과 같음) 게임 시험 전입니다([사용법](#hud-궤적-데칼)). 0.42.0은 운전 API에 보조 제동(축 4: 리타더 단 0–5와 엔진브레이크, ABI-1 `request_aux` 꼬리)을 더하고 loader의 `ot_drive` 장치에 semantical `retarder0`–`retarder5`·`motorbrake` 입력을 등록합니다. loader가 바뀌므로 게임을 정상 종료하고 설치한 뒤 재시작해야 하며, 예전 loader와 새 core, 새 loader와 예전 core 조합은 보조 제동 없이 그대로 동작합니다([운전 명령 API](../bridge/README.md#운전-명령-api)). 0.41.0은 Tier 1 `engine.drivetrain`에 첫 트레일러의 바퀴별 브레이크 토크를 더합니다. 0.40.0은 첫 트레일러 채널(`trailer.0.*`, 바퀴별 채널 포함)과 트럭 외 SDK 구성(`configs`: 트레일러, 작업·화물, 조작의 변속 방식 등)을 받습니다. 0.39.0은 Tier 1 `engine.drivetrain`에 실제 엔진 토크·변속기 출력 토크·축 회전·바퀴별 브레이크 토크를 더했습니다([docs/30](../docs/30_can_like_signals.md)). 0.38.0은 설치 후 Tier 1·렌더 훅·카메라 리그·릴레이를 확인했습니다. 0.37.0(실차 CAN에 해당하는 SDK 채널·트럭 구성 값)과 0.38.0도 core만 바뀝니다. 0.31.1(lease 반납을 `panic` 대신 `disconnected`로 기록), 0.32.0(자세만 남은 카메라는 미리보기 주기로만 렌더, `sdk_timing`), 0.33.0(GT 메타데이터도 rider, 리그 `native_mirrors`, `main_profile`·`traffic` 명령), 0.34.0(`main_profile` 호출 스택), 0.34.1(`main_profile`의 `thread_id`로 다른 게임 스레드 샘플), 0.35.0(`parallel_passes` defer), 0.36.0(`parallel`·`alternate`)은 core만 바뀌어 설치된 loader 0.31.0을 그대로 씁니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
 
 브리지는 카메라 30 Hz·라이다 10 Hz·표시용 JPEG 10 Hz를 요청합니다. FH4·Scania S private 프리셋은 슬롯 3·4·6·7을 센서 제출에 사용하며 native mirror 배열은 보존합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
 
@@ -68,6 +68,21 @@ M3b는 미룬 패스를 엔진 작업 관리자(`parallel_loop_task_t`)로 worke
 
 같은 프레임에서 패스를 두 번 기록해 비교하는 방식은 쓸 수 없습니다. 2026-10-15 시험에서 두 번째 기록이 엔진 assert(`array_t<rg_blit_pair_t>` 인덱스 범위, blit 패스 콜백 `0x151BF80`)로 게임을 종료시켰습니다. 패스 콜백이 기록하면서 자기 패스 객체의 blit 쌍 배열(`pass+0xDB8`)을 소비하기 때문입니다.
 
+## HUD 궤적 데칼
+
+메인 화면의 도로 위에 계획 궤적을 반투명하게 그립니다([설계와 구현 상태](../docs/24_hud_overlay_design.md)). 평소에는 릴레이가 `/ets2/overlay/path`를 받아 그립니다([브리지 문서](../bridge/README.md#hud-궤적-오버레이)). 릴레이 없이 world 경로 파일을 그리는 시험 명령은 다음과 같습니다. 런처·릴레이를 중지한 상태에서 실행합니다.
+
+```powershell
+.\ot\ot.cmd overlay --file bridge\recordings\gt-path\current-lane.json   # lease를 잡고 Ctrl+C(또는 --duration)까지 표시
+.\ot\ot.cmd overlay status          # 다른 창: main0 카메라·pass span·블릿 판정·데칼 통계
+.\ot\ot.cmd overlay capture --png   # 다른 창: 데칼이 그려진 연속 2프레임(main0/composition_out) 저장
+.\ot\ot.cmd overlay clear           # 공유메모리의 경로를 숨김으로
+```
+
+`--file`은 `frame_id: "world"`, `points: [[x, y], …]`(ROS world = SCS X, −Z) JSON입니다. 1초마다 SDK 자세에서 트럭에 가장 가까운 점부터 앞쪽 200 m(최대 256점)를 골라 쓰고, 노면 높이는 core `resolve_layout`의 base_link 원점(구동축 아래 명목 지면점)으로 정합니다. `--width`(기본 3.5 m)·`--alpha`(0.22), 노면 판정 `--z-tolerance`(1 m)·`--slope-deg`(8°), 블릿 판정 `--detector compiled_span|backbuffer_usage`를 고릅니다. 설치된 `ot_config.json`의 `allow_tier1`·`singleplayer_research`·`allow_render_probe`가 필요합니다. 종료하면 overlay를 끄고 lease를 반납합니다.
+
+`status`(lease 불필요)의 `main_passes.scene_cameras`는 graph buffer 0–2별 `scene defattr` 카메라(`viewport_depth`·projection), `compiled`는 main pass compile 수, `blit_detection`은 composition_out 다음 첫 단일 RT bind의 판정 집계(`both`가 정상), `decal.skips`는 그리지 않은 이유별 수입니다. 렌더 스레드 비용은 `hooks`의 `overlay.blit_observation` 항목(QPC tick)입니다. `capture`는 `%LOCALAPPDATA%\ETS2AutonomyLab\ot\<게임 PID>\overlay-capture-*`(또는 `--out`)에 raw·`capture.json`을 쓰고, 같은 프레임 카메라로 투영한 경로 시작·페이드 시작·끝의 픽셀(`marks`)을 함께 남깁니다. `--png`에는 NumPy·Pillow가 필요합니다.
+
 ## Phase 1 고속도로 4뷰
 
 [phase1-highway-fh4-private.json](presets/phase1-highway-fh4-private.json)과 [phase1-lidar-private.json](presets/phase1-lidar-private.json)을 함께 사용합니다. Scania S는 [phase1-highway-scania-s-private.json](presets/phase1-highway-scania-s-private.json)을 씁니다. 장착 좌표와 해상도는 [차량별 리그](../docs/14_phase1_highway_sensors.md)에 있습니다.
@@ -102,7 +117,7 @@ core는 Tier·render probe·camera rig·stream 변경과 운전 명령을 lease 
 
 ## IPC·시각
 
-명령 pipe는 `\\.\pipe\ot`, 로더는 `\\.\pipe\ot_loader`입니다. SDK 상태는 `Local\OT_State`, 센서 묶음은 `Local\OT_Bundles`를 사용합니다. 슬롯은 원자적 소유권 전환 뒤 읽고 즉시 반환합니다. 공유 GPU stream 소비자는 fence 반환까지 담당합니다.
+명령 pipe는 `\\.\pipe\ot`, 로더는 `\\.\pipe\ot_loader`입니다. SDK 상태는 `Local\OT_State`, 센서 묶음은 `Local\OT_Bundles`, HUD 궤적은 `Local\OT_Overlay`(seqlock generation, 쓰는 쪽 하나)를 사용합니다. 슬롯은 원자적 소유권 전환 뒤 읽고 즉시 반환합니다. 공유 GPU stream 소비자는 fence 반환까지 담당합니다.
 
 카메라·차량 관측은 `render_sample.*`의 숫자 구조체로 전달합니다. SDK 스냅샷은 참조로 공유하고, 완성된 슬롯의 JSON은 전송 작업자가 생성합니다. `ros` 형식은 촬영 자세·시각·요청한 GT를 담고, `raw`·`raw+ros` stream과 진단 관측은 pass·이미지 연결·전체 SDK 진단도 유지합니다.
 

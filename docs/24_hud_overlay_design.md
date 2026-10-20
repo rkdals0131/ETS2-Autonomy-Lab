@@ -2,6 +2,29 @@
 
 [포팅 계획](20_windows_native_port_plan.md) P3의 상세입니다. 메인 시점의 도로 위에 계획 궤적을 반투명하게 그립니다. 표기 ✔/△는 계획과 같고, 메인 그래프 사실은 2026-10-12 읽기 전용 실측([20 §0 A4](20_windows_native_port_plan.md#0-2026-10-12-읽기-전용-실측))입니다. 코드 인용은 `파일:심볼`입니다.
 
+## 0. 구현 상태
+
+✔ 2026-10-20 구현(core 0.43.0·릴레이·otpy, 게임 시험 전). 게임 1.61.1.9 schema(`ot/schema/1.61.1.9/fields.json`)에 맞췄습니다. 아래 본문의 ✔는 설계 근거이고, 구현이 게임에서 맞게 동작하는지는 §8 T1–T6이 끝날 때까지 △입니다.
+
+| 부분 | 구현 | 확인 |
+| --- | --- | --- |
+| core 명령 | `overlay` `enable`(lease, Tier 1, `allow_render_probe`)·`disable`·`status`·`capture`(진단, lease 불필요). `render_probe`의 `mode: "overlay"`와 observe `overlay: true`. `version.overlay=true`, `overlay_allowed`, capability `overlay` | 빌드·경고 없음. △ 게임 |
+| 공유메모리 | `ipc_layout.hpp:OverlayBlock`·`overlay_write`·`overlay_read`(seqlock). core가 enable 때 `Transport::overlay_block`으로 만들고, 쓰는 쪽이 열어 둔 기존 매핑은 내용째 다시 씀 | ✔ `ot_overlay_test`: 동시 writer 2만 번에서 찢어진 경로 0건 |
+| pass 이름 | `pass_commands.cpp:PassCommands::describe`가 main 경로에서 `main0/attributes_0`(이름 `scene defattr`), `main0/composition_out`, 무 namespace `backbuffer`(이름 `blit_to_target`)를 camera만 읽어 표본화. graph별 최신 scene 표본 `main_scene_[3]`, 블릿 표본은 같은 graph의 scene 표본을 품음. main span만 따로 `main_at`(shared lock) | △ T1 |
+| 블릿 판정 | composition_out pass의 bind 다음 첫 단일 RT bind에서 (b) compiled span과 (a) `DXGI_USAGE_BACK_BUFFER`를 함께 계산해 `overlay.blit_detection`에 집계. 기본 (b), `detector: "backbuffer_usage"`로 (a) | △ T1·T2 |
+| 데칼 | `overlay_decal.{hpp,cpp,hlsl}`: 마스크 worker(200 Hz generation 확인, 바뀔 때만 래스터), 깊이 SRV 또는 CopyResource, deferred context 명령 리스트를 `ExecuteCommandList(list, TRUE)`로 재실행 | ✔ 마스크·affine·투영 단위 시험. △ T2–T6 |
+| 릴레이 | `ros_endpoint.cpp` `/ets2/overlay/path` 구독(best effort), `overlay_writer.cpp` 자세 이력·변환·기록, `render_capture.cpp` overlay 요청 | ✔ `overlay_writer_test` 5건, `ros_endpoint_test` 구독 경로. △ T5 |
+| otpy | `ot.cmd overlay show --file …`, `clear`, `status`, `capture` | ✔ ot_ipc.dll 기록을 별도 이름 매핑으로 확인. △ T2 |
+
+설계와 다르게 정한 점:
+- 셰이더는 `D3DCompile`이 아니라 기존 compute 셰이더처럼 빌드 때 fxc(`vs_5_0`·`ps_5_0`)로 헤더에 넣습니다. 기존 셰이더(`pack_rgbd.hlsl` 등)가 실제로 CMake fxc 방식이라 §5의 "문자열 내장 `D3DCompile`" ✔는 사실과 달랐습니다. 게임 안 런타임 컴파일 비용과 d3dcompiler 의존이 없습니다.
+- 시저: 명령 리스트를 고정하려고 RS 시저 대신 VS가 상수 버퍼의 NDC 사각형만 덮는 4정점 strip을 그립니다. 래스터 범위는 같습니다. 사각형은 경로 점(최대 64개 표본)의 폭·높이 허용 상자를 투영하고, 카메라 뒤 점은 near plane에서 자릅니다.
+- `OverlayBlock`의 reserved 일부를 `double ground_y`(경로 시작점 노면의 SCS Y, NaN이면 높이 판정 생략)로 씁니다. §5의 `ground_z`를 core가 자세 없이 얻는 방법입니다. 끝에 명시 padding 32 B를 두어 크기는 4224 B입니다.
+- 마스크 축은 시작점에서 마스크 길이 안의 가장 먼 점으로 향하는 chord, 횡 중심은 그 범위 경로의 중앙, 뒤쪽 여유 4 m입니다. 반경 500 m 곡선이 32 m 폭에 들어갑니다(반경 60 m U턴은 `clipped`). 호 길이 페이드(기본 80→120 m)는 R에 굽고 G는 호 길이/160 m입니다.
+- composition_out RTV는 그 pass의 bind에서, DSV는 `scene defattr` bind에서 graph별로 잡습니다. 블릿 bind 때 바인드된 RTV를 묻지 않습니다(tonemap 끝에 unbind되면 비어 있음).
+- 메인 카메라에 projection modifier가 있어도 그립니다(해석하지 않은 값이 sub-pixel jitter일 것으로 봄, `last_draw.projection_modifier_flag`로 보고).
+- 릴레이 자세 이력은 64개가 아니라 128개입니다(SDK 프레임율이 렌더보다 높을 때 500 ms를 덮도록). stamp가 0인 경로는 최신 자세로 바꿉니다(수동 `ros2 topic pub` 시험용).
+
 ## 1. 메인 프레임 구조(실측)
 
 | 항목 | 값 |
@@ -47,21 +70,24 @@ pipe {"cmd":"overlay","action":"enable|disable|status"}   ← 제어만
 - 좌표 변환은 **릴레이**가 한다. ✔ 릴레이 표본은 `engine.vehicle.pose_physics`를 가지며(`state_messages.cpp:state_messages`가 GT TF를 이것으로 만든다) 스택은 GT를 모른다(G2). core에는 자세 이력을 두지 않는다(게임 DLL 변경 최소화, [01 P6](01_requirements_and_decisions.md)). `frame_id=world`도 받는다(평가용 provider JSON 주입).
 - 전달이 pipe가 아닌 이유: ✔ pipe는 단일 인스턴스(`transport.cpp:Transport::serve`의 `CreateNamedPipeW` nMaxInstances=1)이고 요청마다 새로 연결하며(`game_ipc.cpp:command`) 50 Hz 운전 명령·lease heartbeat와 같이 쓴다. 표시 데이터가 안전 명령 채널을 공유하면 안 된다.
 
-공유메모리 블록(`ot/native/ipc_layout.hpp`에 추가, ABI 1):
+공유메모리 블록(`ot/native/ipc_layout.hpp`, ABI 1, 구현):
 
 ```cpp
 struct alignas(64) OverlayBlock {
     char magic[8];                 // "OTOVL01\0"
     uint32_t abi, point_count;     // ≤ 256
     volatile LONG64 generation;    // 쓰는 동안 홀수, 완료 후 짝수(seqlock)
-    uint64_t stamp_us, ttl_ms;     // 센서 stamp, 이 시간 지나면 숨김
+    uint64_t stamp_us, ttl_ms;     // 센서 stamp(SDK paused simulation time), 이 시간 지나면 숨김. ttl 0은 숨기지 않음
     float width_m, rgba[4];
-    uint8_t valid, reserved[31];
+    uint8_t valid, reserved0[3];
+    double ground_y;               // 경로 시작점 노면의 SCS Y(릴레이: base_link 원점). NaN이면 높이 판정 생략
+    uint8_t reserved[24];
     double points[256][2];         // SCS world X, Z (double: 100 km에서도 mm 정밀도)
+    uint8_t tail[32];              // 64 B 정렬 padding, sizeof 4224
 };
 ```
 
-core가 overlay enable 때 매핑을 만들고 릴레이가 연다(✔ `OT_State`와 같은 방식, `transport.cpp`). 읽기는 generation을 앞뒤로 비교해 일관 복사.
+core가 overlay enable 때 매핑을 만들고 릴레이가 연다(✔ `OT_State`와 같은 방식, `transport.cpp`). 읽기는 generation을 앞뒤로 비교해 일관 복사. ROS world (x, y, z)는 SCS (X, −Z, Y)이므로 릴레이는 X = x, Z = −y로 적는다. TTL은 core가 SDK frame_end의 paused simulation time과 비교한다(정지 중에는 시간이 흐르지 않아 그대로 남음).
 
 ## 5. 데칼 렌더링
 
@@ -81,21 +107,24 @@ core가 overlay enable 때 매핑을 만들고 릴레이가 연다(✔ `OT_State
 
 **GPU 상태 보존(하나로 통일): deferred context + `ExecuteCommandList(list, RestoreContextState=TRUE)`.** 명령 리스트는 리소스(RTV·DSV·마스크·상수 버퍼) 포인터나 크기가 바뀔 때만 재기록하고, 매 프레임은 즉시 컨텍스트에서 `UpdateSubresource`(상수·마스크, 파이프라인 상태를 바꾸지 않음) 뒤 같은 리스트를 재실행한다. 기존 `gpu_pack.cpp:ComputeState`(compute 상태 저장·복원)는 draw 상태를 덮지 않으므로 쓰지 않는다.
 
-셰이더 소스는 ✔ 기존 compute 셰이더처럼 문자열 내장 `D3DCompile`.
+셰이더 소스는 기존 compute 셰이더처럼 `.hlsl`을 빌드 때 fxc로 헤더에 넣는다(구현: `overlay_decal.hlsl`, `vs_main`·`ps_main`). 초안의 "✔ 문자열 내장 `D3DCompile`"은 기존 셰이더 방식을 잘못 적은 것이었다(§0).
 
 ## 6. 변경 파일
 
 | 파일 | 내용 |
 | --- | --- |
-| `ot/schema/1.61.1.1/fields.json` | `render_graph.main_namespace="main0"`, `backbuffer_namespace=""`, pass 이름 `scene defattr`·`blit_to_target` |
-| `ot/native/pass_commands.*` | main0·backbuffer pass 이름 짓기(camera만), `main_camera_[3]` |
-| `ot/native/ipc_layout.hpp` | `OverlayBlock` |
-| `ot/native/overlay_decal.{hpp,cpp}`(새) | 셰이더·상수·마스크 래스터·deferred context·SRV, `draw(context, rtv, camera, depth_resource)` |
-| `ot/native/render_probe.*` | `overlay` 모드(OM+compile 훅만, rig·stream 없음), `observe()`의 블릿 직전 판정 → `overlay_->draw` |
-| `ot/native/core.cpp` | 명령 `overlay`(enable/disable/status), 매핑 생성, `version.overlay=true`(✔ 지금 `Runtime::command`의 version 응답은 false) |
-| `bridge/windows/ros_endpoint.cpp`, `overlay_writer.cpp` | 구독, 자세 이력 변환, 공유메모리 쓰기 |
-| `bridge/windows/render_capture.cpp` | overlay 활성 중 `overlay` 모드 요청 |
-| `ot/py/otpy/__main__.py` | `overlay` 서브커맨드(파일 주입: lease·overlay 모드·공유메모리 쓰기, clear, status) |
+| `ot/schema/1.61.1.9/fields.json` | `render_graph.main_namespace="main0"`, `backbuffer_namespace=""`, pass 이름 `main_scene_pass="scene defattr"`·`blit_pass="blit_to_target"`, 이미지 `main_scene_image`·`main_color_image`·`backbuffer_image` (게임 업데이트로 1.61.1.1이 아니라 1.61.1.9) |
+| `ot/native/pass_commands.*`, `render_sample.*` | main0·backbuffer pass 이름 짓기(camera만, `MainPass`), `main_scene_[3]`, `main_at`, `main_status` |
+| `ot/native/ipc_layout.hpp`, `ipc_reader.cpp` | `OverlayBlock`·seqlock 함수, Python용 `ot_overlay_write`(ot_ipc.dll) |
+| `ot/native/overlay_mask.hpp`(새) | 게임 없는 부분: 마스크 래스터·affine·카메라 투영/복원·화면 사각형 |
+| `ot/native/overlay_decal.{hpp,cpp,hlsl}`(새) | 셰이더·상수·마스크 worker·deferred context·SRV/복사·`capture`, `draw(context, rtv, dsv, camera, sdk_time)` |
+| `ot/native/render_probe.*` | `overlay` 모드(OM+compile 훅만, rig·stream 없음), `overlay_observe`의 블릿 직전 판정 → `decal_.draw` |
+| `ot/native/core.cpp`, `transport.cpp` | 명령 `overlay`(enable/disable/status/capture), 매핑 생성, `version.overlay=true` |
+| `ot/native/overlay_test.cpp`(새) | `ot_overlay_test` |
+| `bridge/windows/ros_endpoint.cpp`, `overlay_writer.*`(새), `main.cpp` | 구독, 자세 이력 변환, 공유메모리 쓰기 |
+| `bridge/windows/render_capture.cpp` | overlay 활성 중 `overlay enable`, 센서 수집이 끝나면 `overlay` 모드로 내려감 |
+| `ros2/src/ets2_relay/test/overlay_writer_test.cpp`(새) | 자세 이력·변환·writer gtest |
+| `ot/py/otpy/overlay.py`(새), `__main__.py` | `overlay` 서브커맨드(파일 주입: lease·overlay 모드·공유메모리 쓰기, clear, status, capture) |
 | `docs/12` | 메인 그래프 사실 추가 |
 
 ## 7. `overlay` 모드 gating
@@ -104,16 +133,17 @@ core가 overlay enable 때 매핑을 만들고 릴레이가 연다(✔ `OT_State
 - `compile_begin_callback`: overlay 모드에서는 stream mask와 무관하게 `pass_commands_.begin(..., camera_only=true)`로 main0만 표본화.
 - `observe()`: overlay 모드에서는 stream 조기 반환 없이 블릿 직전 판정만 수행.
 - observe 모드(센서 수집)와 동시 사용: 릴레이가 센서 출력과 overlay를 모두 원하면 observe 모드에 `overlay=true` 옵션을 더해 같은 훅을 공유한다. 두 모드는 `camera_only` main 표본화와 블릿 판정만 공통.
+- 구현: `RenderProbe::enable(…, overlay)`, `RenderProbe::overlay`. observe 중 `overlay enable`은 훅을 바꾸지 않고 플래그만 켠다. 꺼진 상태에서는 `overlay` 모드로 켠다. rig 모드는 거절. overlay 모드에서는 일반 bind 기록·stream·Present 기록을 하지 않고, main 표본은 mirror 이름 없이(`camera_mask=0`) 만든다. overlay가 꺼져 있으면 렌더 스레드 경로는 원자 변수 하나만 읽는다.
 
 ## 8. 시험 계획
 
 | 단계 | 방법 | 통과 기준 |
 | --- | --- | --- |
-| T1 pass 이름·카메라 | `ot.cmd hooks`에서 main0 `scene defattr` 카메라와 `viewport_depth`, `blit_to_target` span 관측 | 매 프레임 갱신, 값이 §1과 일치 |
+| T1 pass 이름·카메라 | T2 실행 중 다른 창에서 `ot.cmd overlay status`(또는 `ot.cmd hooks`의 `overlay`): `main_passes.scene_cameras`의 `viewport_depth`·`projection_row_major`, `main_passes.compiled`·`spans`, `blit_detection` | 매 프레임 갱신(compiled 수 증가), 값이 §1과 일치, `blit_detection.both`가 늘고 `neither`·`*_only`는 0에 가까움 |
 | T2 정적 데칼 | `ot.cmd overlay --file bridge/recordings/gt-path/current-lane.json`(world) | 정차에서 차로 중심에 붙음. 대시보드·A필러·미러에 가려짐. 센서 pass 영상에 없음 |
-| T3 주행 안정성 | 80 km/h 직선, core 자체 백버퍼 캡처 진단 명령(새 `overlay capture`)으로 연속 2프레임 저장 | 궤적 끝점 화면 위치 차 ≤ 1 px. ✔ RenderDoc은 `RenderProbe::enable`이 거절하므로 쓰지 않음 |
+| T3 주행 안정성 | 80 km/h 직선, core 자체 캡처 진단 명령 `ot.cmd overlay capture --png`로 연속 2프레임 저장(`main0/composition_out`, 데칼 직후·블릿 전) | 각 프레임 그림의 궤적 끝과 `marks`의 같은 프레임 카메라 투영 위치 차 ≤ 1 px. ✔ RenderDoc은 `RenderProbe::enable`이 거절하므로 쓰지 않음 |
 | T4 비용 | [18](18_performance.md) `display` 조건에서 데칼 on/off 60 s, PresentMon | frame time p99 증가 ≤ 0.5 ms, 렌더 스레드 콜백 timing(`hooks` 응답) 0.1 ms/프레임 이내 |
-| T5 base_link 프레임 | `ot.cmd overlay --frame base_link`로 자차 기준 직선 주입(릴레이 경유) | 커브에서 자차 뒤에 끌리지 않음 |
+| T5 base_link 프레임 | 릴레이 실행 중 `ros2 topic pub`으로 `base_link` 직선을 `/ets2/overlay/path`에 발행(stamp 0은 릴레이가 최신 자세로 변환, [브리지 문서](../bridge/README.md#hud-궤적-오버레이)) | 커브에서 자차 뒤에 끌리지 않음 |
 | T6 해상도·창 전환 | 창/전체화면, `r_scale` 변경 | 다음 프레임부터 정상, 크래시 없음 |
 
 ## 9. 리스크

@@ -24,6 +24,9 @@ struct RenderCameraSample {
     json describe() const;
 };
 enum class RenderTarget { other,attributes0,attributes3,color };
+// Main-view passes the HUD decal needs (docs/24 §3): the exterior G-buffer pass
+// (camera), the pass that writes main0/composition_out, and blit_to_target.
+enum class MainPass : uint8_t { none,scene,composition,blit };
 struct RenderDrawSample {
     uintptr_t geometry{},buffer{};
     uint32_t first{},count{};
@@ -75,6 +78,9 @@ struct RenderPassSample {
     unsigned graph{},camera_slot=9;
     bool geometry=false;
     std::array<RenderTarget,8> targets{};
+    MainPass main=MainPass::none;
+    // blit: the scene pass compiled earlier into the same graph buffer.
+    std::shared_ptr<const RenderPassSample> scene;
     std::string name,space;
     std::vector<RenderImageLink> links;
     RenderCameraSample camera;

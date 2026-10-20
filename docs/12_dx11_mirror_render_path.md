@@ -69,6 +69,10 @@ actor AABB의 기준점과 렌더 모델 자세를 변환해 같은 pass 카메�
 
 개별 draw 실행 여부와 최종 픽셀 가림은 별도 관측값입니다. 트레일러와 주행 중 누락 확인을 이어갑니다.
 
+## 메인 시점(HUD 데칼)
+
+2026-10-12 읽기 전용 실측([20 §0 A4](20_windows_native_port_plan.md#0-2026-10-12-읽기-전용-실측))입니다. 메인 namespace는 `main0`(`attributes_0..3`, `depth_stencil`, `composition_raw`, `composition_out`)이고 백버퍼는 namespace 없는 `backbuffer`입니다. 외부 pass(`scene defattr` 등)는 viewport 깊이 [0.01, 0.9], 실내 pass(`interior defattr` 등)는 별도 투영과 [0.9, 1.0], 하늘은 [0, 0.009]입니다. 실행 순서는 `def.tonemap.drr.rfx`(→ `main0/composition_out`) → `blit_to_target`(→ `backbuffer`) → UI → present입니다. 그래프 manager 3개가 번갈아 채워지므로 메인 카메라는 실행 중인 블릿과 같은 graph buffer에서 compile된 `scene defattr` 표본을 씁니다. core 0.43.0은 이 이름들을 `schema/1.61.1.9/fields.json`의 `render_graph`에서 읽어 main pass를 camera만 표본화합니다(게임 확인 전). [HUD 데칼 설계](24_hud_overlay_design.md).
+
 ## 개발 자료
 
 - `research/live/2026-10-08-render-path/`: 카메라·물리·가시성 disassembly와 표본

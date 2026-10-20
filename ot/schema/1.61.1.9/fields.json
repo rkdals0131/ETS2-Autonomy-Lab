@@ -19,7 +19,14 @@
     "resource_offset": 88,
     "name_offset": 8,
     "namespace_offset": 168,
-    "evidence": "docs/12_dx11_mirror_render_path.md"
+    "main_namespace": "main0",
+    "backbuffer_namespace": "",
+    "main_scene_pass": "scene defattr",
+    "main_scene_image": "attributes_0",
+    "main_color_image": "composition_out",
+    "blit_pass": "blit_to_target",
+    "backbuffer_image": "backbuffer",
+    "evidence": "docs/12_dx11_mirror_render_path.md; main graph docs/20 A4, docs/24"
   },
   "render_pass_camera": {
     "callback_offset": 7272,

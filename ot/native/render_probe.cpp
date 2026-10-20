@@ -53,22 +53,32 @@ RenderProbe::~RenderProbe() {
     for(auto* hook:hookset()) hook->reset();
     if(module_reference_) FreeLibrary(module_reference_);
 }
-void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool frame_timing,bool draw_metadata) {
+void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool frame_timing,bool draw_metadata,bool overlay) {
     std::lock_guard lock(control_);
-    if(mode!="observe" && mode!="rig") throw std::runtime_error("Render mode must be observe or rig");
-    if(mode=="rig" && vehicle_metadata) throw std::runtime_error("Vehicle metadata requires observe mode");
+    enable_locked(vehicle_metadata,mode,frame_timing,draw_metadata,overlay);
+}
+void RenderProbe::enable_locked(bool vehicle_metadata,const std::string& mode,bool frame_timing,bool draw_metadata,bool overlay) {
+    if(mode!="observe" && mode!="rig" && mode!="overlay") throw std::runtime_error("Render mode must be observe, rig or overlay");
+    if(mode!="observe" && vehicle_metadata) throw std::runtime_error("Vehicle metadata requires observe mode");
+    if(mode=="rig" && overlay) throw std::runtime_error("The HUD overlay needs observe or overlay mode; rig mode has no pass observation");
+    if(mode=="overlay") overlay=true;
+    if(overlay && !overlay_block_) throw std::runtime_error("Overlay shared memory is not mapped");
     const auto selected=[&](const safetyhook::MidHook* hook) {
+        // docs/24 §7: OM and compile hooks only; no rig, stream, Present or draw-batch hooks.
+        if(mode=="overlay") return hook==&hook_ || hook==&compile_begin_hook_ || hook==&compile_end_hook_;
         if(hook==&rig_select_hook_ || hook==&rig_begin_hook_ || hook==&rig_end_hook_ || hook==&rig_dimensions_hook_ || hook==&rig_ego_parts_hook_ ||
            hook==&rig_drawables_hook_ || hook==&rig_graph_drawables_hook_ || hook==&rig_graph_cameras_hook_ || hook==&rig_graph_end_hook_) return true;
         if(mode=="observe") return hook!=&draw_batch_hook_ || (vehicle_metadata && draw_metadata);
         return frame_timing && hook==&present_hook_;
     };
     const auto all=hookset();
-    if(accepting_ && vehicle_metadata_==vehicle_metadata && std::all_of(all.begin(),all.end(),[&](auto* hook){return hook->enabled()==selected(hook);})) return;
+    if(accepting_ && mode_==mode && vehicle_metadata_==vehicle_metadata && std::all_of(all.begin(),all.end(),[&](auto* hook){return hook->enabled()==selected(hook);})) {
+        set_overlay_locked(overlay);return;
+    }
     if(GetModuleHandleW(L"renderdoc.dll"))
         throw std::runtime_error("RenderDoc is loaded; restart ETS2 normally before enabling ot render hooks");
     if(auto stream=stream_.load()) stream->stop();
-    if(accepting_ && rig_select_hook_.enabled() && rig_begin_hook_.enabled() &&
+    if(mode!="overlay" && accepting_ && rig_select_hook_.enabled() && rig_begin_hook_.enabled() &&
        rig_end_hook_.enabled() && rig_dimensions_hook_.enabled()) {
         // Keep camera submission continuous while changing observation modes.
         // Dropping the selection hook even briefly can omit sensor-only views
@@ -186,6 +196,8 @@ void RenderProbe::enable(bool vehicle_metadata,const std::string& mode,bool fram
     // In particular, do not redirect a camera before the matching end hook
     // is installed. Mode switches retain the rig configuration while drained.
     mode_=mode;
+    overlay_only_=mode=="overlay";
+    set_overlay_locked(overlay);
     observing_=true;
     accepting_=true;
     last_error_.clear();
@@ -200,6 +212,7 @@ void RenderProbe::disable() noexcept {
 bool RenderProbe::disable_locked(bool clear_rig) {
     accepting_=false;
     observing_=false;
+    overlay_=false;overlay_only_=false;decal_.stop();
     if(auto stream=stream_.load()) stream->stop();
     vehicle_metadata_=false;
     frame_boundary_seen_=false;
@@ -220,6 +233,11 @@ bool RenderProbe::disable_locked(bool clear_rig) {
     if(!callbacks.load() && !rig_.in_flight()) {
         for(auto* hook:hookset()) if(draining(hook) && hook->enabled() && !hook->disable()) last_error_="Camera graph drain hook disable failed";
         if(clear_rig) rig_.clear();
+        // No render callback can be inside the decal now: release its GPU objects.
+        decal_.release_gpu();
+        for(auto& view:composition_) view.Reset();
+        for(auto& view:main_depth_) view.Reset();
+        armed_graph_=-1;usage_cache_={};usage_next_=0;overlay_reset_=false;
     } else last_error_="Camera submission still draining; payload must stay loaded";
     return last_error_.empty();
 }
@@ -273,15 +291,18 @@ void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept 
     callbacks.fetch_add(1);
     if(auto* self=observer.load();self && self->accepting_.load() && self->observing_.load()) {
         const auto stream=self->stream_.load();
-        const auto mask=stream && stream->running()?stream->compiling_mask():UINT32_MAX;
-        if(!mask) {callbacks.fetch_sub(1);return;}
+        // The decal needs the main0 camera every frame, independent of the stream mask.
+        const bool main=self->overlay_.load(std::memory_order_relaxed);
+        const auto mask=self->overlay_only_.load(std::memory_order_relaxed)?0:
+            stream && stream->running()?stream->compiling_mask():UINT32_MAX;
+        if(!mask && !main) {callbacks.fetch_sub(1);return;}
         const auto start=qpc_now();
         uintptr_t input{},output{};uint16_t id{};
         if(read_memory(context.r10,input) && read_memory(context.rsp+0x58,output) &&
            read_memory(context.rbp+0x240,id))
             self->pass_commands_.begin(context.rbp,input,output,id,
-                self->vehicle_metadata_.load()?(stream && stream->running()?stream->compiling_mask(true):UINT32_MAX):0,
-                self->sdk_state_.load(),mask,!stream || !stream->running() || stream->compiling_diagnostics());
+                mask && self->vehicle_metadata_.load()?(stream && stream->running()?stream->compiling_mask(true):UINT32_MAX):0,
+                mask?self->sdk_state_.load():nullptr,mask,mask && (!stream || !stream->running() || stream->compiling_diagnostics()),main);
         self->compile_begin_timing_.add(qpc_now()-start);
     }
     callbacks.fetch_sub(1);
@@ -413,6 +434,8 @@ bool RenderProbe::compile_frame() const noexcept {
         stream->compiling();
 }
 void RenderProbe::observe(const safetyhook::Context& context) noexcept {
+    if(overlay_.load(std::memory_order_relaxed)) overlay_observe(context);
+    if(overlay_only_.load(std::memory_order_relaxed)) return;
     const auto stream=stream_.load();
     if(stream && stream->running() && !stream->pending()) return;
     Record record{};
@@ -450,7 +473,7 @@ json RenderProbe::stream(const json& request,Transport& publisher,const CaptureO
     auto stream=stream_.load();
     if(action=="start") {
         if(stream && stream->running()) throw std::runtime_error("A capture stream is already running");
-        if(!hook_.enabled()) throw std::runtime_error("Capture stream requires render_probe observe mode");
+        if(!hook_.enabled() || mode_!="observe") throw std::runtime_error("Capture stream requires render_probe observe mode");
         // The IPC command is the boundary for rates and bounded lifetime.
         const auto hz=request.at("hz").get<double>(),duration=request.at("duration").get<double>();
         if(!std::isfinite(hz) || hz<=0 || !std::isfinite(duration) || duration<=0)
@@ -491,6 +514,7 @@ json RenderProbe::status() {
         {"qpc_frequency",qpc_frequency()},
         {"timing_scope","callback_body_elapsed; cumulative per module; excludes detour and counter bookkeeping"},
         {"pass_commands",pass_commands_.status()},
+        {"overlay",overlay_json()},
         {"hooks",json::array({{{"name","dx11.omset_before_bind"},{"tier",1},{"rva",hook_rva},
             {"enabled",hook_.enabled()},{"calls",calls_.load()},{"missed_records",missed_.load()},
             {"timing",bind_timing_.snapshot()}},
@@ -502,6 +526,8 @@ json RenderProbe::status() {
              {"timing",compile_end_timing_.snapshot()}},
             {{"name","dx11.prepare_draw_bindings"},{"tier",1},{"rva",draw_batch_rva},{"enabled",draw_batch_hook_.enabled()},
              {"timing",draw_batch_timing_.snapshot()}},
+            {{"name","overlay.blit_observation"},{"tier",1},{"rva",hook_rva},{"enabled",overlay_.load()},
+             {"scope","main-span lookups and the decal draw inside dx11.omset_before_bind"},{"timing",overlay_timing_.snapshot()}},
             {{"name","camera.sensor_selection"},{"tier",2},{"rva",rig_select_rva},{"enabled",rig_select_hook_.enabled()}},
             {{"name","camera.sensor_submission_begin"},{"tier",2},{"rva",rig_begin_rva},{"enabled",rig_begin_hook_.enabled()}},
             {{"name","camera.sensor_submission_end"},{"tier",2},{"rva",rig_end_rva},{"enabled",rig_end_hook_.enabled()}},
@@ -513,5 +539,94 @@ json RenderProbe::status() {
             {{"name","camera.private_graph_end"},{"tier",2},{"rva",rig_graph_end_rva},{"enabled",rig_graph_end_hook_.enabled()}}})},
         {"last_error",last_error_},{"render_coherent",false},
         {"recent_bindings",entries}};
+}
+void RenderProbe::set_overlay_locked(bool enabled) {
+    if(enabled) decal_.start(overlay_block_,overlay_options_);
+    else decal_.stop();
+    if(enabled && !overlay_.load()) overlay_reset_=true;
+    overlay_=enabled;
+}
+json RenderProbe::overlay(bool enabled,OverlayBlock* block,const OverlayOptions& options) {
+    std::lock_guard lock(control_);
+    if(enabled) {
+        if(!block) throw std::runtime_error("Overlay shared memory is not mapped");
+        if(mode_=="rig") throw std::runtime_error("The HUD overlay needs observe or overlay render mode; disable rig mode first");
+        overlay_block_=block;overlay_options_=options;
+        if(mode_=="off") enable_locked(false,"overlay",false,true,true);
+        else set_overlay_locked(true); // observe or overlay: same hooks, options take effect now
+    } else if(mode_=="overlay") disable_locked(true);
+    else set_overlay_locked(false);
+    return overlay_json();
+}
+json RenderProbe::overlay_status() {
+    std::lock_guard lock(control_);
+    return overlay_json();
+}
+json RenderProbe::overlay_json() {
+    return {{"enabled",overlay_.load()},{"render_mode",mode_},{"mapped",overlay_block_!=nullptr},{"sdk_time_us",sdk_time_us_.load()},
+        {"binds",{{"scene",scene_binds_.load()},{"composition",composition_binds_.load()}}},
+        // The first single-target bind after the composition pass, by detector (docs/24 §2).
+        {"blit_detection",{{"compiled_span_only",blit_compiled_span_.load()},{"backbuffer_usage_only",blit_backbuffer_usage_.load()},
+            {"both",blit_both_.load()},{"neither",blit_neither_.load()},{"draw_calls",blit_draws_.load()},{"no_camera",blit_no_camera_.load()}}},
+        {"main_passes",pass_commands_.main_status()},{"decal",decal_.status()},{"timing",overlay_timing_.snapshot()}};
+}
+bool RenderProbe::backbuffer_usage(uintptr_t view) noexcept {
+    // (a): DXGI_USAGE_BACK_BUFFER of the bound resource, cached per view pointer.
+    for(const auto& entry:usage_cache_) if(entry.view==view) return entry.backbuffer;
+    bool backbuffer=false;
+    Com<ID3D11Resource> resource;
+    reinterpret_cast<ID3D11RenderTargetView*>(view)->GetResource(&resource);
+    Com<IDXGIResource> dxgi;DXGI_USAGE usage{};
+    if(resource && SUCCEEDED(resource.As(&dxgi)) && SUCCEEDED(dxgi->GetUsage(&usage))) backbuffer=(usage&DXGI_USAGE_BACK_BUFFER)!=0;
+    usage_cache_[usage_next_++%usage_cache_.size()]={view,backbuffer};
+    return backbuffer;
+}
+void RenderProbe::overlay_observe(const safetyhook::Context& context) noexcept {
+    // Every bind while the decal is on: a shared-lock scan of the few main
+    // spans for 1- and 4-target binds; everything else returns here.
+    const auto count=static_cast<uint32_t>(context.rdx);
+    const auto index=static_cast<uint32_t>(context.r13);
+    if((count!=1 && count!=4) || !index) return;
+    const auto start=qpc_now();
+    if(overlay_reset_.exchange(false)) {armed_graph_=-1;usage_cache_={};usage_next_=0;}
+    uintptr_t cursor{},data{};uint16_t id{};
+    std::array<uintptr_t,4> targets{};
+    if(!read_memory(context.rbp-0x30,cursor) || !read_memory(cursor,id) || !read_memory(context.r12,data) ||
+       !copy_memory(context.r8,targets.data(),count*sizeof(uintptr_t))) return;
+    const auto pass=pass_commands_.main_at(id,data+(index-1)*4);
+    if(pass && pass->main==MainPass::scene && count==4) {
+        uintptr_t depth{};
+        if(read_memory(context.rbp+0xA8,depth) && main_depth_[pass->graph].Get()!=reinterpret_cast<ID3D11DepthStencilView*>(depth))
+            main_depth_[pass->graph]=reinterpret_cast<ID3D11DepthStencilView*>(depth);
+        ++scene_binds_;
+    } else if(pass && pass->main==MainPass::composition) {
+        for(uint32_t slot=0;slot<count;++slot) if(pass->targets[slot]==RenderTarget::color && targets[slot]) {
+            const auto view=reinterpret_cast<ID3D11RenderTargetView*>(targets[slot]);
+            if(composition_[pass->graph].Get()!=view) composition_[pass->graph]=view;
+            armed_graph_=static_cast<int>(pass->graph);++composition_binds_;
+        }
+    } else if(armed_graph_>=0 && count==1) {
+        // The next single target after main0/composition_out: blit_to_target by
+        // (b) its compiled span and/or (a) a swap-chain buffer. Draw once.
+        const bool span=pass && pass->main==MainPass::blit;
+        const bool usage=targets[0] && backbuffer_usage(targets[0]);
+        ++(span && usage?blit_both_:span?blit_compiled_span_:usage?blit_backbuffer_usage_:blit_neither_);
+        const auto options=decal_.options();
+        if(span || usage) {
+            const auto graph=span?pass->graph:static_cast<unsigned>(armed_graph_);
+            armed_graph_=-1;
+            if(options->backbuffer_usage?usage:span) {
+                auto scene=span && pass->scene?pass->scene:pass_commands_.main_scene(graph);
+                uintptr_t immediate{};
+                if(!scene || !read_memory(context.rax+0x363FCF0,immediate) || !immediate) ++blit_no_camera_;
+                else {
+                    ++blit_draws_;
+                    decal_.draw(reinterpret_cast<ID3D11DeviceContext*>(immediate),composition_[graph].Get(),main_depth_[graph].Get(),
+                                scene->camera,sdk_time_us_.load(std::memory_order_relaxed));
+                }
+            }
+        }
+    }
+    overlay_timing_.add(qpc_now()-start);
 }
 }

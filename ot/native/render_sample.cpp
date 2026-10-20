@@ -59,6 +59,11 @@ json RenderPassSample::describe(bool diagnostic) const {
             {"reference_array_offset",image.reference_offset},{"graph_image_id",image.id},
             {"namespace",image.space},{"name",image.name},{"pool_id_at_compile",image.pool}});
     }
+    if(main!=MainPass::none) {
+        result["main_pass"]=main==MainPass::scene?"scene":main==MainPass::composition?"composition":"blit";
+        if(main==MainPass::scene) result["camera_at_compile"]=camera.describe();
+        if(!diagnostic) {result["pass_name"]=name;result["graph_buffer"]=graph;}
+    }
     if(geometry) {
         result["camera_at_compile"]=camera.describe();
         if(vehicles) result["vehicles_at_compile"]=vehicles->describe();

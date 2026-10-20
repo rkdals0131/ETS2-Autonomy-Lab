@@ -115,6 +115,7 @@
 - 삽입: `blit_to_target`(→backbuffer) 직전, 대상은 `main0/composition_out`. 판정은 compiled-span의 pass 이름 또는 RTV의 `DXGI_USAGE_BACK_BUFFER`.
 - 셰이더: 폴리라인 루프 대신 자차 주변 BEV 마스크 텍스처 한 번 샘플(O(1)).
 - render_probe에 `overlay` 모드(OM+compile 훅만). 렌더 스레드 CPU 예산 0.1 ms/프레임.
+- ✔ 2026-10-20 구현(core 0.43.0·릴레이·otpy, 게임 시험 전). 설계와 다르게 정한 점과 단위 시험은 [24 §0](24_hud_overlay_design.md#0-구현-상태).
 - 완료 기준: 정차 데칼이 차로 중심에 붙고 대시보드·A필러·미러에 가려짐, 80 km/h에서 궤적 끝 떨림 ≤ 1 px(core 자체 백버퍼 캡처로 비교, ✔ RenderDoc 로드 시 `RenderProbe::enable`이 거절), [18](18_performance.md) `display` 조건 frame time p99 증가 ≤ 0.5 ms, 센서 pass 영상에 데칼 없음.
 
 ### P4. 문서·테스트 정리 (S)

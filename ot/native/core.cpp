@@ -492,10 +492,10 @@ json Runtime::command(const json& request) {
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","configs","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","drive_auxiliary_brakes","parallel_passes"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","configs","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","drive_auxiliary_brakes","parallel_passes","overlay"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"parallel_passes_allowed",gate_ok_ && allow_tier1_ && allow_parallel_passes_},
-        {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false) || parallel_passes_->active()},
+        {"overlay",true},{"overlay_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false) || parallel_passes_->active()},
         {"drive",current_drive()},
         {"field_writes",false},{"camera_rig",render_probe_->camera_rig(json::object())},{"channels",*registered_.load()}};
     if(cmd=="schema") return schema_;
@@ -620,8 +620,11 @@ json Runtime::command(const json& request) {
                 if(tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_)
                     throw std::runtime_error("Render probe requires Tier 1, matching EXE, singleplayer_research, allow_tier1 and allow_render_probe");
                 try {
+                    const auto mode=request.value("mode",std::string("observe"));
+                    const bool overlay=mode=="overlay" || request.value("overlay",false);
+                    if(overlay) render_probe_->overlay_mapping(transport_->overlay_block());
                     render_probe_->enable(request.value("vehicle_metadata",false),
-                        request.value("mode",std::string("observe")),request.value("frame_timing",false),request.value("draw_metadata",true));
+                        mode,request.value("frame_timing",false),request.value("draw_metadata",true),overlay);
                 } catch(...) {
                     if(tier_==2 && !render_probe_->camera_rig(json::object()).at("enabled").get<bool>()) tier_=1;
                     throw;
@@ -658,6 +661,29 @@ json Runtime::command(const json& request) {
             else throw std::runtime_error("parallel_passes mode must be off, defer, parallel or alternate");
         }
         return parallel_passes_->status();
+    }
+    if(cmd=="overlay") {
+        // HUD trajectory decal (docs/24). The path arrives in Local\OT_Overlay;
+        // this command only switches it. status and capture are read-only.
+        const auto action=request.value("action",std::string("status"));
+        if(action=="status") return render_probe_->overlay_status();
+        if(action=="capture") return render_probe_->overlay_capture(request);
+        std::lock_guard lock(control_);require_owner();
+        if(action=="enable") {
+            if(tier_<1 || !gate_ok_ || !allow_tier1_ || !allow_render_probe_)
+                throw std::runtime_error("The HUD overlay requires Tier 1, matching EXE, singleplayer_research, allow_tier1 and allow_render_probe");
+            OverlayOptions options;
+            options.z_tolerance=request.value("z_tolerance_m",options.z_tolerance);
+            options.slope=std::tan(request.value("slope_deg",8.0)*3.14159265358979323846/180);
+            options.normal_min=request.value("normal_min",options.normal_min);
+            if(request.contains("fade_m")) {const auto fade=request.at("fade_m").get<std::array<double,2>>();options.fade_start=fade[0];options.fade_end=fade[1];}
+            const auto detector=request.value("detector",std::string("compiled_span"));
+            if(detector!="compiled_span" && detector!="backbuffer_usage") throw std::runtime_error("detector must be compiled_span or backbuffer_usage");
+            options.backbuffer_usage=detector=="backbuffer_usage";
+            return render_probe_->overlay(true,transport_->overlay_block(),options);
+        }
+        if(action=="disable") return render_probe_->overlay(false,nullptr,{});
+        throw std::runtime_error("overlay action must be enable, disable, status or capture");
     }
     if(cmd=="panic") {panic();return {{"tier",0},{"active_hooks",render_probe_->status().at("active")}};}
     if(cmd=="tier") {
