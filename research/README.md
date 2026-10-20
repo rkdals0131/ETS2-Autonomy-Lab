@@ -29,6 +29,13 @@ ETS2 1.61.1.1의 설치 파일·SDK·엔진 분석 원본입니다. 현재 해�
 - [Ghidra 12.1.4](https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.1.4_build), `ghidra_12.1.4_PUBLIC_20260921.zip` 취득 SHA256 `ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db`(릴리스 공지 값과 일치). JDK 21 이상이 필요하고 이 머신은 JDK 23을 씁니다.
 - [ConverterPIX 3cd4e73a86d0](https://github.com/mwl4/ConverterPIX/tree/3cd4e73a86d0c6bd28e117664c50a36cabeccf38), 실행 파일 Git blob 대조·SHA256·LICENSE는 `tools/converterpix-3cd4e73a86d0/`의 취득 기록에 있습니다.
 
+## 실차 CAN에 해당하는 값 찾기
+
+- `can_scan.py`: 플레이어 vehicle과 그 포인터 대상(2단계)을 주행 중에 읽어 float 칸마다 SDK 채널(회전수, 스로틀, def 기대 토크, 엔진브레이크, 리타더, 브레이크, 속도, 기어)과의 상관을 누적합니다. `--report`로 대상별 상위 칸을 봅니다.
+- `can_probe.py`: 고른 객체를 30 Hz로 바이트째 읽고 모든 SDK 채널과 대조합니다(`--label`). `can_scan_region.py`는 스캔 결과에서 한 객체의 변하는 칸을 나열합니다.
+- `truck_spec.py`: 최신 세이브의 현재 트럭 부품으로 def(추출한 모드 → 기본 게임 순)를 읽어 엔진·변속기·섀시·타이어·전역 물리 사양을 JSON으로 냅니다. 세이브 복호는 `savedec/`(TruckLib, `tools/dotnet10/dotnet.exe build research/savedec -c Release`)입니다. 모드 def는 `tools/extractor`로 `extracted/mod_*`에 풉니다.
+- 모두 `PROCESS_VM_READ`(와 모듈 목록용 `PROCESS_QUERY_INFORMATION`)만 씁니다. 결과와 찾은 위치는 [docs/30](../docs/30_can_like_signals.md)에 있습니다. 게임이 업데이트되면 `ot/schema/<버전>/fields.json`의 `vehicle_drivetrain` 오프셋은 `rebase_rvas.py`가 옮기지 않으므로 이 스크립트로 다시 확인합니다.
+
 ## 게임 업데이트 뒤 주소 옮기기
 
 Steam이 실행 파일을 바꾸면 core의 해시 게이트가 Tier 1을 끕니다. 처음부터 다시 분석하지 않고 이전 빌드의 분석 결과를 옮깁니다.

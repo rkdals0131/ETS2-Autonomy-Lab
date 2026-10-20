@@ -69,3 +69,7 @@ venv/
 /research/ghidra/out/
 # Git Bash crash dumps
 bash.exe.stackdump
+
+# research/savedec build output
+/research/savedec/bin/
+/research/savedec/obj/
