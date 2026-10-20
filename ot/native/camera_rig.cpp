@@ -41,8 +41,9 @@ bool cabin_pose(uintptr_t interior,Placement& pose) noexcept {
     // The engine has already composed body interpolation and cabin suspension
     // into this parent, before applying the driver's head pose. Model-local
     // positions use neutral chassis axes/origin, as do native mirror locators.
+    // 1.61.1.9 moved the vehicle fields from 0x690 up by 0x28 (0x1098 before).
     return read_memory(interior+0x118,vehicle) && vehicle &&
-        read_memory(vehicle+0x1098,camera) && camera && read_memory(camera+0x4d4,pose);
+        read_memory(vehicle+0x10C0,camera) && camera && read_memory(camera+0x4d4,pose);
 }
 }
 

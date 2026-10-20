@@ -655,6 +655,63 @@ def write_outputs(args, old, new, results):
     carry_signatures(old, new, by_old, usable)
 
 
+def layout_changes(old, new, functions, mapper):
+    """Struct displacements that changed between the builds, over the whole binary.
+
+    Every function whose bytes differ is aligned instruction by instruction (by
+    mnemonic); aligned memory operands on the same base register (not rip/rsp/rbp)
+    give (old displacement, new displacement) pairs. Returns per old displacement
+    the counts of unchanged uses and of each shift. A few minutes for 70k functions."""
+    shifted, unchanged = {}, Counter()
+
+    def operands(image, start, size):
+        out = []
+        for ins in DISASM.disasm(image.data[start:start + size], start):
+            out.append((ins.mnemonic, tuple((ins.reg_name(op.mem.base), op.mem.disp) for op in ins.operands
+                                            if op.type == X86_OP_MEM and op.mem.base
+                                            and ins.reg_name(op.mem.base) not in ("rip", "rsp", "rbp"))))
+        return out
+
+    for entry, size in functions.entries:
+        if not 16 <= size <= 40000 or not informative(old.data[entry:entry + 24], 8):
+            continue
+        hit = unique_near(new.data, old.data[entry:entry + 24], entry + mapper.coarse(entry), 0x8000)
+        if hit is None or old.data[entry:entry + size] == new.data[hit:hit + size]:
+            continue
+        a, b = operands(old, entry, size), operands(new, hit, size + 64)
+        matcher = difflib.SequenceMatcher(None, [x[0] for x in a], [x[0] for x in b], autojunk=False)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag != "equal":
+                continue
+            for x, y in zip(range(i1, i2), range(j1, j2)):
+                for (ra, da), (rb, db) in zip(a[x][1], b[y][1]):
+                    if ra != rb:
+                        continue
+                    if da == db:
+                        unchanged[da] += 1
+                    else:
+                        shifted.setdefault(da, Counter())[db - da] += 1
+    return shifted, unchanged
+
+
+def check_native_offsets(shifted, unchanged):
+    """ot/native struct offsets (+/-0x100..0xFFFF) that moved somewhere in the binary.
+
+    A displacement value is shared by many classes, so a hit is a lead to confirm in
+    the code that reads the same object (as camera_rig's vehicle+0x1098 was)."""
+    leads = []
+    for path in sorted((ROOT / "ot" / "native").glob("*.[ch]pp")):
+        if path.name.endswith("_test.cpp"):
+            continue
+        for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            for literal in re.findall(r"[+-]\s*(0x[0-9A-Fa-f]{3,4})\b", line):
+                value = int(literal, 16)
+                if shifted.get(value):
+                    moves = ", ".join(f"{d:+#x} x{c}" for d, c in shifted[value].most_common())
+                    leads.append(f"{path.name}:{n} {literal}: unchanged x{unchanged[value]}, moved {moves} | {line.strip()[:100]}")
+    return leads
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--old-version", default=LEGACY_VERSION)
@@ -662,6 +719,9 @@ def main():
     parser.add_argument("--analyzed", action="store_true",
                         help="also compare every function decompiled for the old build (out/decomp/<rva>.c),"
                              " to find struct layout changes")
+    parser.add_argument("--layout", action="store_true",
+                        help="scan the whole binary for changed struct displacements and list the ot/native"
+                             " offsets among them (a few minutes); out/<new>/layout.json")
     parser.add_argument("--write", action="store_true",
                         help="write ot/schema/<new>/fields.json and rebase.json and update the RVA literals in"
                              " ot/native; refused while an RVA in use is not ok")
@@ -719,6 +779,19 @@ def main():
                                                  "results": results}, indent=1), encoding="utf-8")
     bad = [r for r in results if r["status"] != "ok"]
     print(f"{len(results)} RVAs, {len(results) - len(bad)} ok, {len(bad)} need a look -> {out / 'rebase.json'}")
+    if args.layout:
+        shifted, unchanged = layout_changes(old, new, functions, mapper)
+        deltas = Counter()
+        for counts in shifted.values():
+            deltas.update(counts)
+        print("struct displacement shifts (uses):", ", ".join(f"{d:+#x} x{c}" for d, c in deltas.most_common(8)))
+        (out / "layout.json").write_text(json.dumps({f"{v:#x}": {"unchanged": unchanged[v], "moved": {
+            f"{d:+#x}": c for d, c in counts.items()}} for v, counts in sorted(shifted.items())}, indent=1),
+            encoding="utf-8", newline="\n")
+        leads = check_native_offsets(shifted, unchanged)
+        print(f"{len(leads)} ot/native offsets moved somewhere (confirm each in the code that reads it):")
+        for lead in leads:
+            print("  " + lead)
     if args.write:
         if args.rvas:
             raise SystemExit("--write carries the whole schema; leave out explicit RVAs")
