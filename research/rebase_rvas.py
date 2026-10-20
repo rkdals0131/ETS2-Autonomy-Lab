@@ -25,6 +25,8 @@ How each RVA is carried:
 - vtables (a run of pointers into .text; the game has no RTTI): at the voted place,
   80 % of the slots, or the first 4 in a row, must point to the moved slot functions. Without a reference, the
   code pointers in and around the table propose places that are then checked so.
+With --write, the byte signatures that find_target() checks in ot/native are re-read
+at the carried sites too (they may hold relative displacements).
 A result is "ok" only when the methods agree and the code is the same; anything else
 needs a look. This never opens a process; it reads files only.
 """
@@ -508,6 +510,53 @@ def native_rvas(image):
     return found
 
 
+def carry_signatures(old, new, by_old, usable):
+    """Byte signatures checked by find_target(signature, adjustment, rva) in ot/native.
+
+    A signature may hold relative displacements, so after a move its bytes are
+    re-read at the carried site. The old bytes must match the old image first, and
+    the new ones must occur exactly once in the new executable sections. Only the
+    changed byte tokens are rewritten, so the source keeps its layout."""
+    by_new = {r["new"]: r for r in by_old.values() if "new" in r and usable(r)}
+    text_sections = [s for s in new.sections if s[0] == ".text"]
+    changed_files = 0
+    for path in sorted((ROOT / "ot" / "native").glob("*.cpp")):
+        newline = "\r\n" if b"\r\n" in path.read_bytes() else "\n"
+        text = path.read_text(encoding="utf-8")
+        constants = {m[1]: int(m[2], 16) for m in re.finditer(r"\b(\w+_rva)=(0x[0-9A-Fa-f]+)", text)}
+        arrays = {m[1]: m for m in re.finditer(r"std::array<uint8_t,\d+> (\w+)=\{([^}]*)\}", text)}
+        edits = []
+        for call in re.finditer(r"find_target\((\w+),(\d+),(\w+)\)", text):
+            name, adjustment, rva_name = call[1], int(call[2]), call[3]
+            if name not in arrays or rva_name not in constants:
+                raise SystemExit(f"{path.name}: cannot resolve find_target({name},{adjustment},{rva_name})")
+            value = constants[rva_name]
+            r = by_new.get(value) or by_old.get(value)
+            if r is None or "new" not in r:
+                raise SystemExit(f"{path.name}: {rva_name}={value:#x} was not carried")
+            tokens = arrays[name][2].split(",")
+            pattern = bytes(int(t.strip(), 0) for t in tokens)
+            old_start = r["old"] - adjustment
+            if old.data[old_start:old_start + len(pattern)] != pattern:
+                raise SystemExit(f"{path.name}: {name} does not match the old image at {old_start:#x}")
+            new_start = r["new"] - adjustment
+            fresh = new.data[new_start:new_start + len(pattern)]
+            hits = sum(new.data.count(fresh, start, start + size) for _, start, size in text_sections)
+            if hits != 1:
+                raise SystemExit(f"{path.name}: carried {name} occurs {hits} times in the new image")
+            if fresh != pattern:
+                # replace only the changed tokens, keeping their whitespace and line breaks
+                edits.append((arrays[name], [t.replace(t.strip(), f"0x{y:02X}") if x != y else t
+                                             for t, x, y in zip(tokens, pattern, fresh)]))
+                print(f"  {path.name}: {name} rewritten ({sum(a != b for a, b in zip(pattern, fresh))} bytes)")
+        for match, tokens in sorted(edits, key=lambda e: -e[0].start(2)):
+            text = text[:match.start(2)] + ",".join(tokens) + text[match.end(2):]
+        if edits:
+            path.write_text(text, encoding="utf-8", newline=newline)
+            changed_files += 1
+    print(f"{changed_files} files with carried signatures")
+
+
 def write_outputs(args, old, new, results):
     """ot/schema/<new>/fields.json and rebase.json, and the literals in ot/native."""
     by_old = {r["old"]: r for r in results}
@@ -572,11 +621,21 @@ def write_outputs(args, old, new, results):
     (target / "rebase.json").write_text(json.dumps({
         "from": args.old_version, "to": args.new_version, "tool": "research/rebase_rvas.py",
         "note": "Addresses in docs/ refer to the build they were found in; this table carries them.",
-        "results": table}, indent=1) + "\n", encoding="utf-8")
+        "results": table}, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(f"wrote {target / 'fields.json'} and rebase.json")
 
+    # Guard against carrying twice: literals already holding new values are left alone.
+    moved = {r["old"]: r["new"] for r in by_old.values() if "new" in r and r["new"] != r["old"] and usable(r)}
+    sources = "".join(p.read_text(encoding="utf-8") for p in (ROOT / "ot" / "native").glob("*.[ch]pp"))
+    literals = {int(x, 16) for x in re.findall(r"\b0x[0-9A-Fa-f]{6,7}\b", sources)}
+    olds, news = literals & set(moved), literals & (set(moved.values()) - set(moved))
+    if news and olds:
+        raise SystemExit(f"ot/native mixes old and carried literals ({len(olds)} old, {len(news)} new); fix by hand")
+    carry_literals = not news
+    if not carry_literals:
+        print("ot/native literals are already carried; only signatures are checked")
     changed = 0
-    for path in sorted((ROOT / "ot" / "native").glob("*.[ch]pp")):
+    for path in sorted((ROOT / "ot" / "native").glob("*.[ch]pp")) if carry_literals else []:
         newline = "\r\n" if b"\r\n" in path.read_bytes() else "\n"
         text = path.read_text(encoding="utf-8")
 
@@ -593,6 +652,7 @@ def write_outputs(args, old, new, results):
             changed += 1
             print(f"updated {path.relative_to(ROOT)}")
     print(f"{changed} native files updated")
+    carry_signatures(old, new, by_old, usable)
 
 
 def main():
@@ -623,8 +683,15 @@ def main():
         sources = {int(r, 16): ["command line"] for r in args.rvas}
     else:
         sources = schema_rvas(ROOT / "ot" / "schema" / args.old_version / "fields.json")
+        # After a --write the native literals already hold new values; the earlier
+        # table maps them back so a rerun analyzes (and carries) the same old RVAs.
+        previous = ROOT / "ot" / "schema" / args.new_version / "rebase.json"
+        back = {}
+        if previous.exists():
+            back = {int(r["new"], 16): int(r["old"], 16)
+                    for r in json.loads(previous.read_text(encoding="utf-8"))["results"] if "new" in r}
         for value, where in native_rvas(old).items():
-            sources.setdefault(value, []).extend(where)
+            sources.setdefault(back.get(value, value), []).extend(where)
     if args.analyzed:
         for path in sorted((old_dir / "decomp").glob("*.c")):
             sources.setdefault(int(path.stem, 16), []).append(f"decomp/{path.name}")

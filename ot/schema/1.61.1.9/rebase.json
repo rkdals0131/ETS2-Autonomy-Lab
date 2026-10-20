@@ -38,7 +38,7 @@
    "body": "same",
    "used_by": [
     "render_parallel.task_submit_stub_rva",
-    "parallel_passes.cpp:21"
+    "parallel_passes.cpp:22"
    ]
   },
   {
@@ -51,7 +51,7 @@
    "body": "same",
    "used_by": [
     "render_parallel.task_wait_stub_rva",
-    "parallel_passes.cpp:21"
+    "parallel_passes.cpp:22"
    ]
   },
   {
@@ -113,9 +113,9 @@
    "used_by": [
     "render_parallel.pass_execute_rva",
     "render_parallel.closure_rvas[0]",
-    "parallel_passes.cpp:16",
-    "parallel_passes.cpp:22",
-    "parallel_passes.cpp:351",
+    "parallel_passes.cpp:17",
+    "parallel_passes.cpp:23",
+    "parallel_passes.cpp:352",
     "parallel_passes.hpp:12",
     "parallel_passes_test.cpp:55"
    ]
@@ -146,8 +146,8 @@
    "body": "same",
    "used_by": [
     "render_parallel.execute_join_rva",
-    "parallel_passes.cpp:16",
-    "parallel_passes.cpp:366",
+    "parallel_passes.cpp:17",
+    "parallel_passes.cpp:367",
     "parallel_passes.hpp:13"
    ]
   },
@@ -162,7 +162,7 @@
    "used_by": [
     "render_parallel.storage_allocate_rva",
     "render_parallel.closure_rvas[24]",
-    "parallel_passes.cpp:16",
+    "parallel_passes.cpp:17",
     "parallel_passes_test.cpp:21",
     "pass_stream.hpp:14",
     "pass_stream.hpp:147"
@@ -191,7 +191,7 @@
    "used_by": [
     "render_parallel.device_slots_checked.0x108",
     "render_parallel.closure_rvas[27]",
-    "parallel_passes.cpp:29"
+    "parallel_passes.cpp:30"
    ]
   },
   {
@@ -265,7 +265,7 @@
    "used_by": [
     "render_parallel.device_slots_checked.0x278",
     "render_parallel.closure_rvas[13]",
-    "parallel_passes.cpp:29"
+    "parallel_passes.cpp:30"
    ]
   },
   {
@@ -387,7 +387,7 @@
    "used_by": [
     "render_parallel.device_slots_checked.0x120",
     "render_parallel.closure_rvas[17]",
-    "parallel_passes.cpp:29"
+    "parallel_passes.cpp:30"
    ]
   },
   {
@@ -679,7 +679,7 @@
    "body": "same",
    "used_by": [
     "parallel_loop.hpp:15",
-    "parallel_passes.cpp:18",
+    "parallel_passes.cpp:19",
     "parallel_passes_test.cpp:203"
    ]
   },
@@ -814,7 +814,7 @@
    "vtable": "2/2 slots correspond, first 2 in a row",
    "used_by": [
     "render_parallel.parallel_loop_vtable_rva",
-    "parallel_passes.cpp:20"
+    "parallel_passes.cpp:21"
    ]
   },
   {
@@ -837,7 +837,7 @@
    "vtable": "41/41 slots correspond, first 41 in a row",
    "used_by": [
     "render_parallel.storage_vtable_rva",
-    "parallel_passes.cpp:17"
+    "parallel_passes.cpp:18"
    ]
   },
   {
@@ -849,7 +849,7 @@
    "vtable": "115/115 slots correspond, first 115 in a row",
    "used_by": [
     "render_parallel.device_vtable_rva",
-    "parallel_passes.cpp:17"
+    "parallel_passes.cpp:18"
    ]
   },
   {
@@ -936,7 +936,7 @@
    "votes": "15/15",
    "used_by": [
     "render_parallel.worker_count_rva",
-    "parallel_passes.cpp:20"
+    "parallel_passes.cpp:21"
    ]
   },
   {
@@ -969,7 +969,7 @@
    "used_by": [
     "render_graph.renderer_pointer_rva",
     "render_parallel.device_pointer_rva",
-    "parallel_passes.cpp:17"
+    "parallel_passes.cpp:18"
    ]
   },
   {
@@ -980,7 +980,7 @@
    "votes": "59/59",
    "used_by": [
     "render_parallel.task_table_rva",
-    "parallel_passes.cpp:20"
+    "parallel_passes.cpp:21"
    ]
   },
   {
