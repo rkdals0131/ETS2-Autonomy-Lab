@@ -139,6 +139,9 @@ int main(int argc,char** argv) {
         if(!drive->available || !drive->permitted || !drive->profile_supported || vehicle->paused) throw std::runtime_error("Game input is unavailable or paused");
         if(!axes()) throw std::runtime_error("Enable ACC or LCC explicitly before starting");
         if(axes()!=3 && !drive->independent_axes) throw std::runtime_error("Independent ACC/LCC requires the updated loader; restart the game");
+        // The loader refuses to arm an axis the driver is using (its reason then reads only "disabled").
+        if(((axes()&1) && drive->steering_manual!=0) || ((axes()&2) && (drive->throttle_manual!=0 || drive->brake_manual!=0)))
+            throw std::runtime_error("Driver input on a requested axis; let go of the pedals and stick, then start again");
         auxiliary=mpc && drive->auxiliary_brakes;
         if(mpc) std::cout<<"Longitudinal: MPC, retarder "<<(auxiliary?"owned":"folded into the brake (loader < 0.42)")<<std::endl;
         control(true);

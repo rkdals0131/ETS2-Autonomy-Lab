@@ -27,10 +27,10 @@
 | 7 | 릴레이 종료(런처 중지) | `disconnected` | `bridge/windows/main.cpp:DriveEnd`(소멸자가 `drive disconnect`), `core.cpp:Runtime::command`의 drive disconnect, lease 반납 `core.cpp:Runtime::release_runtime` | 2026-10-12 | 0.31.1 | ✔ `disconnected` 뒤 165 ms에 Tier 0, 사유 유지(core 10 ms 폴링). bag에는 릴레이가 상태 발행을 멈춘 뒤라 전이가 없다. 0.31.0은 실패: 아래 "발견" 2 | `bridge/recordings/20261012-220911-19814b0c/bag` |
 | 8 | 패드 USB 분리 | `input_unavailable` | `input_device.cpp:InputDevice::sample`(connected 전이) | 2026-10-12 | 0.31.0 | ✔ `input_unavailable`(exit 2). 0.47 s 뒤 게임이 스스로 일시정지해 사유가 `paused`로 바뀜(해제 상태 유지) | `bridge/recordings/20261012-220053-eaf9d6bd/bag` |
 
-| 9 | loader 0.44 ACC armed(axes=2 또는 6) 중 가속 페달 | 해제 없음. 게임 입력은 운전자 값과 명령 중 큰 쪽(게임이 둘을 더하므로 명령은 초과분만), 브레이크 0, 리타더 0단 펄스·엔진브레이크 끔. 페달을 떼면 명령 단 다시 펄스 | `drive_control.hpp:DriveControl::frame`(throttle_override), `aux_locked(suspended)` | | 0.44.0 | 게임 확인 전(로직 시험만) | |
-| 10 | loader 0.44 ACC armed 중 브레이크 페달 | 페달·보조 브레이크 축 회수(그 epoch 동안), 남은 축이 없으면 `manual`. `drive_speed`는 "ACC cancelled by the driver's brake" 뒤 LCC만 계속 | `DriveControl::frame`의 `revoked_`, `gt_drive_node.cpp`(pedal_sequence) | | 0.44.0 | 게임 확인 전 | |
-| 11 | loader 0.44 LCC armed 중 조향 | 해제 없음. 조작하는 동안 명령 조향 0(운전자만), `drive_speed`는 놓은 뒤 1 s 지나 LCC 재개. 차로 기준을 벗어나면 ACC가 켜져 있을 때 조향만 돌려줌 | `DriveControl::frame`, `gt_drive_node.cpp`(driver_steering_until) | | 0.44.0 | 게임 확인 전 | |
-| 12 | loader 0.44 운전자 입력 중 arm | 요청 축에 운전자 입력이 있으면 거절(이전과 같음) | `DriveControl::request`의 `manual_owned` | | 0.44.0 | 게임 확인 전 | |
+| 9 | loader 0.44 ACC armed(axes=2 또는 6) 중 가속 페달 | 해제 없음. 게임 입력은 운전자 값과 명령 중 큰 쪽(게임이 둘을 더하므로 명령은 초과분만), 브레이크 0, 리타더 0단 펄스·엔진브레이크 끔. 페달을 떼면 명령 단 다시 펄스 | `drive_control.hpp:DriveControl::frame`(throttle_override), `aux_locked(suspended)` | 2026-10-21 | 0.44.0 | ✔ `drive_speed`(axes 7, 목표 0, HOLD 브레이크 0.2) 중 운전자 가속 0.49–0.54가 약 1.2 s: 해제 없음, applied throttle = 운전자 값, applied brake 0(명령 0.15). 떼자 다음 프레임 brake 0.149 적용. △ 리타더 펄스 중지는 게임 리타더 채널로 확인하지 않음 | 로컬 `override2/drive_state.jsonl` |
+| 10 | loader 0.44 ACC armed 중 브레이크 페달 | 페달·보조 브레이크 축 회수(그 epoch 동안), 남은 축이 없으면 `manual`. `drive_speed`는 "ACC cancelled by the driver's brake" 뒤 LCC만 계속 | `DriveControl::frame`의 `revoked_`, `gt_drive_node.cpp`(pedal_sequence) | 2026-10-21 | 0.44.0 | ✔ 운전자 브레이크 0.13에 같은 표본에서 axes 7→1, retarder 명령 −1(해제), 노드 "ACC cancelled by the driver's brake; LCC continues", 조향 명령은 계속. 10 s 뒤 stop event로 `disarmed`(exit 0) | 동일 |
+| 11 | loader 0.44 LCC armed 중 조향 | 해제 없음. 조작하는 동안 명령 조향 0(운전자만), `drive_speed`는 놓은 뒤 1 s 지나 LCC 재개. 차로 기준을 벗어나면 ACC가 켜져 있을 때 조향만 돌려줌 | `DriveControl::frame`, `gt_drive_node.cpp`(driver_steering_until) | 2026-10-21 | 0.44.0 | ✔ 운전자 스틱 ±0.16–0.78 동안 해제 없음, 조향 명령 0, applied가 운전자를 따름(±0.4). 마지막 조작 약 1.4 s 뒤 LCC 재개(명령 −0.004, 목표 0으로 복귀). 차로 기준 이탈 경로는 게임에서 시험 안 함 | 동일 |
+| 12 | loader 0.44 운전자 입력 중 arm | 요청 축에 운전자 입력이 있으면 거절(이전과 같음) | `DriveControl::request`의 `manual_owned` | 2026-10-21 | 0.44.0 | ✔ 첫 시도에서 시작 시 가속 0.47이 눌려 있어 arm 거절(사유는 `disabled`로만 보임). `drive_speed`가 이제 "Driver input on a requested axis…"로 먼저 알림 | 로컬 `override1/` |
 
 완료 기준: 8개 모두 기대 reason으로 전이하고, `/ets2/vehicle/actuation`의 applied 값이 다음 SDK 프레임부터 사람 입력을 따른다. 각 행의 bag 경로가 채워진다. 실패 항목은 [포팅 계획 §6](20_windows_native_port_plan.md#6-의존-그래프와-이어받는-작업)에 등록한다.
 
@@ -38,7 +38,7 @@
 
 ## loader 0.44.0 운전자 개입 계약 (2026-10-20 밤)
 
-사용자 요청으로 #1·#2의 "어느 축이든 운전자 입력이면 전부 해제"를 바꿨다. `ManualInput`의 활동 비트를 조향·가속·브레이크로 나누고(`drive_api.hpp:ot_manual_*`), 가속은 상향 오버라이드, 조향은 운전자 우선(세션 유지), 브레이크만 종방향 보조 종료로 둔다. `ot_drive_test`가 fixture와 실제 프로필로 통과했다(2026-10-20). 0.31 loader에서는 #1·#2 동작이 그대로라, `drive_speed`는 `manual` 해제를 오류가 아닌 "The driver took over"로 끝낸다. 게임 확인(#9–#11)은 loader 설치(게임 재시작) 뒤에 한다.
+사용자 요청으로 #1·#2의 "어느 축이든 운전자 입력이면 전부 해제"를 바꿨다. `ManualInput`의 활동 비트를 조향·가속·브레이크로 나누고(`drive_api.hpp:ot_manual_*`), 가속은 상향 오버라이드, 조향은 운전자 우선(세션 유지), 브레이크만 종방향 보조 종료로 둔다. `ot_drive_test`가 fixture와 실제 프로필로 통과했다(2026-10-20). 0.31 loader에서는 #1·#2 동작이 그대로라, `drive_speed`는 `manual` 해제를 오류가 아닌 "The driver took over"로 끝낸다. 2026-10-21 loader 0.44.0을 설치하고 #9–#12를 게임에서 확인했다(트레일러 없음, 회사 마당 정차). 같은 시험에서 ACC 결함 하나가 보였다: 가속 오버라이드로 HOLD → GO가 된 뒤 목표 0·선행차 없음의 CRUISE에서 1.08 m/s로 8 s 넘게 기어갔다(a_des −1.5, 브레이크 0.085). 선행차 없이 목표 0에서 STOP/HOLD로 가는 경로가 없고, 자동 변속기의 아이들 크리프를 할당기가 모르는 것으로 본다. ACC 질량 적응 작업에 함께 넘겼다.
 
 ## 발견
 
