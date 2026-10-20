@@ -10,10 +10,9 @@ import argparse, ctypes, json, math, time
 from pathlib import Path
 
 import sysid_drive as sd
-from sysid_drive import Session, Step, Stop, heading, heading_hold, steer_to, WHEELBASE, PAD, MARGIN
+from sysid_drive import Session, Step, Stop, heading, heading_hold, steer_to, PAD, MARGIN
 
 ANGLE_PER_UNIT = 0.70
-REAR_AXLE_BEHIND_ORIGIN = 2.094   # SDK wheel z of the drive axle (forward is -z)
 LEAD_IN = 60.0
 DLL = sd.ROOT / "bridge" / "build" / "lateral_capi" / "lateral_capi.dll"
 
@@ -35,7 +34,7 @@ class Lateral:
         return h
 
     def step(self, h, x, y, yaw, v, applied, dt):
-        if self.dll.lat_step(h, x, y, yaw, v, applied, dt, WHEELBASE, 6.0, 0.7, ANGLE_PER_UNIT, 6.5, self.out):
+        if self.dll.lat_step(h, x, y, yaw, v, applied, dt, sd.WHEELBASE, 6.0, 0.7, ANGLE_PER_UNIT, 6.5, self.out):
             raise Stop("controller: " + self.dll.lat_last_error().decode())
         o = self.out
         return {"cmd": o[0], "target": o[1], "rate": o[2], "wheel": o[3], "offset": o[4], "heading_error": o[5],
@@ -46,7 +45,7 @@ def ros_pose(r):
     """Rear-axle pose in ROS world: x = SCS X, y = -SCS Z, yaw CCW from +x."""
     X, _, Z = r["pos"]
     yaw = heading(r) + math.pi / 2
-    return X - REAR_AXLE_BEHIND_ORIGIN * math.cos(yaw), -Z - REAR_AXLE_BEHIND_ORIGIN * math.sin(yaw), yaw
+    return X - sd.REAR_Z * math.cos(yaw), -Z - sd.REAR_Z * math.sin(yaw), yaw
 
 
 def build_lane(x, y, yaw, segments, shift=0.0, ds=1.5):
@@ -72,6 +71,15 @@ def build_lane(x, y, yaw, segments, shift=0.0, ds=1.5):
 
 def inside(pts):
     return all(PAD[0] + MARGIN < x < PAD[2] - MARGIN and PAD[1] + MARGIN < -y < PAD[3] - MARGIN for x, y in pts)
+
+
+def fits(pts, v):
+    """The lane and the run-out after it (3 s exit, then slowing to 30 km/h over 12 s for
+    a U-turn) stay inside the pad margin."""
+    (x0, y0), (x1, y1) = pts[-2], pts[-1]
+    d = math.hypot(x1 - x0, y1 - y0) or 1.0
+    room = v * 3 + (v + 8.3) / 2 * 12 + 30
+    return inside(pts + [(x1 + (x1 - x0) / d * room, y1 + (y1 - y0) / d * room)])
 
 
 def lane_shift(width, length):
@@ -116,7 +124,7 @@ def run_scenario(s: Session, lat: Lateral, out_dir: Path, log, name, kmh, segmen
     pts = None
     for mirror in (1, -1):
         cand = build_lane(x, y, yaw + math.radians(heading_deg), [(L, mirror * k) for L, k in segments], shift)
-        if inside(cand):
+        if fits(cand, v):
             pts = cand
             break
     if pts is None:
@@ -125,7 +133,7 @@ def run_scenario(s: Session, lat: Lateral, out_dir: Path, log, name, kmh, segmen
         x, y, yaw = ros_pose(r)
         for mirror in (1, -1):
             cand = build_lane(x, y, yaw + math.radians(heading_deg), [(L, mirror * k) for L, k in segments], shift)
-            if inside(cand):
+            if fits(cand, v):
                 pts = cand
                 break
     if pts is None:
@@ -198,6 +206,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--view", action="store_true")
     p.add_argument("--only", default="", help="comma-separated scenario indices")
+    p.add_argument("--tag", choices=("keep", "up", "down"), default="keep", help="lift axle position for the run")
     a = p.parse_args()
     out = sd.ROOT / "bridge" / "recordings" / time.strftime("lanetest-%Y%m%d-%H%M%S")
     out.mkdir(parents=True)
@@ -206,7 +215,9 @@ def main():
     log = (out / "lateral.jsonl").open("w")
     results = []
     chosen = [i for i in range(len(SCENARIOS)) if not a.only or str(i) in a.only.split(",")]
-    s.steps = [Step("launch at 18 km/h", "start", 8, lambda: sd.launch(s))]
+    s.steps = [] if a.tag == "keep" else [Step(f"lift axle {a.tag} at standstill", "start", 6,
+                                                lambda: sd.set_tag(s, a.tag == "down"))]
+    s.steps.append(Step("launch at 18 km/h", "start", 8, lambda: sd.launch(s)))
     for i in chosen:
         name, kmh, segs, shift, *rest = SCENARIOS[i]
         dyaw = rest[0] if rest else 0.0
@@ -225,7 +236,7 @@ def main():
         for i, step in enumerate(s.steps):
             s.index, s.step_start = i, time.monotonic()
             s.status(force=True)
-            step.run()
+            sd.run_with_rearm(s, step.run)
         s.index, s.state, s.message = len(s.steps), "done", "all scenarios finished"
     except Stop as e:
         s.state, s.message = "stopped", str(e)

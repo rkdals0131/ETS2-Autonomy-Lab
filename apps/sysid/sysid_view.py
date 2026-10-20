@@ -2,7 +2,7 @@
 
 Usage: py -3 sysid_view.py <run_dir>/status.json  (sysid_drive.py --view opens it in a new window)
 """
-import json, sys, time
+import ctypes, json, os, sys, threading, time
 from pathlib import Path
 from rich.console import Group
 from rich.live import Live
@@ -79,8 +79,38 @@ LINGER = {"done": 5, "stopped": 30}
 STALE_S = 20
 
 
+def no_quick_edit():
+    """A click into a console with QuickEdit starts a text selection that blocks every
+    write, which froze the viewer before it could close itself."""
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+    mode = ctypes.c_uint32()
+    if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+        kernel32.SetConsoleMode(handle, (mode.value & ~0x0040) | 0x0080)  # QUICK_EDIT off, EXTENDED_FLAGS on
+
+
+def watchdog(path):
+    """Close the window from a separate thread, even if a console write is blocked: after
+    the linger time once the run has ended, or when the status stops changing."""
+    def run():
+        start, ended = time.time(), None
+        while True:
+            st = load(path)
+            if st:
+                if st["state"] in LINGER:
+                    ended = ended or time.time() + LINGER[st["state"]] + 1
+                elif time.time() - st.get("updated", start) > STALE_S:
+                    ended = ended or time.time() + LINGER["stopped"] + 1
+            if ended and time.time() > ended:
+                os._exit(0)
+            time.sleep(0.5)
+    threading.Thread(target=run, daemon=True).start()
+
+
 def main():
+    no_quick_edit()
     path = sys.argv[1]
+    watchdog(path)
     st, start = None, time.time()
     with Live(Text("waiting for status.json ..."), refresh_per_second=8, screen=False) as live:
         while True:
