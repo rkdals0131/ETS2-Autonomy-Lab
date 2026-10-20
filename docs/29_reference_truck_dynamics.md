@@ -1,6 +1,6 @@
 # 29. 레퍼런스 트럭 동역학 식별
 
-2026-10-20, 프로필 ETS_SysID, 트레일러 없음, [시험장 패드](../bridge/testground_map/README.md), 사용자 평소 모드 구성(Realistic Truck Physics 포함). 주행 시나리오와 분석 스크립트는 [apps/sysid](../apps/sysid/README.md)에 있습니다.
+2026-10-20, 프로필 ETS_SysID, 트레일러 없음(마지막 "트레일러 연결" 절만 빈 트레일러 연결), [시험장 패드](../bridge/testground_map/README.md), 사용자 평소 모드 구성(Realistic Truck Physics 포함). 주행 시나리오와 분석 스크립트는 [apps/sysid](../apps/sysid/README.md)에 있습니다.
 
 ## 현재 레퍼런스: Scania S 6x2 태그리프트 + 리타더 (2026-10-20 오후)
 

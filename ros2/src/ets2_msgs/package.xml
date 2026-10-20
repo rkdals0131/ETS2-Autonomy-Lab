@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>ets2_msgs</name><version>0.3.0</version>
+  <name>ets2_msgs</name><version>0.4.0</version>
   <description>ETS2 sensor frame correspondence and SDK state.</description>
   <maintainer email="maintainers@example.invalid">ETS2 Autonomy Lab</maintainer>
   <license>MIT</license>

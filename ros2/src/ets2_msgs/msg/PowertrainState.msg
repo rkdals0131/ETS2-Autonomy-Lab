@@ -31,3 +31,4 @@ float64 gear_ratio                  # current gear, 0 in neutral
 float64 retarder_level              # 0 .. 1 of the retarder's full torque
 float64 engine_brake_level          # 0 .. 1
 float64[] wheel_brake_torque_nm     # per SDK wheel index; lifted wheels may report torque
+float64[] trailer_wheel_brake_torque_nm  # first trailer, per its SDK wheel index; empty without one

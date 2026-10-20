@@ -73,3 +73,9 @@ bash.exe.stackdump
 # research/savedec build output
 /research/savedec/bin/
 /research/savedec/obj/
+
+# Simulink longitudinal model: derived caches and build artifacts (scripts, .slx and result summaries are tracked)
+/apps/sysid/matlab/longitudinal/cache/
+slprj/
+*.slxc
+*.asv

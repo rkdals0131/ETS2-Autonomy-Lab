@@ -5,7 +5,7 @@
 
 namespace bridge {
 // ets2_msgs/package.xml version whose layouts the relay serializes (checked by tests/topics_test).
-inline constexpr std::string_view msgs_version="0.3.0";
+inline constexpr std::string_view msgs_version="0.4.0";
 // state: reliable, published from the SDK-frame path. latched: transient local.
 struct Topic {std::string name,type;bool state=false,latched=false;};
 inline std::vector<Topic> topics() {

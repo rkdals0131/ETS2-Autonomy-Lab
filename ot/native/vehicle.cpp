@@ -77,7 +77,8 @@ json read_world_traffic(const json& schema) {
 // the SDK does not publish. Found by correlating the vehicle's memory with SDK channels and
 // checked against physics (docs/30): the output torque through the final drive and wheel
 // radius explains the acceleration with the def rolling resistance and the truck's mass.
-json read_vehicle_drivetrain(uintptr_t actor,const json& schema,uint32_t wheels) {
+// The first trailer's wheel brake torques come from the trailer vehicle the truck points to.
+json read_vehicle_drivetrain(uintptr_t actor,const json& schema,uint32_t wheels,uint32_t trailer_wheels) {
     if(!schema.contains("vehicle_drivetrain")) return {{"available",false},{"reason","not_in_schema"}};
     const auto& s=schema.at("vehicle_drivetrain");
     const auto offset=[&](const char* name) {return s.at(name).get<uintptr_t>();};
@@ -110,6 +111,20 @@ json read_vehicle_drivetrain(uintptr_t actor,const json& schema,uint32_t wheels)
         torque.push_back(value);
     }
     result["wheel_brake_torque_nm"]=std::move(torque);
+    // The attached trailer is a vehicle of the same kind: same physics and brake layout.
+    json trailer_torque=json::array();
+    uintptr_t trailer{},trailer_physics{},trailer_brakes{};
+    if(trailer_wheels && s.contains("trailer_vehicle_offset") &&
+       read_memory(vehicle+offset("trailer_vehicle_offset"),trailer) && trailer &&
+       read_memory(trailer+offset("physics_offset"),trailer_physics) && trailer_physics &&
+       read_memory(trailer_physics+offset("wheel_brake_torque_pointer_offset"),trailer_brakes) && trailer_brakes) {
+        for(uint32_t i=0;i<std::min<uint32_t>(trailer_wheels,16);++i) {
+            float value{};
+            if(!read_memory(trailer_brakes+i*sizeof(float),value) || !std::isfinite(value) || std::abs(value)>1e7f) {trailer_torque=json::array();break;}
+            trailer_torque.push_back(value);
+        }
+    }
+    result["trailer_wheel_brake_torque_nm"]=std::move(trailer_torque);
     return result;
 }
 

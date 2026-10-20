@@ -140,6 +140,7 @@
     "wheel_brake_torque_pointer_offset": 608,
     "retarder_level_offset": 1000,
     "engine_brake_offset": 1008,
+    "trailer_vehicle_offset": 5544,
     "evidence": "research/live/2026-10-20-can-scan, research/live/2026-10-20-can-probe*; docs/30"
   },
   "vehicle_fields": {

@@ -120,7 +120,7 @@ private:
     scs_telemetry_init_params_v100_t api_;
     json schema_,config_=json::object(),values_=json::object(),registration_=json::object();
     std::atomic<std::shared_ptr<const json>> truck_config_;
-    std::atomic<uint32_t> wheel_count_{0};
+    std::atomic<uint32_t> wheel_count_{0},trailer_wheel_count_{0};
     std::atomic<std::shared_ptr<const json>> registered_;
     std::string executable_hash_,gate_error_;
     bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,allow_camera_rig_=false,allow_parallel_passes_=false,paused_=true;
@@ -314,7 +314,10 @@ void Runtime::event(scs_event_t event,const void* data) {
                 attributes.push_back({{"name",attribute->name},{"index",attribute->index==SCS_U32_NIL?json(nullptr):json(attribute->index)},
                     {"value",std::move(decoded)}});
             }
-            if(id=="trailer.0") register_wheels(id,wheel_count,schema_.value("sdk_trailer_wheel_fields",json::array()));
+            if(id=="trailer.0") {
+                register_wheels(id,wheel_count,schema_.value("sdk_trailer_wheel_fields",json::array()));
+                trailer_wheel_count_=wheel_count;
+            }
             configs_store_[id]={{"truck_generation",generation_},{"attributes",std::move(attributes)}};
             configs_.store(std::make_shared<const json>(configs_store_));
         }
@@ -374,7 +377,7 @@ json Runtime::engine_snapshot() {
        !read_memory(controller+schema_.at("player_offset").get<uintptr_t>(),actor) || !actor)
         return {{"available",false},{"reason","player_unavailable"}};
     json engine={{"available",true},{"phase","sdk_frame_end_before_render_preparation"},
-        {"vehicle",read_vehicle_physics(actor,schema_)},{"drivetrain",read_vehicle_drivetrain(actor,schema_,wheel_count_)},
+        {"vehicle",read_vehicle_physics(actor,schema_)},{"drivetrain",read_vehicle_drivetrain(actor,schema_,wheel_count_,trailer_wheel_count_)},
         {"mirrors",json::array()}};
     if(observe_traffic_) engine["traffic"]=read_world_traffic(schema_);
     ArrayHeader array{};
