@@ -9,6 +9,9 @@
 struct DrivingParameters {
     bool arm=false,acc_enabled=true,lcc_enabled=true,relative_steering=true;
     std::string path_file;
+    // "mpc": generated model-predictive ACC (acc_mpc.hpp) with the retarder; "pid": the
+    // earlier speed PID with a gap-to-speed lead rule.
+    std::string longitudinal="mpc";
     double target_speed_mps=0,steering_target=0;
     // Relative-steering inner loop (virtual_eps.hpp) and lane feedforward (lateral_controller.hpp).
     // The steering rate and self-centering are a measured speed table inside VirtualEps.
@@ -19,7 +22,11 @@ struct DrivingParameters {
     // 20-80 km/h (0.7087 at standstill, linear, residual <0.004 rad).
     double lookahead_m=6,lookahead_time_s=.7,steering_angle_per_unit_rad=.70;
     double lateral_acceleration_mps2=1.5,stopping_deceleration_mps2=1.5;
-    double following_time_s=1.5,standstill_gap_m=5,following_gain=.5;
+    // following_time_s 2.0 is the time gap the MPC was tuned for; its standstill gap is 5 m
+    // bumper to bumper, built into the controller (standstill_gap_m is the PID's).
+    double following_time_s=2,standstill_gap_m=5,following_gain=.5;
+    // Front axle to front bumper; not measured, Scania S cab estimate.
+    double front_overhang_m=1.5;
     uint8_t axes() const {return (lcc_enabled?1:0)|(acc_enabled?2:0);}
 };
 
@@ -50,6 +57,7 @@ inline constexpr std::array driving_double_parameters{
     DrivingDoubleParameter{"following_time_s",&DrivingParameters::following_time_s},
     DrivingDoubleParameter{"standstill_gap_m",&DrivingParameters::standstill_gap_m},
     DrivingDoubleParameter{"following_gain",&DrivingParameters::following_gain},
+    DrivingDoubleParameter{"front_overhang_m",&DrivingParameters::front_overhang_m},
 };
 inline DrivingParameters declare_driving_parameters(rclcpp::Node& node) {
     DrivingParameters result;
@@ -58,10 +66,12 @@ inline DrivingParameters declare_driving_parameters(rclcpp::Node& node) {
     result.lcc_enabled=node.declare_parameter("lcc_enabled",result.lcc_enabled);
     result.relative_steering=node.declare_parameter("relative_steering",result.relative_steering);
     result.path_file=node.declare_parameter("path_file",result.path_file);
+    result.longitudinal=node.declare_parameter("longitudinal",result.longitudinal);
     for(const auto& p:driving_double_parameters) result.*p.value=node.declare_parameter(p.name,result.*p.value);
     return result;
 }
 inline bool valid_driving_parameters(const DrivingParameters& values) {
+    if(values.longitudinal!="mpc" && values.longitudinal!="pid") return false;
     for(const auto& p:driving_double_parameters) if(!p.accepts(values.*p.value)) return false;
     return true;
 }
@@ -69,7 +79,7 @@ inline rcl_interfaces::msg::SetParametersResult check_driving_parameter_changes(
     rcl_interfaces::msg::SetParametersResult result;result.successful=true;
     for(const auto& p:changes) {
         const auto& name=p.get_name();
-        if(name=="arm" || name=="relative_steering" || name=="path_file") {
+        if(name=="arm" || name=="relative_steering" || name=="path_file" || name=="longitudinal") {
             result.successful=false;result.reason="Input mode and arm are startup options; restart explicitly";break;
         }
         if(name=="acc_enabled" || name=="lcc_enabled") {

@@ -9,6 +9,8 @@
 #include "control/parameters.hpp"
 #include "control/kinematic_axles.hpp"
 #include "control/lead_tracker.hpp"
+#include "control/acc_mpc.hpp"
+#include <ets2_msgs/msg/actuation_state.hpp>
 #include <ets2_msgs/msg/wheel_state.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <algorithm>
@@ -48,11 +50,16 @@ int main(int argc,char** argv) {
     const auto owner=controller_owner("speed");
     ets2_msgs::msg::DriveState::SharedPtr drive;
     ets2_msgs::msg::VehicleState::SharedPtr vehicle;
-    Clock::time_point drive_time{},vehicle_time{};
+    ets2_msgs::msg::ActuationState::SharedPtr actuation;
+    Clock::time_point drive_time{},vehicle_time{},actuation_time{};
     auto ds=node->create_subscription<ets2_msgs::msg::DriveState>("/ets2/drive/state",rclcpp::QoS(1),
         [&](ets2_msgs::msg::DriveState::SharedPtr value){drive=std::move(value);drive_time=Clock::now();});
     auto vs=node->create_subscription<ets2_msgs::msg::VehicleState>("/ets2/vehicle/state",rclcpp::QoS(1),
         [&](ets2_msgs::msg::VehicleState::SharedPtr value){vehicle=std::move(value);vehicle_time=Clock::now();});
+    // The MPC's allocator uses the engine gear (throttle map, shift freeze).
+    auto as=node->create_subscription<ets2_msgs::msg::ActuationState>("/ets2/vehicle/actuation",rclcpp::QoS(1),
+        [&](ets2_msgs::msg::ActuationState::SharedPtr value){actuation=std::move(value);actuation_time=Clock::now();});
+    const bool mpc=initial.longitudinal=="mpc";
     // ego pose is base_link (drive axle); the controller's rear point and wheelbase follow
     // the grounded axles (kinematic_axles.hpp), so a lowered lift axle moves them.
     double ego_x=0,ego_y=0,ego_yaw=0,front_axle=0;bool pose_received=false,traffic_received=false,wheels_received=false,liftable=false;
@@ -104,7 +111,10 @@ int main(int argc,char** argv) {
     auto publisher=node->create_publisher<ets2_msgs::msg::DriveCommand>("/ets2/drive/command",rclcpp::QoS(1).best_effort());
     auto service=node->create_client<ets2_msgs::srv::DriveControl>("/ets2/drive/control");
     uint64_t epoch=0,sequence=0;int result=0;
-    const auto axes=[&]() {return configuration.load()->axes();};
+    // With loader 0.42+ the MPC also owns the retarder and engine brake (axes bit 4, only
+    // together with the pedals); otherwise its retarder steps are folded into the brake.
+    bool auxiliary=false;
+    const auto axes=[&]() {const auto a=configuration.load()->axes();return uint8_t(a|(auxiliary && (a&2)?4:0));};
     const auto control=[&](bool enabled) {epoch=request_drive_control(node,service,owner,enabled,epoch,enabled?axes():0);};
     try {
         const auto until=Clock::now()+10s;
@@ -116,6 +126,8 @@ int main(int argc,char** argv) {
         if(!drive->available || !drive->permitted || !drive->profile_supported || vehicle->paused) throw std::runtime_error("Game input is unavailable or paused");
         if(!axes()) throw std::runtime_error("Enable ACC or LCC explicitly before starting");
         if(axes()!=3 && !drive->independent_axes) throw std::runtime_error("Independent ACC/LCC requires the updated loader; restart the game");
+        auxiliary=mpc && drive->auxiliary_brakes;
+        if(mpc) std::cout<<"Longitudinal: MPC, retarder "<<(auxiliary?"owned":"folded into the brake (loader < 0.42)")<<std::endl;
         control(true);
         const auto first_window_until=Clock::now()+150ms;
         while(!stopped() && Clock::now()<first_window_until && !(drive->armed && drive->owner==owner && drive->epoch==epoch)) {
@@ -124,7 +136,8 @@ int main(int argc,char** argv) {
         std::cout<<"Driving armed; owner="<<owner<<", epoch="<<epoch<<". Ctrl+C releases control."<<std::endl;
         auto report=Clock::now(),previous=report;double speed_integral=0,previous_speed=vehicle->speed_mps;
         VirtualEps eps;
-        LeadTracker leads;const auto started=Clock::now();
+        LeadTracker leads;AccMpc acc_mpc;const auto started=Clock::now();
+        constexpr uint64_t lane_end_id=std::numeric_limits<uint64_t>::max();
         // Fixed 50 Hz schedule: sleep_until the next 20 ms deadline keeps the mean
         // period at 20 ms even with Windows' coarse sleep granularity; after an
         // overrun the schedule restarts from now instead of bursting to catch up.
@@ -132,7 +145,7 @@ int main(int argc,char** argv) {
             rclcpp::spin_some(node);const auto now=Clock::now();
             if(!drive->armed || drive->owner!=owner || drive->epoch!=epoch) throw std::runtime_error("Driving released: "+drive->reason);
             const auto settings=configuration.load();
-            const auto enabled_axes=settings->axes();
+            const auto enabled_axes=axes();
             if(!enabled_axes) {std::cout<<"ACC and LCC disabled; releasing control"<<std::endl;break;}
             const bool acc=enabled_axes&2,lcc=enabled_axes&1;
             if(!acc) speed_integral=0;
@@ -144,20 +157,27 @@ int main(int argc,char** argv) {
             auto steering_target=settings->steering_target;double steering_rate=0;
             double path_error=0,path_offset=0,remaining=0,lead_gap=std::numeric_limits<double>::infinity();
             std::optional<uint64_t> lead_id;double lead_speed=0;
+            // MPC lead: bumper-to-bumper gap; front_offset is the gap reference point to the front bumper.
+            double front_offset=front_axle+settings->front_overhang_m,cruise_target=speed_target;
             if(lane) {
                 if(now-pose_time>200ms || now-traffic_time>200ms) throw std::runtime_error("Current GT path/traffic observation is unavailable");
                 const auto axles=kinematic_axles(axle_wheels,grounded);
                 const auto rear_x=ego_x+axles.rear_x*std::cos(ego_yaw),rear_y=ego_y+axles.rear_x*std::sin(ego_yaw);
                 const auto goal=LateralController::update(*lane,rear_x,rear_y,ego_yaw,vehicle->speed_mps,axles.wheelbase(),lateral_settings(*settings));
                 path_error=goal.distance;path_offset=goal.offset;remaining=goal.remaining;
+                if(lcc) front_offset-=axles.rear_x; // lane distances are from the rear point
                 if(lcc) {
                     steering_target=std::clamp(goal.wheel_angle/settings->steering_angle_per_unit_rad,-1.0,1.0);
                     steering_rate=goal.wheel_rate/settings->steering_angle_per_unit_rad;
                     if(path_error>lane->width/2) throw std::runtime_error("LCC lane reference lost; releasing assistance");
                     if(acc) {
                         // Baseline curve speed limit, on the pure pursuit curvature as before.
-                        speed_target=std::min(speed_target,std::sqrt(2*settings->stopping_deceleration_mps2*std::max(0.0,remaining-1)));
                         if(std::abs(goal.pursuit_curvature)>0) speed_target=std::min(speed_target,std::sqrt(settings->lateral_acceleration_mps2/std::abs(goal.pursuit_curvature)));
+                        cruise_target=speed_target;
+                        // The PID stops at the lane end on a speed ramp; the MPC sees a stopped car
+                        // there, placed so its 5 m standstill gap leaves the rear point 1 m short.
+                        if(mpc) {lead_gap=remaining+4;lead_id=lane_end_id;lead_speed=0;}
+                        else speed_target=std::min(speed_target,std::sqrt(2*settings->stopping_deceleration_mps2*std::max(0.0,remaining-1)));
                     }
                 }
                 for(const auto& actor:actors) {
@@ -175,11 +195,15 @@ int main(int argc,char** argv) {
                     }
                     if(!acc || ahead<=0 || lateral>(lane->width+actor.width)/2 || std::cos(actor.yaw-heading)<=0) continue;
                     const auto gap=ahead-actor.length/2;
-                    const auto desired=front_axle+settings->standstill_gap_m+std::max(0.0,vehicle->speed_mps)*settings->following_time_s;
-                    speed_target=std::min(speed_target,std::max(0.0,actor.speed+settings->following_gain*(gap-desired)));
-                    if(gap<lead_gap) {lead_gap=gap;lead_id=actor.id;lead_speed=actor.speed;}
+                    if(!mpc) {
+                        const auto desired=front_axle+settings->standstill_gap_m+std::max(0.0,vehicle->speed_mps)*settings->following_time_s;
+                        speed_target=std::min(speed_target,std::max(0.0,actor.speed+settings->following_gain*(gap-desired)));
+                    }
+                    const auto bumper_gap=mpc?gap-front_offset:gap;
+                    if(bumper_gap<lead_gap) {lead_gap=bumper_gap;lead_id=actor.id;lead_speed=actor.speed;}
                 }
-                if(lcc && remaining<=1 && (!acc || std::abs(vehicle->speed_mps)<0.1)) {std::cout<<"Lane reference ended; releasing control"<<std::endl;break;}
+                const bool lane_end_hold=mpc && acc && lead_id==lane_end_id && acc_mpc.output().mode==AccMpc::Hold;
+                if(lcc && (lane_end_hold || (remaining<=1 && (!acc || (!mpc && std::abs(vehicle->speed_mps)<0.1))))) {std::cout<<"Lane reference ended; releasing control"<<std::endl;break;}
             }
             const auto lead=leads.update(lead_id,lead_gap,lead_speed,std::chrono::duration<double>(now-started).count(),{});
             const auto error=speed_target-vehicle->speed_mps;
@@ -200,11 +224,28 @@ int main(int argc,char** argv) {
             const auto effort=std::clamp(speed_kp*error+speed_integral+derivative,-1.0,1.0);
             previous=now;previous_speed=vehicle->speed_mps;
             command.throttle=acc?std::max(0.0,effort):0;command.brake=acc?std::max(0.0,-effort):0;
+            if(mpc) {
+                AccMpc::Input in;
+                in.enable=acc;in.set_speed_mps=cruise_target;in.time_gap_s=settings->following_time_s;
+                in.ego_speed_mps=vehicle->speed_mps;in.ego_accel_mps2=vehicle->acceleration_base_mps2[0];
+                in.lead_valid=lead.valid;in.lead_gap_m=lead.gap_m;in.lead_speed_mps=lead.speed_mps;in.lead_accel_mps2=lead.accel_mps2;
+                // Resume from HOLD: the driver taps the accelerator.
+                in.resume=std::isfinite(drive->throttle_manual) && drive->throttle_manual>.2;
+                in.engine_rpm=vehicle->engine_rpm;
+                in.gear=actuation && now-actuation_time<=200ms && actuation->engine_gear_available?actuation->engine_gear:0;
+                const auto& out=acc_mpc.update(in,std::chrono::duration<double>(now-started).count());
+                command.throttle=acc?out.throttle:0;
+                if(enabled_axes&4) {command.brake=acc?out.brake:0;command.retarder_step=acc?out.retarder_step:0;command.engine_brake=acc && out.engine_brake;}
+                else command.brake=acc?AccMpc::folded_brake(out):0;
+            }
             publisher->publish(command);
             if(now>=report) {
                 std::cout<<"speed="<<vehicle->speed_mps<<" target="<<speed_target<<" path_error="<<path_error<<" path_offset="<<path_offset<<" remaining="<<remaining<<" lead_gap="<<lead_gap<<" lead_accel="<<lead.accel_mps2
                     <<" steering_target="<<steering_target<<" steering_applied="<<drive->steering_applied<<" steering_input="<<command.steering<<" throttle="<<command.throttle<<" brake="<<command.brake
-                    <<" axes="<<unsigned(drive->axes)<<" accepted_sequence="<<drive->sequence<<std::endl;
+                    <<" axes="<<unsigned(drive->axes)<<" accepted_sequence="<<drive->sequence;
+                if(mpc) std::cout<<" acc_mode="<<unsigned(acc_mpc.output().mode)<<" a_des="<<acc_mpc.output().a_des_mps2
+                    <<" retarder="<<int(command.retarder_step)<<" engine_brake="<<command.engine_brake<<" lead="<<(!lead.valid?"none":lead.id==lane_end_id?"lane_end":std::to_string(lead.id));
+                std::cout<<std::endl;
                 report=now+1s;
             }
             next+=20ms;

@@ -15,6 +15,7 @@ def generate_launch_description():
         "acc_enabled": ("true", bool, "Own the throttle/brake axes"),
         "lcc_enabled": ("true", bool, "Own the steering axis"),
         "path_file": ("", str, "World-frame lane JSON from map_lane_provider"),
+        "longitudinal": ("mpc", str, "mpc: generated model-predictive ACC with the retarder; pid: the earlier speed PID"),
         "target_speed_mps": ("0.0", float, "Target speed in metres per second"),
         "steering_target": ("0.0", float, "Applied steering target when path_file is empty"),
     }
