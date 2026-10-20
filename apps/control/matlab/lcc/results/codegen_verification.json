@@ -1,0 +1,106 @@
+{
+  "scenarios": [
+    {
+      "name": "R400_80_trailer",
+      "samples": 3289,
+      "max_abs_diff_closedloop_vs_normal": [
+        8.5890496104301661E-14,
+        2.9459101716193536E-12,
+        0
+      ],
+      "max_abs_diff_normal_vs_sil": [
+        2.752399003158601E-13,
+        8.5660244793560584E-12,
+        0
+      ],
+      "outputs": [
+        "wheel_angle_cmd_rad",
+        "wheel_rate_cmd_rad_s",
+        "status"
+      ],
+      "step_time_us": {
+        "section": "step [0.02 0]",
+        "mean_us": 2998.78023715415,
+        "max_us": 4565.6,
+        "calls": 3289
+      }
+    },
+    {
+      "name": "S300_80_trailer",
+      "samples": 3643,
+      "max_abs_diff_closedloop_vs_normal": [
+        1.4355530653098469E-13,
+        5.7884808057906412E-12,
+        0
+      ],
+      "max_abs_diff_normal_vs_sil": [
+        6.1974817638921209E-13,
+        1.5214982052036419E-11,
+        0
+      ],
+      "outputs": [
+        "wheel_angle_cmd_rad",
+        "wheel_rate_cmd_rad_s",
+        "status"
+      ],
+      "step_time_us": {
+        "section": "step [0.02 0]",
+        "mean_us": 3382.009360417238,
+        "max_us": 25658.7,
+        "calls": 3643
+      }
+    },
+    {
+      "name": "offset3m_60_truck",
+      "samples": 2266,
+      "max_abs_diff_closedloop_vs_normal": [
+        2.6020832170995132E-21,
+        6.5052129702895412E-20,
+        0
+      ],
+      "max_abs_diff_normal_vs_sil": [
+        1.8055210104783725E-12,
+        1.2355107215089589E-10,
+        0
+      ],
+      "outputs": [
+        "wheel_angle_cmd_rad",
+        "wheel_rate_cmd_rad_s",
+        "status"
+      ],
+      "step_time_us": {
+        "section": "step [0.02 0]",
+        "mean_us": 3076.9906884377756,
+        "max_us": 5002.5,
+        "calls": 2266
+      }
+    },
+    {
+      "name": "R40_15_trailer",
+      "samples": 2734,
+      "max_abs_diff_closedloop_vs_normal": [
+        2.4841240175987878E-15,
+        6.16013316745434E-14,
+        0
+      ],
+      "max_abs_diff_normal_vs_sil": [
+        3.5971225997855072E-14,
+        1.6039947148271949E-13,
+        0
+      ],
+      "outputs": [
+        "wheel_angle_cmd_rad",
+        "wheel_rate_cmd_rad_s",
+        "status"
+      ],
+      "step_time_us": {
+        "section": "step [0.02 0]",
+        "mean_us": 3218.2314191660571,
+        "max_us": 4894.8,
+        "calls": 2734
+      }
+    }
+  ],
+  "tolerance": 1E-9,
+  "pass": true
+}

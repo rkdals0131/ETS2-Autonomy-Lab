@@ -12,6 +12,9 @@ struct DrivingParameters {
     // "mpc": generated model-predictive ACC (acc_mpc.hpp) with the retarder; "pid": the
     // earlier speed PID with a gap-to-speed lead rule.
     std::string longitudinal="mpc";
+    // "mpc": generated model-predictive lane centering (lcc_mpc.hpp) with the trailer;
+    // "pp": the linearized pure pursuit with curvature feedforward (lateral_controller.hpp).
+    std::string lateral="mpc";
     double target_speed_mps=0,steering_target=0;
     // Relative-steering inner loop (virtual_eps.hpp) and lane feedforward (lateral_controller.hpp).
     // The steering rate and self-centering are a measured speed table inside VirtualEps.
@@ -67,11 +70,13 @@ inline DrivingParameters declare_driving_parameters(rclcpp::Node& node) {
     result.relative_steering=node.declare_parameter("relative_steering",result.relative_steering);
     result.path_file=node.declare_parameter("path_file",result.path_file);
     result.longitudinal=node.declare_parameter("longitudinal",result.longitudinal);
+    result.lateral=node.declare_parameter("lateral",result.lateral);
     for(const auto& p:driving_double_parameters) result.*p.value=node.declare_parameter(p.name,result.*p.value);
     return result;
 }
 inline bool valid_driving_parameters(const DrivingParameters& values) {
     if(values.longitudinal!="mpc" && values.longitudinal!="pid") return false;
+    if(values.lateral!="mpc" && values.lateral!="pp") return false;
     for(const auto& p:driving_double_parameters) if(!p.accepts(values.*p.value)) return false;
     return true;
 }
@@ -79,7 +84,7 @@ inline rcl_interfaces::msg::SetParametersResult check_driving_parameter_changes(
     rcl_interfaces::msg::SetParametersResult result;result.successful=true;
     for(const auto& p:changes) {
         const auto& name=p.get_name();
-        if(name=="arm" || name=="relative_steering" || name=="path_file" || name=="longitudinal") {
+        if(name=="arm" || name=="relative_steering" || name=="path_file" || name=="longitudinal" || name=="lateral") {
             result.successful=false;result.reason="Input mode and arm are startup options; restart explicitly";break;
         }
         if(name=="acc_enabled" || name=="lcc_enabled") {

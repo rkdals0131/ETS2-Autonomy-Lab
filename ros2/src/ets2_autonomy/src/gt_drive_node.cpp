@@ -10,6 +10,7 @@
 #include "control/kinematic_axles.hpp"
 #include "control/lead_tracker.hpp"
 #include "control/acc_mpc.hpp"
+#include "control/lcc_mpc.hpp"
 #include <ets2_msgs/msg/actuation_state.hpp>
 #include <ets2_msgs/msg/wheel_state.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
@@ -17,6 +18,7 @@
 #include <atomic>
 #include <cmath>
 #include <iostream>
+#include <numbers>
 #include <optional>
 #include <thread>
 
@@ -59,7 +61,7 @@ int main(int argc,char** argv) {
     // The MPC's allocator uses the engine gear (throttle map, shift freeze).
     auto as=node->create_subscription<ets2_msgs::msg::ActuationState>("/ets2/vehicle/actuation",rclcpp::QoS(1),
         [&](ets2_msgs::msg::ActuationState::SharedPtr value){actuation=std::move(value);actuation_time=Clock::now();});
-    const bool mpc=initial.longitudinal=="mpc";
+    const bool mpc=initial.longitudinal=="mpc",lateral_mpc=initial.lateral=="mpc";
     // ego pose is base_link (drive axle); the controller's rear point and wheelbase follow
     // the grounded axles (kinematic_axles.hpp), so a lowered lift axle moves them.
     double ego_x=0,ego_y=0,ego_yaw=0,front_axle=0;bool pose_received=false,traffic_received=false,wheels_received=false,liftable=false;
@@ -70,6 +72,9 @@ int main(int argc,char** argv) {
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr config;
     rclcpp::Subscription<ets2_msgs::msg::WheelState>::SharedPtr ws;
     rclcpp::Subscription<ets2_msgs::msg::TrafficState>::SharedPtr ts;
+    // Connected trailer (relay: SDK placement, only while connected) for the MPC's hitch angle.
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr trs;
+    double trailer_yaw=0;Clock::time_point trailer_time{};
     if(lane) {
         ps=node->create_subscription<geometry_msgs::msg::PoseStamped>("/ets2/ground_truth/ego/pose",rclcpp::QoS(1),[&](geometry_msgs::msg::PoseStamped::SharedPtr msg) {
             const auto& p=msg->pose.position;const auto& q=msg->pose.orientation;
@@ -89,6 +94,11 @@ int main(int argc,char** argv) {
             if(!std::isfinite(front) || front<=0) throw std::runtime_error("Current truck steering axle geometry is unavailable");
             front_axle=front;axle_wheels=std::move(wheels);
             liftable=std::any_of(axle_wheels.begin(),axle_wheels.end(),[](const auto& w){return w.second.liftable;});
+        });
+        trs=node->create_subscription<geometry_msgs::msg::PoseStamped>("/ets2/ground_truth/trailer/pose",rclcpp::QoS(1),[&](geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+            const auto& q=msg->pose.orientation;
+            if(msg->header.frame_id!="world" || !std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z) || !std::isfinite(q.w)) throw std::runtime_error("Invalid GT trailer pose");
+            trailer_yaw=std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z));trailer_time=Clock::now();
         });
         ws=node->create_subscription<ets2_msgs::msg::WheelState>("/ets2/wheels/state",rclcpp::QoS(1),[&](ets2_msgs::msg::WheelState::SharedPtr msg) {
             if(msg->index.size()!=msg->on_ground.size()) throw std::runtime_error("Misaligned wheel state arrays");
@@ -139,7 +149,8 @@ int main(int argc,char** argv) {
         std::cout<<"Driving armed; owner="<<owner<<", epoch="<<epoch<<". Ctrl+C releases control."<<std::endl;
         auto report=Clock::now(),previous=report;double speed_integral=0,previous_speed=vehicle->speed_mps;
         VirtualEps eps;
-        LeadTracker leads;AccMpc acc_mpc;const auto started=Clock::now();
+        LeadTracker leads;AccMpc acc_mpc;LccMpc lcc_mpc;const auto started=Clock::now();
+        if(lane) std::cout<<"Lateral: "<<(lateral_mpc?"MPC":"pure pursuit")<<std::endl;
         uint64_t pedal_sequence=0;Clock::time_point driver_steering_until{};
         constexpr uint64_t lane_end_id=std::numeric_limits<uint64_t>::max();
         // Fixed 50 Hz schedule: sleep_until the next 20 ms deadline keeps the mean
@@ -187,9 +198,23 @@ int main(int argc,char** argv) {
                     std::cout<<"LCC lane reference lost; steering back to the driver, ACC continues"<<std::endl;
                 }
                 if(lcc) front_offset-=axles.rear_x; // lane distances are from the rear point
+                double wheel_angle=goal.wheel_angle,wheel_rate=goal.wheel_rate;
+                if(lateral_mpc) {
+                    LccMpc::Input in;
+                    in.enable=lcc && !driver_steering;in.speed_mps=vehicle->speed_mps;
+                    in.lateral_error_m=goal.offset;in.heading_error_rad=goal.heading_error;
+                    for(int i=0;i<LccMpc::preview_points;++i) in.curvature_preview[i]=lane->curvature(goal.s+i*LccMpc::preview_step_m,settings->curvature_window_m);
+                    in.wheel_angle_rad=settings->steering_angle_per_unit_rad*(std::isfinite(drive->steering_applied)?drive->steering_applied:0);
+                    in.wheelbase_m=axles.wheelbase();
+                    in.trailer_connected=now-trailer_time<=200ms;
+                    in.hitch_angle_rad=std::remainder(ego_yaw-trailer_yaw,2*std::numbers::pi);
+                    const auto& out=lcc_mpc.update(in);
+                    // Status 4 (inputs out of range): the baseline steers this frame.
+                    if(in.enable && out.status!=LccMpc::BadInput) {wheel_angle=out.wheel_angle_rad;wheel_rate=out.wheel_rate_rad_s;}
+                }
                 if(lcc) {
-                    steering_target=std::clamp(goal.wheel_angle/settings->steering_angle_per_unit_rad,-1.0,1.0);
-                    steering_rate=goal.wheel_rate/settings->steering_angle_per_unit_rad;
+                    steering_target=std::clamp(wheel_angle/settings->steering_angle_per_unit_rad,-1.0,1.0);
+                    steering_rate=wheel_rate/settings->steering_angle_per_unit_rad;
                     if(acc) {
                         // Baseline curve speed limit, on the pure pursuit curvature as before.
                         if(std::abs(goal.pursuit_curvature)>0) speed_target=std::min(speed_target,std::sqrt(settings->lateral_acceleration_mps2/std::abs(goal.pursuit_curvature)));
@@ -265,6 +290,8 @@ int main(int argc,char** argv) {
                     <<" steering_target="<<steering_target<<" steering_applied="<<drive->steering_applied<<" steering_input="<<command.steering<<" throttle="<<command.throttle<<" brake="<<command.brake
                     <<" axes="<<unsigned(drive->axes)<<" accepted_sequence="<<drive->sequence
                     <<" driver_throttle="<<drive->throttle_manual<<" driver_steering="<<drive->steering_manual<<(driver_steering?" (LCC yields)":"");
+                if(lane && lateral_mpc) std::cout<<" lcc_status="<<unsigned(lcc_mpc.output().status)<<" trailer="<<(now-trailer_time<=200ms)
+                    <<" hitch="<<std::remainder(ego_yaw-trailer_yaw,2*std::numbers::pi);
                 if(mpc) std::cout<<" acc_mode="<<unsigned(acc_mpc.output().mode)<<" a_des="<<acc_mpc.output().a_des_mps2
                     <<" retarder="<<int(command.retarder_step)<<" engine_brake="<<command.engine_brake<<" lead="<<(!lead.valid?"none":lead.id==lane_end_id?"lane_end":std::to_string(lead.id));
                 std::cout<<std::endl;

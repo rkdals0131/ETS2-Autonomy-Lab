@@ -1,5 +1,7 @@
 #include "ros_cdr.hpp"
 #include "telemetry.hpp"
+#include <cmath>
+#include <numbers>
 
 namespace bridge {
 void add_sensor_configuration(Packet& packet,const json& configuration) {
@@ -112,6 +114,21 @@ Packet state_messages(const json& state,const std::string& session,const V& base
             c<<static_cast<uint8_t>(drive.value("axes",drive.at("armed").get<bool>()?3u:0u))<<drive.value("independent_axes",false);
             c<<drive.value("auxiliary_brakes",false)<<static_cast<int8_t>(drive.value("retarder",-1))<<drive.value("engine_brake",false);
         });
+    }
+    if(state.contains("sdk")) {
+        // Connected trailer's SDK placement (its origin, yaw only) for the LCC's hitch angle.
+        // SDK heading is turns counterclockwise from SCS -Z; ROS world yaw = 2*pi*h + pi/2.
+        const auto& sdk=state.at("sdk");
+        const auto value=[&](const char* key)->const json* {
+            return sdk.contains(key) && sdk.at(key).value("available",false) && !sdk.at(key).at("value").is_null()?&sdk.at(key).at("value"):nullptr;
+        };
+        const auto* connected=value("trailer.0.connected");const auto* placement=value("trailer.0.world.placement");
+        if(connected && connected->is_boolean() && connected->get<bool>() && placement) {
+            const auto position=placement->at("position_m").get<V>();
+            const auto yaw=placement->at("euler_rotations").at(0).get<double>()*2*std::numbers::pi+std::numbers::pi/2;
+            const V world{position[0],-position[2],position[1]};const Q q{0,0,std::sin(yaw/2),std::cos(yaw/2)};
+            append_cdr(packet,"/ets2/ground_truth/trailer/pose",256,[&](Cdr& c){header(c,us,"world");pose(c,world,q);});
+        }
     }
     if(state.contains("engine") && state["engine"].contains("vehicle") && state["engine"]["vehicle"].value("available",false)) {
         const auto& p=state["engine"]["vehicle"]["pose_physics"];

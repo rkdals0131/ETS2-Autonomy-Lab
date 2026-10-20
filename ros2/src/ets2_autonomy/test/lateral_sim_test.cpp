@@ -8,6 +8,7 @@
 #include "control/lateral_controller.hpp"
 #include "control/virtual_eps.hpp"
 #include "control/kinematic_axles.hpp"
+#include "control/lcc_mpc.hpp"
 #include <gtest/gtest.h>
 #include <array>
 #include <cmath>
@@ -78,6 +79,20 @@ Controller current(VirtualEps::Settings eps_settings={},LateralController::Setti
     };
 }
 
+// The generated MPC as drive_speed wires it: lane errors and curvature preview from the
+// LanePath, measured wheel angle from the applied steering, VirtualEps for the input. No
+// trailer: the plant here is the measured truck-alone steering.
+Controller lateral_mpc() {
+    return [mpc=std::make_shared<LccMpc>(),eps=VirtualEps{}](LanePath& lane,double x,double y,double yaw,double v,double applied) mutable {
+        const auto goal=LateralController::update(lane,x,y,yaw,v,wheelbase,{});
+        LccMpc::Input in;in.enable=true;in.speed_mps=v;in.lateral_error_m=goal.offset;in.heading_error_rad=goal.heading_error;
+        for(int i=0;i<LccMpc::preview_points;++i) in.curvature_preview[i]=lane.curvature(goal.s+i*LccMpc::preview_step_m,6);
+        in.wheel_angle_rad=angle_per_unit*applied;in.wheelbase_m=wheelbase;
+        const auto& out=mpc->update(in);
+        EXPECT_NE(out.status,LccMpc::BadInput);
+        return eps.command(std::clamp(out.wheel_angle_rad/angle_per_unit,-1.0,1.0),out.wheel_rate_rad_s/angle_per_unit,applied,v,control_dt,{});
+    };
+}
 // rolling: like map_lane_provider --follow, the controller's lane starts with the first
 // 1000 m and is extended to 1000 m ahead of the vehicle whenever less than 600 m remain.
 Metrics simulate(const Scenario& scenario,Controller controller,bool rolling=false) {
@@ -311,6 +326,21 @@ TEST(LateralSim,RecordedLane) {
 
 // Scania S 6x2 tag lift, SDK wheel positions in base_link (drive axle): front axle
 // 3.158 m ahead, tag axle 1.295 m behind (docs/29).
+// The MPC on the same measured steering plant: offsets, a constant radius and an S-curve.
+TEST(LateralSim,ModelPredictive) {
+    for(const double speed:{60/3.6,80/3.6,100/3.6}) {
+        const auto [old,now]=compare({"MPC straight 1 m offset "+speed_name(speed),PathBuilder{}.add(speed*40+200,0).points,speed,1,40,20},lateral_mpc());
+        EXPECT_LT(now.overshoot,.08);EXPECT_LT(now.settled_offset,.01);
+    }
+    for(const double speed:{60/3.6,80/3.6}) {
+        const auto [old,now]=compare(arc(400,speed),lateral_mpc());
+        EXPECT_LT(now.settled_offset,.01);EXPECT_LT(now.max_offset,.03);
+    }
+    const auto speed=80/3.6;
+    const auto [old,now]=compare({"MPC S-curve R300 "+speed_name(speed),PathBuilder{}.add(100,0).add(250,1/300.0).add(250,-1/300.0).add(speed*60,0).points,speed,0,(600+speed*30)/speed,0},lateral_mpc());
+    EXPECT_LT(now.max_offset,.04);
+}
+
 TEST(KinematicAxles,TagAxleMovesTheRearPoint) {
     const std::map<uint32_t,AxleWheel> wheels{{0,{3.158,true,false}},{1,{3.158,true,false}},{2,{0,false,false}},
                                               {3,{0,false,false}},{4,{-1.295,false,true}},{5,{-1.295,false,true}}};

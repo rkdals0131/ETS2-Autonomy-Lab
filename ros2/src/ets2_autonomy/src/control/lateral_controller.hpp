@@ -37,6 +37,7 @@ struct LateralController {
         double pursuit_curvature;             // baseline pure pursuit, for the curve speed limit
         double offset,heading_error,distance; // signed left-positive, rad, unsigned
         double remaining;
+        double s;                             // lane distance of the reference point
     };
     static Output update(LanePath& lane,double x,double y,double yaw,double speed,double wheelbase,const Settings& settings) {
         const auto p=lane.track(x,y);
@@ -48,6 +49,6 @@ struct LateralController {
         const auto curvature_rate=v*(lane.curvature(s+w/2,w)-lane.curvature(s-w/2,w))/w;
         const auto k=wheelbase*curvature;
         return {std::atan(k),wheelbase*curvature_rate/(1+k*k),curvature,path_curvature,
-                lane.pursuit(x,y,yaw,d),p.offset,heading_error,p.d,lane.remaining()};
+                lane.pursuit(x,y,yaw,d),p.offset,heading_error,p.d,lane.remaining(),p.s};
     }
 };

@@ -1,0 +1,11 @@
+# 빌드 산출물과 캐시 (스크립트, .slx, generated/, example/, results/는 추적)
+codegen/
+cache/
+slprj/
+*.slxc
+*.asv
+*.autosave
+*.mexw64
+*.mexa64
+*.obj
+*.exe
