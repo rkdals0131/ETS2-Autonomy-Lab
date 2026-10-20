@@ -7,6 +7,7 @@
 // printed, not asserted.
 #include "control/lateral_controller.hpp"
 #include "control/virtual_eps.hpp"
+#include "control/kinematic_axles.hpp"
 #include <gtest/gtest.h>
 #include <array>
 #include <cmath>
@@ -306,4 +307,18 @@ TEST(LateralSim,RecordedLane) {
         const auto [old,now]=compare(s);
         EXPECT_LT(now.max_offset,.03);EXPECT_LE(now.reversals,3);
     }
+}
+
+// Scania S 6x2 tag lift, SDK wheel positions in base_link (drive axle): front axle
+// 3.158 m ahead, tag axle 1.295 m behind (docs/29).
+TEST(KinematicAxles,TagAxleMovesTheRearPoint) {
+    const std::map<uint32_t,AxleWheel> wheels{{0,{3.158,true,false}},{1,{3.158,true,false}},{2,{0,false,false}},
+                                              {3,{0,false,false}},{4,{-1.295,false,true}},{5,{-1.295,false,true}}};
+    const auto up=kinematic_axles(wheels,{{4,false},{5,false}});
+    EXPECT_NEAR(up.rear_x,0,1e-9);EXPECT_NEAR(up.wheelbase(),3.158,1e-9);
+    const auto down=kinematic_axles(wheels,{{4,true},{5,true}});
+    EXPECT_NEAR(down.wheelbase(),3.68,.005);   // measured effective wheelbase
+    EXPECT_NEAR(kinematic_axles(wheels,{}).wheelbase(),3.158,1e-9);   // no state yet: lift axle raised
+    const std::map<uint32_t,AxleWheel> four{{0,{3.734,true,false}},{1,{3.734,true,false}},{2,{0,false,false}},{3,{0,false,false}}};
+    EXPECT_NEAR(kinematic_axles(four,{}).wheelbase(),3.734,1e-9);
 }

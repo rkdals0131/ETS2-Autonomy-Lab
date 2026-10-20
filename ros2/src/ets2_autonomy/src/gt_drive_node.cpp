@@ -7,6 +7,8 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/string.hpp>
 #include "control/parameters.hpp"
+#include "control/kinematic_axles.hpp"
+#include <ets2_msgs/msg/wheel_state.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <algorithm>
 #include <atomic>
@@ -50,11 +52,15 @@ int main(int argc,char** argv) {
         [&](ets2_msgs::msg::DriveState::SharedPtr value){drive=std::move(value);drive_time=Clock::now();});
     auto vs=node->create_subscription<ets2_msgs::msg::VehicleState>("/ets2/vehicle/state",rclcpp::QoS(1),
         [&](ets2_msgs::msg::VehicleState::SharedPtr value){vehicle=std::move(value);vehicle_time=Clock::now();});
-    double ego_x=0,ego_y=0,ego_yaw=0,wheelbase=0;bool pose_received=false,traffic_received=false;
+    // ego pose is base_link (drive axle); the controller's rear point and wheelbase follow
+    // the grounded axles (kinematic_axles.hpp), so a lowered lift axle moves them.
+    double ego_x=0,ego_y=0,ego_yaw=0,front_axle=0;bool pose_received=false,traffic_received=false,wheels_received=false,liftable=false;
+    std::map<uint32_t,AxleWheel> axle_wheels;std::map<uint32_t,bool> grounded;
     Clock::time_point pose_time{},traffic_time{};
     struct Actor {double x,y,yaw,speed,length,width;};std::vector<Actor> actors;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr ps;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr config;
+    rclcpp::Subscription<ets2_msgs::msg::WheelState>::SharedPtr ws;
     rclcpp::Subscription<ets2_msgs::msg::TrafficState>::SharedPtr ts;
     if(lane) {
         ps=node->create_subscription<geometry_msgs::msg::PoseStamped>("/ets2/ground_truth/ego/pose",rclcpp::QoS(1),[&](geometry_msgs::msg::PoseStamped::SharedPtr msg) {
@@ -65,9 +71,21 @@ int main(int argc,char** argv) {
         });
         config=node->create_subscription<std_msgs::msg::String>("/ets2/sensors/config",rclcpp::QoS(1).transient_local(),[&](std_msgs::msg::String::SharedPtr msg) {
             const auto data=nlohmann::json::parse(msg->data);double front=0;
-            for(const auto& w:data.at("vehicle").at("wheels")) if(w.value("steerable",false)) front=std::max(front,w.at("position_base_m").at(0).template get<double>());
+            std::map<uint32_t,AxleWheel> wheels;
+            for(const auto& w:data.at("vehicle").at("wheels")) {
+                const AxleWheel wheel{w.at("position_base_m").at(0).template get<double>(),w.value("steerable",false),w.value("liftable",false)};
+                if(!std::isfinite(wheel.x)) throw std::runtime_error("Current truck wheel geometry is unavailable");
+                wheels[w.at("index").template get<uint32_t>()]=wheel;
+                if(wheel.steerable) front=std::max(front,wheel.x);
+            }
             if(!std::isfinite(front) || front<=0) throw std::runtime_error("Current truck steering axle geometry is unavailable");
-            wheelbase=front;
+            front_axle=front;axle_wheels=std::move(wheels);
+            liftable=std::any_of(axle_wheels.begin(),axle_wheels.end(),[](const auto& w){return w.second.liftable;});
+        });
+        ws=node->create_subscription<ets2_msgs::msg::WheelState>("/ets2/wheels/state",rclcpp::QoS(1),[&](ets2_msgs::msg::WheelState::SharedPtr msg) {
+            if(msg->index.size()!=msg->on_ground.size()) throw std::runtime_error("Misaligned wheel state arrays");
+            for(size_t i=0;i<msg->index.size();++i) grounded[msg->index[i]]=msg->on_ground[i];
+            wheels_received=true;
         });
         ts=node->create_subscription<ets2_msgs::msg::TrafficState>("/ets2/ground_truth/traffic",rclcpp::QoS(1),[&](ets2_msgs::msg::TrafficState::SharedPtr msg) {
             if(!msg->available || msg->header.frame_id!="world") throw std::runtime_error("GT traffic unavailable: "+msg->error);
@@ -89,11 +107,11 @@ int main(int argc,char** argv) {
     const auto control=[&](bool enabled) {epoch=request_drive_control(node,service,owner,enabled,epoch,enabled?axes():0);};
     try {
         const auto until=Clock::now()+10s;
-        while(!stopped() && Clock::now()<until && !(drive && vehicle && (!lane || (pose_received && traffic_received && wheelbase>0)) && service->service_is_ready() && publisher->get_subscription_count())) {
+        while(!stopped() && Clock::now()<until && !(drive && vehicle && (!lane || (pose_received && traffic_received && front_axle>0 && (wheels_received || !liftable))) && service->service_is_ready() && publisher->get_subscription_count())) {
             rclcpp::spin_some(node);std::this_thread::sleep_for(10ms);
         }
         if(stopped()) throw std::runtime_error("Stopped before arm");
-        if(!drive || !vehicle || (lane && (!pose_received || !traffic_received || wheelbase<=0)) || !service->service_is_ready() || !publisher->get_subscription_count()) throw std::runtime_error("Bridge discovery timed out");
+        if(!drive || !vehicle || (lane && (!pose_received || !traffic_received || front_axle<=0 || (liftable && !wheels_received))) || !service->service_is_ready() || !publisher->get_subscription_count()) throw std::runtime_error("Bridge discovery timed out");
         if(!drive->available || !drive->permitted || !drive->profile_supported || vehicle->paused) throw std::runtime_error("Game input is unavailable or paused");
         if(!axes()) throw std::runtime_error("Enable ACC or LCC explicitly before starting");
         if(axes()!=3 && !drive->independent_axes) throw std::runtime_error("Independent ACC/LCC requires the updated loader; restart the game");
@@ -125,7 +143,9 @@ int main(int argc,char** argv) {
             double path_error=0,path_offset=0,remaining=0,lead_gap=std::numeric_limits<double>::infinity();
             if(lane) {
                 if(now-pose_time>200ms || now-traffic_time>200ms) throw std::runtime_error("Current GT path/traffic observation is unavailable");
-                const auto goal=LateralController::update(*lane,ego_x,ego_y,ego_yaw,vehicle->speed_mps,wheelbase,lateral_settings(*settings));
+                const auto axles=kinematic_axles(axle_wheels,grounded);
+                const auto rear_x=ego_x+axles.rear_x*std::cos(ego_yaw),rear_y=ego_y+axles.rear_x*std::sin(ego_yaw);
+                const auto goal=LateralController::update(*lane,rear_x,rear_y,ego_yaw,vehicle->speed_mps,axles.wheelbase(),lateral_settings(*settings));
                 path_error=goal.distance;path_offset=goal.offset;remaining=goal.remaining;
                 if(lcc) {
                     steering_target=std::clamp(goal.wheel_angle/settings->steering_angle_per_unit_rad,-1.0,1.0);
@@ -152,7 +172,7 @@ int main(int argc,char** argv) {
                     }
                     if(!acc || ahead<=0 || lateral>(lane->width+actor.width)/2 || std::cos(actor.yaw-heading)<=0) continue;
                     const auto gap=ahead-actor.length/2;
-                    const auto desired=wheelbase+settings->standstill_gap_m+std::max(0.0,vehicle->speed_mps)*settings->following_time_s;
+                    const auto desired=front_axle+settings->standstill_gap_m+std::max(0.0,vehicle->speed_mps)*settings->following_time_s;
                     speed_target=std::min(speed_target,std::max(0.0,actor.speed+settings->following_gain*(gap-desired)));
                     lead_gap=std::min(lead_gap,gap);
                 }

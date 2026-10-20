@@ -19,9 +19,14 @@ import game_keys as keys  # noqa: E402
 PAD = (-28550.0, -50000.0, -23450.0, -42000.0)  # x0, z0, x1, z1 (SCS), bridge/testground_map defaults
 MARGIN = 250.0
 HARD_EDGE = 100.0  # m from the pad edge that always stops a run
-# Front axle to the middle of the grounded rear axles, and that middle's SDK z (behind the
-# truck origin). Session reads them from the truck configuration and keeps them current
-# while a lift axle goes up or down; these defaults are the Scania S 4x2.
+# Kinematic wheelbase (front axle to the rear reference point) and that point's SDK z
+# (behind the truck origin). The rear point is the weighted mean of the grounded rear
+# axles, a lowered lift axle weighted LIFT_AXLE_WEIGHT: measured on the Scania S 6x2 tag
+# axle (effective wheelbase 3.68 m against 3.805 m to the axles' middle, docs/29; the
+# same weight is kLiftAxleWeight in ros2 control/kinematic_axles.hpp). Session reads the
+# axles from the truck configuration and keeps both current while a lift axle moves;
+# these defaults are the Scania S 4x2.
+LIFT_AXLE_WEIGHT = 0.675
 WHEELBASE = 3.734
 REAR_Z = 2.094
 ANGLE_PER_UNIT = 0.70   # front wheel rad per unit of applied steering at speed
@@ -73,7 +78,8 @@ class Geometry:
         self.liftable = sorted(i for i, w in wheels.items() if w["liftable"])
 
     def rear_z(self, lift_down):
-        return mean(self.fixed + (self.lift_z if lift_down else []))
+        axles = [(z, 1.0) for z in self.fixed] + ([(z, LIFT_AXLE_WEIGHT) for z in self.lift_z] if lift_down else [])
+        return sum(z * w for z, w in axles) / sum(w for _, w in axles)
 
     def channels(self):
         return (["truck.lift_axle"] + [f"truck.wheel.{k}[{i}]" for i in self.liftable for k in ("lift", "on_ground")]

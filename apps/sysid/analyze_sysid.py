@@ -6,9 +6,10 @@ Usage: py -3 analyze_sysid.py bridge/recordings/sysid-<time>
 - Yaw: SDK angular velocity is in turns/s (checked against the heading rate). For the
   sines, gain and phase of yaw rate over the mean front wheel angle against the
   kinematic v/L; for the steady turns, the wheelbase that makes v*delta/r match
-  (L_eff) and the understeer gradient against the geometric L. L is the front axle to
-  the middle of the grounded rear axles, from truck_config.json (written by the run)
-  and the lift-axle contact channel; without them the Scania S 4x2's 3.734 m.
+  (L_eff) and the understeer gradient against L. L is the harness's kinematic
+  wheelbase (front axle to the weighted rear reference, sysid_drive.Geometry), from
+  truck_config.json (written by the run) and the lift-axle contact channel; without
+  them the Scania S 4x2's 3.734 m.
 - Longitudinal: coast-down, brake steps (deceleration, time to the first -0.3 m/s),
   throttle steps (time to 20/40/60 km/h).
 Frames of aborted step attempts and frames taken while the game window was in the

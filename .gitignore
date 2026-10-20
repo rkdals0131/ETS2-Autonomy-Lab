@@ -67,3 +67,5 @@ venv/
 /research/ghidra/projects/
 /research/ghidra/logs/
 /research/ghidra/out/
+# Git Bash crash dumps
+bash.exe.stackdump
