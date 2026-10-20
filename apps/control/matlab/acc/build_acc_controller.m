@@ -1,9 +1,11 @@
 function model = build_acc_controller()
 %BUILD_ACC_CONTROLLER Create ACC_Controller.slx (the controller that is turned into C++).
 %   build_acc_controller() rebuilds ACC_Controller.slx in this folder. Root I/O follows the
-%   ROS 2 contract (12 inputs, 6 outputs). Everything sits in the atomic subsystem
-%   "ACC_Controller":
+%   ROS 2 contract (18 inputs, 9 outputs; the mass-estimator inputs and outputs are appended
+%   after the original 12 / 6). Everything sits in the atomic subsystem "ACC_Controller":
 %     InputConditioning (MATLAB Function -> acc_condition.m)
+%     MassEstimator     (MATLAB Function -> acc_mass_estimate.m: online mass, fed by the applied
+%                        or the controller's own previous pedal / retarder commands)
 %     ModeLogic         (Stateflow: OFF, CRUISE, FOLLOW, STOP, HOLD, GO, EMERGENCY)
 %     MPC_Prep          (MATLAB Function -> acc_mpc_prep.m: state, references, bounds, weights)
 %     MPC               (Multiple MPC Controllers: mpcComfort / mpcEmergency, acc_design_mpc.m)
@@ -33,9 +35,12 @@ set_param(model, "InitFcn", "acc_controller_init;");   % MPC objects -> base wor
 ins = {"enable", "boolean"; "set_speed_mps", "double"; "time_gap_s", "double";
        "ego_speed_mps", "double"; "ego_accel_mps2", "double"; "lead_valid", "boolean";
        "lead_gap_m", "double"; "lead_speed_mps", "double"; "lead_accel_mps2", "double";
-       "resume", "boolean"; "engine_rpm", "double"; "gear", "int32"};
+       "resume", "boolean"; "engine_rpm", "double"; "gear", "int32";
+       "pitch_rad", "double"; "mass_prior_kg", "double"; "actuation_valid", "boolean";
+       "throttle_applied", "double"; "brake_applied", "double"; "retarder_applied", "int32"};
 outs = {"throttle", "double"; "brake", "double"; "retarder_step", "int32";
-        "engine_brake", "boolean"; "a_des_mps2", "double"; "mode", "uint8"};
+        "engine_brake", "boolean"; "a_des_mps2", "double"; "mode", "uint8";
+        "mass_est_kg", "double"; "mass_sigma_kg", "double"; "mass_valid", "boolean"};
 for i = 1:size(ins, 1)
     add_block("simulink/Sources/In1", model + "/" + ins{i, 1}, "Port", num2str(i), ...
         "OutDataTypeStr", ins{i, 2}, "PortDimensions", "1", "SampleTime", "C.Ts", ...
@@ -46,7 +51,7 @@ for i = 1:size(outs, 1)
         "OutDataTypeStr", outs{i, 2}, "Position", [900 60+60*i 930 74+60*i]);
 end
 sub = model + "/ACC_Controller";
-add_block("simulink/Ports & Subsystems/Subsystem", sub, "Position", [400 80 620 640]);
+add_block("simulink/Ports & Subsystems/Subsystem", sub, "Position", [400 80 620 940]);
 delete_line(sub, "In1/1", "Out1/1"); delete_block(sub + "/In1"); delete_block(sub + "/Out1");
 set_param(sub, "TreatAsAtomicUnit", "on");
 for i = 1:size(ins, 1)
@@ -87,23 +92,48 @@ ln(sub, "ego_speed_mps/1", "InputConditioning/3"); ln(sub, "ego_accel_mps2/1", "
 ln(sub, "lead_valid/1", "InputConditioning/5"); ln(sub, "lead_gap_m/1", "InputConditioning/6");
 ln(sub, "lead_speed_mps/1", "InputConditioning/7"); ln(sub, "lead_accel_mps2/1", "InputConditioning/8");
 
+% ---------------- mass estimator ----------------
+% previous own commands (what the truck got unless the harness reports the applied values)
+add_block("simulink/Discrete/Unit Delay", sub + "/thr_last", "SampleTime", "C.Ts", "InitialCondition", "0");
+add_block("simulink/Discrete/Unit Delay", sub + "/brk_last", "SampleTime", "C.Ts", "InitialCondition", "0");
+add_block("simulink/Discrete/Unit Delay", sub + "/ret_last", "SampleTime", "C.Ts", "InitialCondition", "0");
+add_block("simulink/Discrete/Unit Delay", sub + "/eb_last", "SampleTime", "C.Ts", "InitialCondition", "false");
+mfun(sub, "MassEstimator", strjoin([
+"function [m, mass_est, mass_sigma, mass_valid, kbrk] = MassEstimator(v, a, rpm, gear, pitch, prior, act_valid, thr_app, brk_app, ret_app, thr_cmd, brk_cmd, ret_cmd, eb_cmd, C)"
+"% applied pedals / retarder step from the harness when actuation_valid, else the controller's"
+"% own commands of the previous step"
+"thr = thr_cmd; brk = brk_cmd; ret = ret_cmd;"
+"if act_valid && isfinite(thr_app), thr = thr_app; end"
+"if act_valid && isfinite(brk_app), brk = brk_app; end"
+"if act_valid && ret_app >= 0, ret = double(ret_app); end"
+"[m, mass_est, mass_sigma, mass_valid, kbrk] = acc_mass_estimate(v, a, rpm, double(gear), thr, brk, ret, logical(eb_cmd), pitch, prior, C);"], newline), rt);
+ln(sub, "ego_speed_mps/1", "MassEstimator/1"); ln(sub, "ego_accel_mps2/1", "MassEstimator/2");
+ln(sub, "engine_rpm/1", "MassEstimator/3"); ln(sub, "gear/1", "MassEstimator/4");
+ln(sub, "pitch_rad/1", "MassEstimator/5"); ln(sub, "mass_prior_kg/1", "MassEstimator/6");
+ln(sub, "actuation_valid/1", "MassEstimator/7"); ln(sub, "throttle_applied/1", "MassEstimator/8");
+ln(sub, "brake_applied/1", "MassEstimator/9"); ln(sub, "retarder_applied/1", "MassEstimator/10");
+outsize(sub + "/MassEstimator", ["m", "mass_est", "mass_sigma", "mass_valid", "kbrk"], ["1", "1", "1", "1", "1"], ["double", "double", "double", "boolean", "double"]);
+ln(sub, "thr_last/1", "MassEstimator/11"); ln(sub, "brk_last/1", "MassEstimator/12");
+ln(sub, "ret_last/1", "MassEstimator/13"); ln(sub, "eb_last/1", "MassEstimator/14");
+
 % ---------------- mode logic ----------------
 build_mode_chart(sub + "/ModeLogic", C);
-% chart inputs: enable lead_ok gap v vl resume ttc dreq th
+% chart inputs: enable lead_ok gap v vl resume ttc dreq th vset
 ln(sub, "enable/1", "ModeLogic/1"); ln(sub, "InputConditioning/5", "ModeLogic/2");
 ln(sub, "InputConditioning/6", "ModeLogic/3"); ln(sub, "InputConditioning/3", "ModeLogic/4");
 ln(sub, "InputConditioning/7", "ModeLogic/5"); ln(sub, "resume/1", "ModeLogic/6");
 ln(sub, "InputConditioning/9", "ModeLogic/7"); ln(sub, "InputConditioning/10", "ModeLogic/8");
-ln(sub, "InputConditioning/1", "ModeLogic/9");
+ln(sub, "InputConditioning/1", "ModeLogic/9"); ln(sub, "InputConditioning/2", "ModeLogic/10");
 
 % ---------------- MPC preparation ----------------
 mfun(sub, "MPC_Prep", strjoin([
-"function [x, ref, md, umin, umax, ymin, ymax, ywt, sw] = MPC_Prep(mode, v, a_f, gap, vl, al_eff, th, vset, mv_prev, C)"
-"[x, ref, md, umin, umax, ymin, ymax, ywt, sw] = acc_mpc_prep(double(mode), v, a_f, gap, vl, al_eff, th, vset, mv_prev, C);"], newline), rt);
+"function [x, ref, md, umin, umax, ymin, ymax, ywt, sw] = MPC_Prep(mode, v, a_f, gap, vl, al_eff, th, vset, mv_prev, m, kbrk, C)"
+"[x, ref, md, umin, umax, ymin, ymax, ywt, sw] = acc_mpc_prep(double(mode), v, a_f, gap, vl, al_eff, th, vset, mv_prev, m, kbrk, C);"], newline), rt);
 ln(sub, "ModeLogic/1", "MPC_Prep/1"); ln(sub, "InputConditioning/3", "MPC_Prep/2");
 ln(sub, "InputConditioning/4", "MPC_Prep/3"); ln(sub, "InputConditioning/6", "MPC_Prep/4");
 ln(sub, "InputConditioning/7", "MPC_Prep/5"); ln(sub, "InputConditioning/8", "MPC_Prep/6");
 ln(sub, "InputConditioning/1", "MPC_Prep/7"); ln(sub, "InputConditioning/2", "MPC_Prep/8");
+ln(sub, "MassEstimator/1", "MPC_Prep/10"); ln(sub, "MassEstimator/5", "MPC_Prep/11");
 
 % ---------------- MPC ----------------
 mpcb = sub + "/MPC";
@@ -133,11 +163,16 @@ ln(sub, "MPC/1", "MPC_Post/1"); ln(sub, "MPC/2", "MPC_Post/2"); ln(sub, "MPC/3",
 
 % ---------------- allocator ----------------
 mfun(sub, "Allocator", strjoin([
-"function [throttle, brake, ret_step, engine_brake, a_des, mv_app] = Allocator(mode, mv, a_seq_mean, v, a_f, gear, rpm, dreq, C)"
-"[throttle, brake, ret_step, engine_brake, a_des, mv_app] = acc_allocate(double(mode), mv, a_seq_mean, v, a_f, gear, rpm, dreq, C);"], newline), rt);
+"function [throttle, brake, ret_step, engine_brake, a_des, mv_app] = Allocator(mode, mv, a_seq_mean, v, a_f, gear, rpm, dreq, m, kbrk, vset, C)"
+"[throttle, brake, ret_step, engine_brake, a_des, mv_app] = acc_allocate(double(mode), mv, a_seq_mean, v, a_f, gear, rpm, dreq, m, kbrk, vset, C);"], newline), rt);
 ln(sub, "ModeLogic/1", "Allocator/1"); ln(sub, "MPC_Post/1", "Allocator/2"); ln(sub, "MPC_Post/2", "Allocator/3");
 ln(sub, "InputConditioning/3", "Allocator/4"); ln(sub, "InputConditioning/4", "Allocator/5");
 ln(sub, "gear/1", "Allocator/6"); ln(sub, "engine_rpm/1", "Allocator/7"); ln(sub, "InputConditioning/10", "Allocator/8");
+outsize(sub + "/Allocator", ["throttle", "brake", "ret_step", "engine_brake", "a_des", "mv_app"], ["1", "1", "1", "1", "1", "[2 1]"], ...
+    ["double", "double", "double", "boolean", "double", "double"]);
+ln(sub, "MassEstimator/1", "Allocator/9"); ln(sub, "MassEstimator/5", "Allocator/10"); ln(sub, "InputConditioning/2", "Allocator/11");
+ln(sub, "Allocator/1", "thr_last/1"); ln(sub, "Allocator/2", "brk_last/1");
+ln(sub, "Allocator/3", "ret_last/1"); ln(sub, "Allocator/4", "eb_last/1");
 add_block("simulink/Discrete/Unit Delay", sub + "/mv_last", "SampleTime", "C.Ts", "InitialCondition", "[0; 0]");
 ln(sub, "Allocator/6", "mv_last/1"); ln(sub, "mv_last/1", "MPC/5"); ln(sub, "mv_last/1", "MPC_Prep/9"); ln(sub, "mv_last/1", "MPC_Post/4");
 
@@ -148,6 +183,8 @@ ln(sub, "Allocator/1", "throttle/1"); ln(sub, "Allocator/2", "brake/1");
 ln(sub, "Allocator/3", "ret_int/1"); ln(sub, "ret_int/1", "retarder_step/1");
 ln(sub, "Allocator/4", "eb_bool/1"); ln(sub, "eb_bool/1", "engine_brake/1");
 ln(sub, "Allocator/5", "a_des_mps2/1"); ln(sub, "ModeLogic/1", "mode/1");
+ln(sub, "MassEstimator/2", "mass_est_kg/1"); ln(sub, "MassEstimator/3", "mass_sigma_kg/1");
+ln(sub, "MassEstimator/4", "mass_valid/1");
 end
 
 function mfun(sub, name, script, rt)
@@ -161,6 +198,16 @@ d.Props.Complexity = "Off";
 d.Tunable = false;
 end
 
+function outsize(path, names, sizes, types)
+% explicit output sizes and types (the unit-delay loops back into the estimator leave them open)
+ch = sfroot().find("-isa", "Stateflow.EMChart", "Path", char(path));
+for i = 1:numel(names)
+    d = ch.find("-isa", "Stateflow.Data", "Name", char(names(i)));
+    d.Props.Array.Size = char(sizes(i));
+    d.DataType = char(types(i));
+end
+end
+
 function build_mode_chart(path, C)
 add_block("sflib/Chart", path);
 rt = sfroot;
@@ -172,8 +219,10 @@ ch.Description = ['ACC modes: 0 OFF, 1 CRUISE, 2 FOLLOW, 3 STOP, 4 HOLD, 5 GO, 6
     'enable false -> OFF. FOLLOW when a lead is within the follow range; STOP when the lead has ' ...
     'stopped; HOLD at standstill (brake held); GO automatically when the lead pulls away by more ' ...
     'than MODE_go_gap within MODE_go_window s of stopping, otherwise on resume; EMERGENCY when ' ...
-    'TTC < MODE_ttc_on or the required deceleration > MODE_dreq_on.'];
-in = ["enable", "lead_ok", "gap", "v", "vl", "resume", "ttc", "dreq", "th"];
+    'TTC < MODE_ttc_on or the required deceleration > MODE_dreq_on. A set speed below ' ...
+    'MODE_vset_stop is a stop request: CRUISE / FOLLOW / GO go to HOLD at standstill, HOLD does ' ...
+    'not go to GO and returns to CRUISE if the driver pushes the truck above MODE_hold_release_v.'];
+in = ["enable", "lead_ok", "gap", "v", "vl", "resume", "ttc", "dreq", "th", "vset"];
 for i = 1:numel(in), d = sfdata(ch, in(i), "Input"); d.Props.Array.Size = "1"; end
 o = sfdata(ch, "mode", "Output"); o.DataType = "uint8"; o.Props.InitialValue = "0";
 sfdata(ch, "t_hold", "Local", "99");
@@ -205,18 +254,23 @@ sftrans(sON, j, sC, "", 3);
 emerg = "[lead_ok && (ttc < MODE_ttc_on || dreq > MODE_dreq_on)]";
 sftrans(sON, sC, sE, emerg, 1);
 sftrans(sON, sC, sF, "[lead_ok && gap < follow_range()]", 2);
+stopreq = "[vset < MODE_vset_stop && v < MODE_v_standstill]{t_hold = 99; gap_stop = gap;}";
+sftrans(sON, sC, sH, stopreq, 3);
 sftrans(sON, sF, sE, emerg, 1);
 sftrans(sON, sF, sS, "[lead_ok && vl < MODE_v_lead_stopped]", 2);
 sftrans(sON, sF, sC, "[duration(~lead_ok) > MODE_lead_lost_s || (lead_ok && gap > follow_range() + MODE_follow_hyst)]", 3);
+sftrans(sON, sF, sH, stopreq, 4);
 sftrans(sON, sS, sE, emerg, 1);
 sftrans(sON, sS, sH, "[v < MODE_v_standstill]{t_hold = 0; gap_stop = gap;}", 2);
 sftrans(sON, sS, sF, "[lead_ok && vl > MODE_v_lead_moving]", 3);
 sftrans(sON, sS, sC, "[duration(~lead_ok) > MODE_lead_lost_s]", 4);
-sftrans(sON, sH, sG, "[resume || (t_hold <= MODE_go_window && lead_ok && gap > gap_stop + MODE_go_gap)]", 1);
+sftrans(sON, sH, sG, "[vset >= MODE_vset_stop && (resume || (t_hold <= MODE_go_window && lead_ok && gap > gap_stop + MODE_go_gap))]", 1);
+sftrans(sON, sH, sC, "[vset < MODE_vset_stop && v > MODE_hold_release_v]", 2);
 sftrans(sON, sG, sE, emerg, 1);
 sftrans(sON, sG, sS, "[lead_ok && vl < MODE_v_lead_stopped && v < MODE_v_lead_moving]", 2);
 sftrans(sON, sG, sF, "[v > MODE_go_done_v && lead_ok]", 3);
 sftrans(sON, sG, sC, "[v > MODE_go_done_v && ~lead_ok]", 4);
+sftrans(sON, sG, sH, stopreq, 5);
 sftrans(sON, sE, sH, "[v < MODE_v_standstill]{t_hold = 0; gap_stop = gap;}", 1);
 sftrans(sON, sE, sF, "[lead_ok && duration(ttc > MODE_ttc_off && dreq < MODE_dreq_off) > MODE_emerg_hold]", 2);
 sftrans(sON, sE, sC, "[duration(~lead_ok) > MODE_emerg_hold]", 3);

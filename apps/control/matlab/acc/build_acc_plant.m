@@ -5,6 +5,9 @@ function model = build_acc_plant()
 %       Save=false and copied into the subsystem "Longitudinal"; that folder is not changed)
 %     - a Stateflow chart "AutoGearbox" (states NEUTRAL, LAUNCH_*, DRIVE, SHIFT_*), the
 %       shift model fitted in acc_plant_params.m
+%     - "IdleCreep" (MATLAB Function): the automatic's creep force at low speed with the
+%       throttle closed while still rolling in gear (P.acc.creep_*), added through the grade
+%       input as -F/(m*g)
 %   Parameters live in the model workspace (MATLAB code: P = acc_plant_params() and the
 %   AT_* scalars the chart reads), so the model runs from this folder without setup.
 %
@@ -93,7 +96,30 @@ ln(model, "ret_round/1", "AutoGearbox/5"); ln(model, "eb_cmd/1", "AutoGearbox/6"
 ln(model, "AutoGearbox/4", "Longitudinal/1"); ln(model, "brk_sat/1", "Longitudinal/2");
 ln(model, "AutoGearbox/2", "Longitudinal/3"); ln(model, "AutoGearbox/3", "Longitudinal/4");
 ln(model, "ret_level/1", "Longitudinal/5"); ln(model, "eb_cmd/1", "Longitudinal/6");
-ln(model, "brake_temp/1", "Longitudinal/7"); ln(model, "grade/1", "Longitudinal/8");
+ln(model, "brake_temp/1", "Longitudinal/7");
+% idle creep of the automatic, as an equivalent grade
+add_block("simulink/User-Defined Functions/MATLAB Function", [model '/IdleCreep']);
+ch = sfroot().find("-isa", "Stateflow.EMChart", "Path", [model '/IdleCreep']);
+ch.Script = char(strjoin([
+"function F = IdleCreep(v, thr, gear, P)"
+"% creep force (N) of the automatic: after rolling in gear (v > creep_on_v) with the throttle"
+"% closed, the clutch keeps slipping at idle and pushes until the truck stands still"
+"% (v < creep_off_v: the clutch opens, docs/31 정차 유지: no creep from standstill)"
+"persistent rolling"
+"if isempty(rolling), rolling = false; end"
+"if gear >= 1 && v > P.acc.creep_on_v, rolling = true; end"
+"if v < P.acc.creep_off_v, rolling = false; end"
+"F = 0;"
+"if rolling && thr < 0.02"
+"    F = P.acc.creep_force * min(max((P.acc.creep_v_zero - v) / (P.acc.creep_v_zero - P.acc.creep_v_full), 0), 1);"
+"end"], newline));
+d = ch.find("-isa", "Stateflow.Data", "Name", "P"); d.Scope = "Parameter"; d.Tunable = false;
+blk(model, "Math Operations/Gain", "creep_grade", "Gain", "-1/(P.veh.m*P.veh.g)");
+blk(model, "Math Operations/Sum", "grade_total", "Inputs", "++");
+ln(model, "v_fb/1", "IdleCreep/1"); ln(model, "AutoGearbox/4", "IdleCreep/2"); ln(model, "AutoGearbox/1", "IdleCreep/3");
+ln(model, "IdleCreep/1", "creep_grade/1");
+ln(model, "grade/1", "grade_total/1"); ln(model, "creep_grade/1", "grade_total/2");
+ln(model, "grade_total/1", "Longitudinal/8");
 % outputs
 % at standstill the plant's lagged force/mass stays negative (brake held); the game
 % reports 0 there, so the acceleration output is zeroed while stopped and not pushed

@@ -4,6 +4,10 @@
 // steps 1-4, the service brake and, for sustained deceleration, retarder 5. The generated
 // step is fixed at 50 ms, so the 50 Hz node calls update() every frame and the controller
 // steps on its own 50 ms schedule, holding its outputs in between.
+// Mass: an RLS estimator inside the controller learns 20.3 t / m from throttle windows (the
+// throttle map the allocator inverts, road grade from pitch_rad) and scales the allocator
+// maps and the MPC's acceleration limits; the brake efficiency is learnt from braking. With
+// the applied pedals and retarder (actuation_valid) it also learns while the driver drives.
 #include "ACC_Controller.h"
 #include <algorithm>
 #include <array>
@@ -19,10 +23,14 @@ public:
         bool enable=false;double set_speed_mps=0,time_gap_s=2,ego_speed_mps=0,ego_accel_mps2=0;
         bool lead_valid=false;double lead_gap_m=0,lead_speed_mps=0,lead_accel_mps2=0; // gap bumper to bumper
         bool resume=false;double engine_rpm=0;int32_t gear=0; // SDK engine gear, 0 neutral
+        double pitch_rad=0;       // road grade, uphill positive; 0/NaN unknown
+        double mass_prior_kg=0;   // truck + trailer + cargo; 0/NaN unknown (starts at 20.3 t)
+        bool actuation_valid=false;double throttle_applied=0,brake_applied=0;int32_t retarder_applied=-1; // NaN/-1: own command
     };
     struct Output {
         double throttle=0,brake=0;int32_t retarder_step=0;bool engine_brake=false;
         double a_des_mps2=0;uint8_t mode=Off;
+        double mass_kg=0,mass_sigma_kg=0;bool mass_valid=false;
     };
     AccMpc():controller_(std::make_unique<ets2::AccController>()) {controller_->initialize();}
     // t: monotonic seconds. Steps once per 50 ms; after a stall it steps once and restarts
@@ -37,9 +45,12 @@ public:
         u.lead_gap_m=u.lead_valid?in.lead_gap_m:0;u.lead_speed_mps=u.lead_valid?in.lead_speed_mps:0;
         u.lead_accel_mps2=u.lead_valid?finite(in.lead_accel_mps2):0;
         u.resume=in.resume;u.engine_rpm=finite(in.engine_rpm);u.gear=in.gear;
+        u.pitch_rad=in.pitch_rad;u.mass_prior_kg=in.mass_prior_kg; // NaN means unknown in the contract
+        u.actuation_valid=in.actuation_valid;u.throttle_applied=in.throttle_applied;u.brake_applied=in.brake_applied;u.retarder_applied=in.retarder_applied;
         controller_->setExternalInputs(&u);controller_->step();
         const auto& y=controller_->getExternalOutputs();
-        output_={std::clamp(y.throttle,0.0,1.0),std::clamp(y.brake,0.0,1.0),std::clamp(y.retarder_step,0,5),y.engine_brake,y.a_des_mps2,y.mode};
+        output_={std::clamp(y.throttle,0.0,1.0),std::clamp(y.brake,0.0,1.0),std::clamp(y.retarder_step,0,5),y.engine_brake,y.a_des_mps2,y.mode,
+                 y.mass_est_kg,y.mass_sigma_kg,y.mass_valid};
         next_=stepped_ && t-next_<period_s?next_+period_s:t+period_s;stepped_=true;
         return output_;
     }

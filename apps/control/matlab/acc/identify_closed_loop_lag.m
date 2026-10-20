@@ -1,4 +1,4 @@
-function R = identify_closed_loop_lag(names)
+function R = identify_closed_loop_lag(names, opts)
 %IDENTIFY_CLOSED_LOOP_LAG Lag from the MPC request a_des to the plant acceleration.
 %   R = identify_closed_loop_lag() reads results/scenario_<name>.json written by
 %   run_acc_scenarios.m and fits a first-order + dead-time model (procest "P1D", System
@@ -9,11 +9,13 @@ function R = identify_closed_loop_lag(names)
 %   Writes results/closed_loop_lag.json.
 arguments
     names (1,:) string = ["setspeed_60_80", "lead_brake_2", "lead_brake_4", "cut_in", "stopped_vehicle"]
+    opts.Tag (1,1) string = ""          % result-file suffix (run_acc_scenarios Tag), e.g. "_m40000"
+    opts.Save (1,1) logical = true
 end
 here = fileparts(mfilename("fullpath"));
 R = struct("name", {}, "K", {}, "Tp1_s", {}, "Td_s", {}, "fit_pct", {});
 for n = names
-    J = jsondecode(fileread(fullfile(here, "results", "scenario_" + n + ".json")));
+    J = jsondecode(fileread(fullfile(here, "results", "scenario_" + n + opts.Tag + ".json")));
     t = J.t; u = J.signals.a_des; y = J.signals.a;
     m = J.signals.v > 1 & J.signals.mode >= 1 & J.signals.mode ~= 4;
     k0 = find(m, 1); k1 = find(m, 1, "last");
@@ -26,6 +28,8 @@ for n = names
     R(end+1) = struct("name", n, "K", sys.Kp, "Tp1_s", sys.Tp1, "Td_s", sys.Td, "fit_pct", fitPct); %#ok<AGROW>
     fprintf("%-16s K %.2f  Tp1 %.2f s  Td %.2f s  fit %.0f %%\n", n, sys.Kp, sys.Tp1, sys.Td, fitPct);
 end
-fid = fopen(fullfile(here, "results", "closed_loop_lag.json"), "w");
-fwrite(fid, jsonencode(R, PrettyPrint=true)); fclose(fid);
+if opts.Save
+    fid = fopen(fullfile(here, "results", "closed_loop_lag" + opts.Tag + ".json"), "w");
+    fwrite(fid, jsonencode(R, PrettyPrint=true)); fclose(fid);
+end
 end

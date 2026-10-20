@@ -122,6 +122,18 @@ lo = [0 0.36 0.85 1.70 3.25 NaN NaN NaN NaN NaN];
 hi = [0 0.48 1.17 2.29 NaN NaN NaN NaN NaN NaN];
 P.acc.brk_target = [lo; lo; hi; hi];
 P.acc.brk_scale = brake_scale(P);
+% Idle creep of the real automatic at low speed with the throttle closed (assumed model, one
+% game observation 2026-10-21: truck alone, after a driver override the truck kept rolling at
+% 1.08 m/s with brake 0.085 and the throttle closed, gear engaged; brake 0.2 holds it, and at
+% standstill the clutch opens so it does not creep away, docs/31 정차 유지). Constant force up
+% to creep_v_full, falling to 0 at creep_v_zero, while rolling in gear. 14 kN puts the plant's
+% truck-alone equilibrium with brake 0.085 at 1.08 m/s (brake 10.8 kN + rolling 0.85 kN); at
+% the engine about 175 Nm through SDK gear 2. Brake 0.2 gives about 32 kN there.
+P.acc.creep_force = 14000;    % N
+P.acc.creep_v_full = 0.8;     % m/s
+P.acc.creep_v_zero = 2.5;     % m/s
+P.acc.creep_on_v = 0.3;       % m/s in gear: creep armed
+P.acc.creep_off_v = 0.05;     % m/s: standstill, clutch open
 % Retarder step 5 + service brake: the game's 65-35 km/h medians (5: 2.37, 5 + 0.05: 2.47,
 % 5 + 0.1: 3.07 m/s^2) look non-additive, but within one gear they add (gear 9, 47-42 km/h:
 % 2.5 alone, 3.4-3.7 with 0.05). The medians are low because the faster deceleration puts two

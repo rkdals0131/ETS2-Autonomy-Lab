@@ -1,5 +1,5 @@
 function [x, ref, md, umin, umax, ymin, ymax, ywt, sw] = acc_mpc_prep( ...
-    mode, v, a_f, gap, vl, al_eff, th, vset, mv_prev, C)
+    mode, v, a_f, gap, vl, al_eff, th, vset, mv_prev, m, kbrk, C)
 %ACC_MPC_PREP State, references, online bounds and weights for the MPC (codegen).
 %   mode: 0 OFF, 1 CRUISE, 2 FOLLOW, 3 STOP, 4 HOLD, 5 GO, 6 EMERGENCY.
 %   x = [gap; v_lead - v; v; a1; a2]: a2 (brake path) is the first-order response of the
@@ -15,9 +15,19 @@ function [x, ref, md, umin, umax, ymin, ymax, ywt, sw] = acc_mpc_prep( ...
 %   plus a weak gap term (y1 = gap - th_nom*v -> d0 + (th - th_nom)*v) and the soft minimum
 %   gap y1 >= d0_safe + (safe_frac*th - th_nom)*v. CRUISE tracks the set speed. The speed is
 %   kept below the set speed by a soft upper bound in every mode.
+%   Mass m (kg, from the estimator): the prediction model is in acceleration units (the
+%   allocator turns requests into pedal inputs for this mass), so the mass enters through the
+%   reachable range of each path: drive path from coasting + retarder 4 (acc_coast,
+%   acc_retarder_decel at m) up to 0.85 x full-throttle acceleration scaled to m; the total
+%   lower bound no deeper than coasting + retarder 4 + 95 % of the service brake at input 1.0
+%   at this speed and brake effectiveness kbrk (estimator's k_brake), so a heavy truck does not
+%   plan with braking it cannot deliver.
+%   A lower set speed is approached on a ramp (vset_down_rate, at most 80 % of the no-brake
+%   deceleration at this speed and mass) starting from the present speed, so a set-speed step
+%   does not make the soft upper bound brake hard.
 %#codegen
-persistent a2
-if isempty(a2), a2 = 0; end
+persistent a2 vs_f
+if isempty(a2), a2 = 0; vs_f = 0; end
 k2 = exp(-C.Ts / C.mpc.tau2);
 a2 = k2 * a2 + (1 - k2) * mv_prev(2);
 if mode == 0 || mode == 4
@@ -29,14 +39,30 @@ d0 = C.fol.d0;
 p = C.mpc.p;                                   % reference rows: preview over the horizon
 
 % drive path range: no-brake deceleration (coasting + retarder 4) .. comfortable acceleration
-ac = acc_coast(v, C);
+ac = acc_coast(v, C, m);
 if v > C.alc.ret_min_v
-    u1min = ac - acc_retarder_decel(4, v, C);
+    u1min = ac - acc_retarder_decel(4, v, C, m);
 else
     u1min = ac;
 end
+% full-throttle acceleration measured at C.veh.m; the force minus rolling resistance scales 1/m
 afull = interp1(C.veh.afull_v, C.veh.afull_a, min(max(v, C.veh.afull_v(1)), C.veh.afull_v(end)));
-u1max = min(C.mpc.a_max_comf, 0.85 * afull);
+arr = C.veh.crr * C.veh.g;
+afull = (afull + arr) * C.veh.m / m - arr;
+u1max = max(min(C.mpc.a_max_comf, 0.85 * afull), 0.05);
+% set speed: ramp down to a lower value without the service brake; the ramp is previewed in
+% the y3 reference and the soft upper bound gets 1 m/s of slack while it lasts
+vslack = 0;
+vset_ref = repmat(vset, p, 1);
+if vset < vs_f
+    rate = min(C.fol.vset_down_rate, 0.8 * max(-u1min, 0.05));
+    vs_f = max(vset, min(vs_f - rate * C.Ts, v + C.fol.vset_margin));
+    vset_ref = max(vset, vs_f - rate * C.Ts * (1:p).');
+    vslack = 1.0;
+else
+    vs_f = vset;
+end
+vset = vs_f;
 if mode == 6
     amin = C.mpc.a_min_emerg;
     sw = 2;
@@ -44,9 +70,13 @@ else
     amin = C.mpc.a_min_comf;
     sw = 1;
 end
+% deepest deceleration the service brake can add at this speed and mass (input 1.0)
+vb = min(max(v, C.veh.brk_v(1)), C.veh.brk_v(end));
+brk_cap = interp1(C.veh.brk_v, C.veh.brk_a(:, end).', vb) * kbrk;
+amin = max(amin, u1min - 0.95 * brk_cap);
 umin = [u1min; amin - u1min];
 umax = [u1max; 0];
-ymax = [1e3; 1e3; vset + C.fol.vset_margin];
+ymax = [1e3; 1e3; vset + C.fol.vset_margin + vslack];
 md = al_eff;
 
 follow = mode == 2 || mode == 3 || mode == 5 || mode == 6;
@@ -77,6 +107,9 @@ if follow
         else
             vr_ref(i) = min(-C.fol.k_open * ei, C.fol.vr_open_max);   % too close: open gently
         end
+        % never ask for a speed above the set speed (lead faster than the set speed): the
+        % reference would otherwise fight the soft upper bound on y3 and the MPC hunts there
+        vr_ref(i) = max(vr_ref(i), vli - vset);
         vln = max(0, vli + al_eff * C.Ts);
         ei = ei + vr_ref(i) * C.Ts;
         if mode ~= 3
@@ -90,12 +123,12 @@ if follow
     if mode ~= 5 && al_eff < 0.2
         umax(1) = min(umax(1), C.mpc.a_max_follow);   % catching up gently unless the lead pulls away
     end
-    ref = [repmat(d0 + (th - thn) * v, p, 1), vr_ref, repmat(vset, p, 1)];
+    ref = [repmat(d0 + (th - thn) * v, p, 1), vr_ref, vset_ref];
     ymin = [C.fol.d0_safe + (C.fol.safe_frac * th - thn) * v; -1e3; -1e3];
     ywt = C.mpc.w_y_follow(:);
 else
     x = [d0 + thn * v + 200; 0; v; a1; a2];
-    ref = [repmat(d0 + (th - thn) * v + 200, p, 1), zeros(p, 1), repmat(vset, p, 1)];
+    ref = [repmat(d0 + (th - thn) * v + 200, p, 1), zeros(p, 1), vset_ref];
     ymin = [-1e3; -1e3; -1e3];
     ywt = C.mpc.w_y_cruise(:);
 end

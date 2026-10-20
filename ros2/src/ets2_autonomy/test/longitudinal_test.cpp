@@ -67,3 +67,33 @@ TEST(AccMpc,FoldsRetarderIntoBrake) {
     out.retarder_step=5;EXPECT_NEAR(AccMpc::folded_brake(out),.149,1e-12);
     out.brake=.95;EXPECT_EQ(AccMpc::folded_brake(out),1);
 }
+
+// Set speed 0 without a lead (the game test that crept at 1.08 m/s): the controller stops and
+// holds. Plant from the controller's own outputs at low speed: the automatic gearbox's idle
+// creep (14 kN on 20.3 t while rolling without throttle, the MATLAB plant's IdleCreep) is
+// balanced by brake 0.085 as in the game, so the brake decelerates 8.1 m/s^2 per unit; a
+// 0.4 s lag; the retarder is left out (little effect below 2 m/s).
+TEST(AccMpc,StopsAndHoldsWithoutLead) {
+    AccMpc acc;double v=5,a=0;uint8_t mode=0;
+    for(int k=0;k<=30*50;++k) {
+        AccMpc::Input in;in.enable=true;in.set_speed_mps=0;in.ego_speed_mps=v;in.ego_accel_mps2=a;in.engine_rpm=700;in.gear=1;
+        const auto& out=acc.update(in,k*.02);
+        const auto creep=v>.05 && out.throttle==0?14000/20300.0:0;
+        const auto target=out.throttle*1.2-out.brake*8.1+creep;
+        a+=(target-a)*.02/.4;
+        v=std::max(0.0,v+a*.02);if(v==0) a=std::max(0.0,a);
+        mode=out.mode;
+    }
+    EXPECT_EQ(mode,AccMpc::Hold);EXPECT_LT(v,.05);
+}
+
+#include "control/road_grade.hpp"
+
+TEST(RoadGrade,RiseOverTheLast20m) {
+    RoadGrade grade;
+    EXPECT_TRUE(std::isnan(grade.update(0,0,0)));
+    for(double s=1;s<=60;s+=1) grade.update(s*std::cos(.3),s*std::sin(.3),.02*s);
+    EXPECT_NEAR(grade.grade,std::atan(.02),1e-9);
+    const auto held=grade.grade;grade.update(60*std::cos(.3),60*std::sin(.3)+.1,5);   // < 0.5 m: standstill
+    EXPECT_EQ(grade.grade,held);
+}

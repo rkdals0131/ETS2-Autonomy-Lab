@@ -12,6 +12,7 @@
 #include "control/acc_mpc.hpp"
 #include "control/lcc_mpc.hpp"
 #include "control/hud_path.hpp"
+#include "control/road_grade.hpp"
 #include <ets2_msgs/msg/actuation_state.hpp>
 #include <ets2_msgs/msg/powertrain_state.hpp>
 #include <ets2_msgs/msg/overlay_style.hpp>
@@ -69,14 +70,14 @@ int main(int argc,char** argv) {
     // The MPC's allocator uses the engine gear (throttle map, shift freeze).
     auto as=node->create_subscription<ets2_msgs::msg::ActuationState>("/ets2/vehicle/actuation",rclcpp::QoS(1),
         [&](ets2_msgs::msg::ActuationState::SharedPtr value){actuation=std::move(value);actuation_time=Clock::now();});
-    // The game's cruise control speed (0 when off) is the engage button in cruise mode.
-    rclcpp::Subscription<ets2_msgs::msg::PowertrainState>::SharedPtr pts;
-    if(cruise_engage) pts=node->create_subscription<ets2_msgs::msg::PowertrainState>("/ets2/vehicle/powertrain",rclcpp::QoS(1),
+    // The game's cruise control speed (0 when off) is the engage button in cruise mode; the
+    // retarder step applied feeds the ACC's mass estimator.
+    auto pts=node->create_subscription<ets2_msgs::msg::PowertrainState>("/ets2/vehicle/powertrain",rclcpp::QoS(1),
         [&](ets2_msgs::msg::PowertrainState::SharedPtr value){powertrain=std::move(value);powertrain_time=Clock::now();});
     const bool mpc=initial.longitudinal=="mpc",lateral_mpc=initial.lateral=="mpc";
     // ego pose is base_link (drive axle); the controller's rear point and wheelbase follow
     // the grounded axles (kinematic_axles.hpp), so a lowered lift axle moves them.
-    double ego_x=0,ego_y=0,ego_yaw=0,front_axle=0;bool pose_received=false,traffic_received=false,wheels_received=false,liftable=false;
+    double ego_x=0,ego_y=0,ego_z=0,ego_yaw=0,front_axle=0;bool pose_received=false,traffic_received=false,wheels_received=false,liftable=false;
     std::map<uint32_t,AxleWheel> axle_wheels;std::map<uint32_t,bool> grounded;
     Clock::time_point pose_time{},traffic_time{};
     builtin_interfaces::msg::Time pose_stamp; // simulation time: the HUD path's TTL runs on it
@@ -95,7 +96,7 @@ int main(int argc,char** argv) {
             const auto& p=msg->pose.position;const auto& q=msg->pose.orientation;
             if(msg->header.frame_id!="world" || !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z) || !std::isfinite(q.w))
                 throw std::runtime_error("Invalid GT ego pose");
-            ego_x=p.x;ego_y=p.y;ego_yaw=std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z));pose_received=true;pose_time=Clock::now();pose_stamp=msg->header.stamp;
+            ego_x=p.x;ego_y=p.y;ego_z=p.z;ego_yaw=std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z));pose_received=true;pose_time=Clock::now();pose_stamp=msg->header.stamp;
         });
         config=node->create_subscription<std_msgs::msg::String>("/ets2/sensors/config",rclcpp::QoS(1).transient_local(),[&](std_msgs::msg::String::SharedPtr msg) {
             const auto data=nlohmann::json::parse(msg->data);double front=0;
@@ -195,7 +196,7 @@ int main(int argc,char** argv) {
         std::cout<<std::endl;
         auto report=Clock::now(),previous=report;double speed_integral=0,previous_speed=vehicle->speed_mps;
         VirtualEps eps;
-        LeadTracker leads;AccMpc acc_mpc;LccMpc lcc_mpc;const auto started=Clock::now();
+        LeadTracker leads;AccMpc acc_mpc;LccMpc lcc_mpc;RoadGrade grade;const auto started=Clock::now();
         if(lane) std::cout<<"Lateral: "<<(lateral_mpc?"MPC":"pure pursuit")<<std::endl;
         uint64_t pedal_sequence=0;Clock::time_point driver_steering_until{},next_lane_read=started+500ms,next_hud=started;
         // Cruise mode: the game's cruise control is still on at arm. A light brake cancels it
@@ -255,6 +256,7 @@ int main(int argc,char** argv) {
                 }
             }
             const auto dt=std::chrono::duration<double>(now-previous).count();
+            if(ground_truth) grade.update(ego_x,ego_y,ego_z);
             auto speed_target=cruise_engage?set_speed:settings->target_speed_mps;
             auto steering_target=settings->steering_target;double steering_rate=0;
             double path_error=0,path_offset=0,remaining=0,lead_gap=std::numeric_limits<double>::infinity(),lead_ahead=lead_gap;
@@ -357,6 +359,12 @@ int main(int argc,char** argv) {
                 in.resume=std::isfinite(drive->throttle_manual) && drive->throttle_manual>.2;
                 in.engine_rpm=vehicle->engine_rpm;
                 in.gear=actuation && now-actuation_time<=200ms && actuation->engine_gear_available?actuation->engine_gear:0;
+                // Mass estimator: grade (NaN unknown), no prior yet (learns from 20.3 t), and the
+                // applied pedals and retarder so the driver's own throttle teaches it too.
+                in.pitch_rad=grade.grade;in.mass_prior_kg=0;
+                in.actuation_valid=actuation && now-actuation_time<=200ms;
+                if(in.actuation_valid) {in.throttle_applied=actuation->throttle_applied;in.brake_applied=actuation->brake_applied;}
+                in.retarder_applied=powertrain && now-powertrain_time<=200ms?int32_t(powertrain->retarder_step):-1;
                 const auto& out=acc_mpc.update(in,std::chrono::duration<double>(now-started).count());
                 command.throttle=acc?out.throttle:0;
                 if(enabled_axes&4) {command.brake=acc?out.brake:0;command.retarder_step=acc?out.retarder_step:0;command.engine_brake=acc && out.engine_brake;}
@@ -400,7 +408,8 @@ int main(int argc,char** argv) {
                 if(lane && lateral_mpc) std::cout<<" lcc_status="<<unsigned(lcc_mpc.output().status)<<" trailer="<<(now-trailer_time<=200ms)
                     <<" hitch="<<std::remainder(ego_yaw-trailer_yaw,2*std::numbers::pi);
                 if(mpc) std::cout<<" acc_mode="<<unsigned(acc_mpc.output().mode)<<" a_des="<<acc_mpc.output().a_des_mps2
-                    <<" retarder="<<int(command.retarder_step)<<" engine_brake="<<command.engine_brake<<" lead="<<(!lead.valid?"none":lead.id==lane_end_id?"lane_end":std::to_string(lead.id));
+                    <<" retarder="<<int(command.retarder_step)<<" engine_brake="<<command.engine_brake
+                    <<" mass_t="<<acc_mpc.output().mass_kg/1000<<(acc_mpc.output().mass_valid?"":"(learning)")<<" grade="<<grade.grade<<" lead="<<(!lead.valid?"none":lead.id==lane_end_id?"lane_end":std::to_string(lead.id));
                 std::cout<<std::endl;
                 report=now+1s;
             }

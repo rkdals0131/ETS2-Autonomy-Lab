@@ -10,7 +10,9 @@ function D = acc_load_recording(runName, opts)
 %   gear), gear_shown, rpm, cmd_thr, cmd_brk, eff_thr, eff_brk, ret_step (SDK
 %   truck.brake.retarder), motor_flag, clutch_eff (truck.effective.clutch),
 %   brake_temp, we, Te, To, wo, ratio, clutch, ret_level, eb, wbt (n x 6),
-%   twbt (n x 6 trailer).
+%   twbt (n x 6 trailer), rot (n x 3 SDK euler [heading pitch roll] in turns), a_lin
+%   (n x 3 SDK truck.local.acceleration.linear), v_lin (n x 3), pos (n x 3 world, y up),
+%   trailer (trailer.0.connected; false when the channel is missing).
 arguments
     runName (1,1) string
     opts.Refresh (1,1) logical = false
@@ -22,7 +24,8 @@ cacheFile = fullfile(here, "cache", runName + ".mat");
 if ~opts.Refresh && isfile(cacheFile)
     S = load(cacheFile, "D");
     D = S.D;
-    return
+    if isfield(D, "rot"), return, end         % older caches lack the attitude channels
+    clear D
 end
 src = fullfile(repo, "bridge", "recordings", runName, "frames.jsonl");
 lines = splitlines(string(fileread(src)));
@@ -38,6 +41,9 @@ dtn = ["we", "Te", "To", "wo", "ratio", "clutch", "ret_level", "eb"];
 D.t = nan(n, 1); D.phase = strings(n, 1); D.paused = false(n, 1);
 for f = [top xn dtn], D.(f) = nan(n, 1); end
 D.wbt = nan(n, 6); D.twbt = nan(n, 6);
+vec = ["rot", "a_lin", "v_lin", "pos"];
+for f = vec, D.(f) = nan(n, 3); end
+D.trailer = false(n, 1);
 for k = 1:n
     r = jsondecode(lines(k));
     D.t(k) = double(r.sim_us) / 1e6;
@@ -46,7 +52,11 @@ for k = 1:n
     for f = top
         if isfield(r, f) && ~isempty(r.(f)), D.(f)(k) = double(r.(f)); end
     end
+    for f = vec
+        if isfield(r, f) && numel(r.(f)) == 3, D.(f)(k, :) = double(r.(f)(:).'); end
+    end
     if isfield(r, "x")
+        if isfield(r.x, "trailer_0_connected"), D.trailer(k) = logical(r.x.trailer_0_connected); end
         for j = 1:numel(xk)
             if isfield(r.x, xk(j)) && ~isempty(r.x.(xk(j))), D.(xn(j))(k) = double(r.x.(xk(j))); end
         end

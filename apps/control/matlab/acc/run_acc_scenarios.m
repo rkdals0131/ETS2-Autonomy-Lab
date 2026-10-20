@@ -4,7 +4,10 @@ function [Res, M] = run_acc_scenarios(opts)
 %   metrics (acc_scenario_metrics.m), writes results/scenario_<name>.json, results/
 %   scenario_<name>.png and results/scenarios_summary.json, and prints a table.
 %   Options: Names (subset), ControllerMode ("Normal" or "Software-in-the-loop (SIL)"),
-%   Plot (true), Save (true), Rebuild (false: build the .slx files only when missing).
+%   Plot (true), Save (true), Rebuild (false: build the .slx files only when missing), Tag
+%   (suffix of the result files), Scenarios (struct array instead of acc_scenarios()), and the
+%   mass / road options of acc_scenario_input.m: PlantMass (kg), MassPrior (kg, 0 unknown),
+%   Adaptive, PitchKnown, ActuationValid, Grade. SaveSignals false writes only the summary.
 arguments
     opts.Names (1,:) string = string.empty
     opts.ControllerMode (1,1) string = "Normal"
@@ -12,6 +15,14 @@ arguments
     opts.Save (1,1) logical = true
     opts.Rebuild (1,1) logical = false
     opts.Tag (1,1) string = ""
+    opts.PlantMass (1,1) double = 20300
+    opts.MassPrior (1,1) double = 0
+    opts.Adaptive (1,1) logical = true
+    opts.PitchKnown (1,1) logical = true
+    opts.ActuationValid (1,1) logical = true
+    opts.Grade (:,2) double = [0 0]
+    opts.Scenarios struct = struct([])
+    opts.SaveSignals (1,1) logical = true   % false: only the summary json (no per-scenario time series)
 end
 here = fileparts(mfilename("fullpath"));
 cd(here);
@@ -26,20 +37,28 @@ acc_controller_init();
 cl = 'acc_closed_loop';
 load_system(cl);
 set_param([cl '/Controller'], "SimulationMode", opts.ControllerMode);
-S = acc_scenarios();
+if isempty(opts.Scenarios), S = acc_scenarios(); else, S = opts.Scenarios; end
 if ~isempty(opts.Names), S = S(ismember([S.name], opts.Names)); end
 Res = struct([]); M = struct([]);
 for i = 1:numel(S)
     s = S(i);
-    in = scenario_input(s, cl);
+    in = acc_scenario_input(s, PlantMass=opts.PlantMass, MassPrior=opts.MassPrior, ...
+        Adaptive=opts.Adaptive, PitchKnown=opts.PitchKnown, ActuationValid=opts.ActuationValid, Grade=opts.Grade);
     t0 = tic;
     out = sim(in);
     R = collect(out, s);
     R.wall_s = toc(t0);
     m = acc_scenario_metrics(R, s);
-    fprintf("%-16s %s  (%.1f s wall)\n", s.name, metric_line(m), R.wall_s);
+    m.plant_mass_kg = opts.PlantMass; m.mass_prior_kg = opts.MassPrior; m.adaptive = opts.Adaptive;
+    m.mass_final_kg = R.mass_est(end);
+    m.mass_valid_at_s = NaN;
+    kv = find(R.mass_valid > 0.5, 1); if ~isempty(kv), m.mass_valid_at_s = R.t(kv); end
+    k5 = find(abs(R.mass_est / opts.PlantMass - 1) > 0.05, 1, "last");
+    if isempty(k5), m.mass_within5_s = 0; elseif k5 == numel(R.t), m.mass_within5_s = NaN; else, m.mass_within5_s = R.t(k5 + 1); end
+    fprintf("%-16s %s  mass %5.0f (%+4.1f %%)  (%.1f s wall)\n", s.name, metric_line(m), m.mass_final_kg, ...
+        100 * (m.mass_final_kg / opts.PlantMass - 1), R.wall_s);
     if isempty(Res), Res = R; M = m; else, Res(end+1) = R; M(end+1) = m; end %#ok<AGROW>
-    if opts.Save
+    if opts.Save && opts.SaveSignals
         J = struct("scenario", s, "metrics", m, "t", R.t, "signals", rmfield(R, ["t", "name", "wall_s"]));
         fid = fopen(fullfile(here, "results", "scenario_" + s.name + opts.Tag + ".json"), "w");
         fwrite(fid, jsonencode(J)); fclose(fid);
@@ -48,39 +67,17 @@ for i = 1:numel(S)
         plot_scenario(R, s, m, fullfile(here, "results", "scenario_" + s.name + opts.Tag + ".png"));
     end
 end
-if opts.Save && isempty(opts.Names)
+if opts.Save && (isempty(opts.Names) || ~opts.SaveSignals)
     fid = fopen(fullfile(here, "results", "scenarios_summary" + opts.Tag + ".json"), "w");
     fwrite(fid, jsonencode(M, PrettyPrint=true)); fclose(fid);
 end
 end
 
 % =====================================================================
-function in = scenario_input(s, cl)
-[scn_lead, scn_disc] = acc_scenario_signals(s);
-P = acc_plant_params();
-g0 = 0;
-if s.v0 > 1
-    for k = P.at.top_gear:-1:P.at.min_gear       % the gear the automatic would hold (>= 1,100 rpm)
-        if s.v0 * P.at.kv * P.at.ratio(k) >= 1100, g0 = k; break; end
-    end
-end
-P.init.v0 = s.v0;
-if g0 > 0
-    P.init.we0 = s.v0 * P.at.kv * P.at.ratio(g0) * pi/30;
-    Fres = P.veh.c_air*s.v0^2 + P.veh.crr*P.veh.m*P.veh.g;
-    P.init.Te0 = Fres * P.veh.r / (P.veh.fd * P.at.ratio(g0) * P.gb.eta);
-end
-in = Simulink.SimulationInput(cl);
-in = in.setModelParameter("StopTime", num2str(s.T));
-in = in.setVariable("scn_lead", scn_lead);
-in = in.setVariable("scn_disc", scn_disc);
-in = in.setVariable("P", P, "Workspace", "acc_plant");
-in = in.setVariable("AT_init_gear", g0, "Workspace", "acc_plant");
-end
-
 function R = collect(out, s)
 names = ["v", "a", "gap", "v_lead", "a_lead", "lead_valid", "throttle", "brake", "retarder", ...
-         "engine_brake", "a_des", "mode", "gear", "rpm", "clutch", "F_brake", "x_ego", "set_speed"];
+         "engine_brake", "a_des", "mode", "gear", "rpm", "clutch", "F_brake", "x_ego", "set_speed", ...
+         "mass_est", "mass_sigma", "mass_valid"];
 t = (0:0.05:s.T).';
 R.name = s.name;
 R.t = t;
@@ -89,7 +86,7 @@ for i = 1:numel(names)
     e = y{i};                                   % outport i (port order = names)
     tt = e.Values.Time; dd = double(squeeze(e.Values.Data));
     [tt, iu] = unique(tt, "last"); dd = dd(iu);
-    if ismember(names(i), ["throttle", "brake", "retarder", "engine_brake", "a_des", "mode", "gear", "lead_valid", "set_speed"])
+    if ismember(names(i), ["throttle", "brake", "retarder", "engine_brake", "a_des", "mode", "gear", "lead_valid", "set_speed", "mass_est", "mass_sigma", "mass_valid"])
         R.(names(i)) = interp1(tt, dd, t, "previous", "extrap");
     else
         R.(names(i)) = interp1(tt, dd, t, "linear", "extrap");
@@ -104,12 +101,12 @@ str = sprintf("min gap %6.1f m  min TTC %5.1f s  peak decel %4.2f  max|jerk| %4.
 end
 
 function plot_scenario(R, s, m, file)
-f = figure("Visible", "off", "Position", [80 80 1000 900]);
+f = figure("Visible", "off", "Position", [80 80 1000 1050]);
 try
     f.Theme = "light";
 catch
 end
-tl = tiledlayout(f, 5, 1, "TileSpacing", "compact");
+tl = tiledlayout(f, 6, 1, "TileSpacing", "compact");
 title(tl, s.title + "  (" + s.name + ")", "Interpreter", "none");
 t = R.t;
 lv = R.lead_valid > 0.5;
@@ -131,10 +128,15 @@ plot(ax, t, R.throttle, "g", "LineWidth", 1.2); plot(ax, t, R.brake*5, "r", "Lin
 ylabel(ax, "pedal"); legend(ax, "throttle", "brake x5", "Location", "best");
 ax = nexttile(tl); hold(ax, "on"); grid(ax, "on");
 stairs(ax, t, R.retarder, "m", "LineWidth", 1.2); stairs(ax, t, R.mode, "k"); stairs(ax, t, R.gear/2, "c");
-ylabel(ax, "step"); xlabel(ax, "s"); legend(ax, "retarder", "mode", "gear/2", "Location", "best");
+ylabel(ax, "step"); legend(ax, "retarder", "mode", "gear/2", "Location", "best");
 text(ax, 0.01, 0.92, sprintf("min gap %.1f m, min TTC %.1f s, peak decel %.2f, max|jerk| %.2f, ret changes %d", ...
     m.min_gap_m, m.min_ttc_s, m.peak_decel_mps2, m.max_abs_jerk_mps3, m.retarder_changes), ...
     "Units", "normalized", "FontSize", 8);
+ax = nexttile(tl); hold(ax, "on"); grid(ax, "on");
+plot(ax, t, R.mass_est / 1000, "b", "LineWidth", 1.2);
+mv = R.mass_est / 1000; mv(R.mass_valid < 0.5) = NaN; plot(ax, t, mv, "g", "LineWidth", 2);
+if isfield(m, "plant_mass_kg"), yline(ax, m.plant_mass_kg / 1000, "k--"); end
+ylabel(ax, "mass t"); xlabel(ax, "s"); legend(ax, "estimate", "valid", "plant", "Location", "best");
 exportgraphics(f, file, "Resolution", 90);
 close(f);
 end

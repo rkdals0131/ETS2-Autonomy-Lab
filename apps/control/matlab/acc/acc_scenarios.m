@@ -60,7 +60,7 @@ S(end+1) = s;
 % lead leaves shortly after the truck has stopped: automatic GO without the resume input
 s.name = "stop_and_go_auto"; s.title = "Stop and go, lead leaves right after the truck stops (automatic GO)";
 s.T = 60;
-s.lead.seg = [5 -2 0; tStop + 8.5 1 v];
+s.lead.seg = [5 -2 0; tStop + 10.8 1 v];    % truck in HOLD at tStop + 10.55 (with the idle creep of the plant)
 s.resume = zeros(0, 2);
 S(end+1) = s;
 
@@ -74,5 +74,21 @@ v = 60*kmh;
 s = base; s.name = "lead_accel_away"; s.title = "Lead at 60 km/h accelerates away at 1 m/s^2 (set speed 80 km/h)";
 s.T = 45; s.v0 = v; s.vset = [0 80*kmh];
 s.lead = struct("x0", d0 + th*v, "v0", v, "seg", [5 1 100*kmh], "valid", [0 1], "shift", zeros(0, 2));
+S(end+1) = s;
+
+% normal driving for the mass estimator: accelerate 40 -> 80 km/h, catch up a slower lead and
+% follow it, the lead pulls away (back to 80 km/h), then the driver lowers the set speed
+s = base; s.name = "mass_mixed"; s.title = "Mixed driving: 40 -> 80 km/h, follow a 65 km/h lead, lead leaves, set 60 km/h";
+s.T = 180; s.v0 = 40*kmh; s.vset = [0 80*kmh; 150 60*kmh];
+s.lead = struct("x0", 300, "v0", 65*kmh, "seg", [100 0.5 95*kmh], "valid", [0 1], "shift", zeros(0, 2));
+S(end+1) = s;
+
+% game 2026-10-21: no lead, set speed 0, rolling at 5.7 m/s after a driver throttle override
+% (HOLD -> GO -> CRUISE); the automatic's idle creep kept the truck at 1.08 m/s. It must stop
+% and hold; a resume press with set speed 0 must not start it again.
+s = base; s.name = "stop_no_lead"; s.title = "No lead, set speed 0, rolling at 5.7 m/s (idle creep): stop and hold";
+s.T = 30; s.v0 = 5.7; s.vset = [0 0];
+s.lead = struct("x0", 2000, "v0", 0, "seg", zeros(0, 3), "valid", [0 0], "shift", zeros(0, 2));
+s.resume = [20 20.3];
 S(end+1) = s;
 end

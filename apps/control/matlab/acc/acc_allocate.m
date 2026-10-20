@@ -1,5 +1,5 @@
 function [throttle, brake, ret_step, engine_brake, a_des, mv_app] = acc_allocate( ...
-    mode, mv, a_seq_mean, v, a_f, gear, rpm, dreq, C)
+    mode, mv, a_seq_mean, v, a_f, gear, rpm, dreq, m, kbrk, vset, C)
 %ACC_ALLOCATE Lower level: desired acceleration -> throttle, service brake, retarder step.
 %   mode 0 OFF / 4 HOLD bypass the MPC. Otherwise a_des = mv(1) + mv(2) (drive path +
 %   brake path of the MPC) and, from the measurements in acc_controller_params:
@@ -16,11 +16,17 @@ function [throttle, brake, ret_step, engine_brake, a_des, mv_app] = acc_allocate
 %     EMERGENCY; it takes 3.1 s to act and does not add with the brake, so the brake bridges the
 %     first 3 s and step 5 is dropped (back to 4 + brake) when more than step 5 + 0.6 is needed.
 %   mv_app is the MPC request actually used (fed back to the MPC as the last move).
+%   m (kg) is the vehicle mass from the estimator: coasting, the retarder steps, the inverse
+%   throttle map and retarder step 5 use it; kbrk scales the inverse brake table (estimator's
+%   k_brake).
+%   Stop request (STOP, or CRUISE / FOLLOW / GO with vset < C.mode.vset_stop): below
+%   stop_assist_v an integral on the deceleration shortfall (a_f - a_des) adds brake up to the
+%   HOLD brake, so the automatic's idle creep cannot keep the truck rolling.
 %#codegen
-persistent s ret_t ret_dir integ brk_on r5 r5_t r5_on_t last_gear gear_t drv
+persistent s ret_t ret_dir integ brk_on r5 r5_t r5_on_t last_gear gear_t drv stop_i
 if isempty(s)
     s = 0; ret_t = 0; integ = 0; brk_on = false; r5 = false; r5_t = 0; r5_on_t = 0;
-    last_gear = 0; gear_t = 10; drv = false; ret_dir = 0;
+    last_gear = 0; gear_t = 10; drv = false; ret_dir = 0; stop_i = 0;
 end
 Ts = C.Ts;
 throttle = 0; brake = 0; ret_step = 0; engine_brake = false;
@@ -34,7 +40,7 @@ end
 
 if mode == 0 || mode == 4
     drv = false; ret_dir = 0;
-    s = 0; ret_t = 0; integ = 0; brk_on = false; r5 = false; r5_t = 0; r5_on_t = 0;
+    s = 0; ret_t = 0; integ = 0; brk_on = false; r5 = false; r5_t = 0; r5_on_t = 0; stop_i = 0;
     a_des = 0;
     mv_app = [min(max(a_f, -1.5), 1.0); 0];
     if mode == 4
@@ -46,7 +52,7 @@ end
 a_des = mv(1) + mv(2);
 mv_app = mv;
 urgent = mode == 6 || mv(2) < -0.3;
-ac = acc_coast(v, C, gear_d, rpm);
+ac = acc_coast(v, C, m, gear_d, rpm);
 
 % drive / coast decision with hysteresis: enter above coasting + db_drive (with the retarder
 % still on only above coasting + db_drive_fast, otherwise it steps down first), leave below
@@ -58,7 +64,7 @@ else
 end
 if drv
     % ---------------- drive ----------------
-    s = 0; ret_t = C.alc.ret_dwell_dn; r5 = false; r5_t = 0; r5_on_t = 0; brk_on = false;
+    s = 0; ret_t = C.alc.ret_dwell_dn; r5 = false; r5_t = 0; r5_on_t = 0; brk_on = false; stop_i = 0;
     e = a_des - max(a_f, ac);                          % ignore the decay of retarder/brake deceleration
     slipping = false;
     if gear_d >= 1 && gear_d <= numel(C.veh.ratio)
@@ -67,7 +73,7 @@ if drv
     end
     freeze = gear_d < 1 || slipping || gear_t < 1.0;
     a_req = a_des + C.alc.kp * e + integ;
-    throttle = acc_inverse_throttle(a_req, v, gear_d, rpm, C);
+    throttle = acc_inverse_throttle(a_req, v, gear_d, rpm, C, m);
     if ~freeze && ~(throttle >= 1 && e > 0) && ~(throttle <= 0 && e < 0)
         integ = min(max(integ + C.alc.ki * e * Ts, -C.alc.i_max), C.alc.i_max);
     end
@@ -77,7 +83,8 @@ else
     need = ac - a_des;                                   % deceleration beyond coasting (> 0)
     ret_t = ret_t + Ts;
     d = zeros(1, 5);                                     % extra deceleration of steps 0..4
-    for k = 1:4, d(k + 1) = acc_retarder_decel(k, v, C); end
+    for k = 1:4, d(k + 1) = acc_retarder_decel(k, v, C, m); end
+    r5_full = C.veh.ret5_decel * C.veh.m / m;          % step 5 (retarder + engine brake) is a force
 
     % retarder step 5 (sustained, predicted long deceleration only)
     r5_eff = 0;
@@ -89,7 +96,7 @@ else
     end
     if r5
         r5_t = r5_t + Ts;
-        r5_eff = C.veh.ret5_decel * min(1, r5_t / C.veh.ret5_delay);
+        r5_eff = r5_full * min(1, r5_t / C.veh.ret5_delay);
         if a_seq_mean > C.alc.ret5_off_mean || v < C.alc.ret5_min_v - 1 || mode == 6 || ...
                 (r5_t > C.veh.ret5_delay && need > r5_eff + 0.6)
             r5 = false; s = 4; ret_t = 0;
@@ -100,7 +107,7 @@ else
         ret_step = 5;
         resid = need - r5_eff;
         if r5_t <= C.veh.ret5_delay && resid > C.alc.brk_on
-            brake = acc_inverse_brake(resid, v, C);
+            brake = acc_inverse_brake(resid, v, C, kbrk);
         end
         brk_on = brake > 0;
     else
@@ -127,10 +134,17 @@ else
             brk_on = true;
         end
         if brk_on
-            brake = acc_inverse_brake(max(resid, 0), v, C);
+            brake = acc_inverse_brake(max(resid, 0), v, C, kbrk);
         end
     end
-    if mode == 3 && v < C.alc.stop_brake_v
+    stop_req = mode == 3 || ((mode == 1 || mode == 2 || mode == 5) && vset < C.mode.vset_stop);
+    if stop_req && v < C.alc.stop_assist_v && a_des < 0
+        stop_i = min(max(stop_i + C.alc.stop_ki * (a_f - a_des) * Ts, 0), C.alc.hold_brake);
+    else
+        stop_i = max(stop_i - C.alc.hold_brake * Ts, 0);
+    end
+    brake = brake + stop_i;
+    if stop_req && v < C.alc.stop_brake_v
         brake = max(brake, C.alc.stop_brake_min);
     end
 end

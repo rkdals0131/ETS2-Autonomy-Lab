@@ -1,12 +1,13 @@
-function ac = acc_coast(v, C, gear, rpm)
+function ac = acc_coast(v, C, m, gear, rpm)
 %ACC_COAST Coasting acceleration (throttle 0, no retarder, no brake), m/s^2 (<= 0).
-%   ac = acc_coast(v, C) uses rolling and air resistance plus the engine friction in a
+%   ac = acc_coast(v, C, m) uses rolling and air resistance plus the engine friction in a
 %   typical gear (engine at 1,200 rpm in the gear the automatic would hold, about 0.085 m/s^2
-%   at 70 km/h). With gear and rpm the engine friction of that gear is used (gear 0: none).
+%   at 70 km/h) for the vehicle mass m (kg). With gear and rpm the engine friction of that gear
+%   is used (gear 0: none). Rolling resistance scales with m, air and engine drag do not.
 %   Check: 70 km/h gear 12 1,190 rpm -> -0.21 m/s^2 (docs/31 타력 감속, trailer: 0.21).
 %#codegen
-F = C.veh.c_air * v^2 + C.veh.crr * C.veh.m * C.veh.g * min(1, max(v, 0) * 10);
-if nargin < 3
+F = C.veh.c_air * v^2 + C.veh.crr * m * C.veh.g * min(1, max(v, 0) * 10);
+if nargin < 4
     % typical: the automatic keeps 1,000-1,300 rpm when coasting; friction torque about
     % 270 Nm at the wheels through the gear that gives 1,200 rpm
     if v > 1
@@ -19,7 +20,7 @@ elseif gear >= 1 && gear <= numel(C.veh.ratio) && rpm > 800 && v > 3
     % the clutch (neutral below about 600 rpm), so no engine drag is counted there, and the
     % low gears' drag is capped (the gear may be about to change)
     Ff = (C.veh.fric0 + C.veh.fric1 * rpm) * C.veh.ratio(gear) * C.veh.eta * C.veh.fd / C.veh.r;
-    F = F + min(Ff, 0.35 * C.veh.m);
+    F = F + min(Ff, 0.35 * m);
 end
-ac = -F / C.veh.m;
+ac = -F / m;
 end

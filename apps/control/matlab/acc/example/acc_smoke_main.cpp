@@ -5,6 +5,8 @@
 //       ../generated/ACC_Controller_data.cpp ../generated/rt*.cpp ../generated/coder_posix_time.c
 // It drives the controller with a crude point-mass truck behind a lead that brakes from
 // 80 to 40 km/h at -2 m/s^2 and prints the outputs once per second. Call step() every 50 ms.
+// The crude plant has no drive-force model (and the estimator only learns while the throttle
+// accelerates the truck), so the mass estimate stays at its prior here.
 #include <cstdio>
 #include "ACC_Controller.h"
 
@@ -32,6 +34,12 @@ int main()
     in.resume = false;
     in.engine_rpm = 1200.0;
     in.gear = 12;
+    in.pitch_rad = 0.0;           // road grade angle, nose up positive (0: flat or unknown)
+    in.mass_prior_kg = 0.0;       // truck + trailer + cargo; 0: unknown (20.3 t default)
+    in.actuation_valid = false;   // true: the *_applied values below are the SDK applied inputs
+    in.throttle_applied = 0.0;    // (unused while actuation_valid is false: the estimator then
+    in.brake_applied = 0.0;       //  uses the controller's own previous commands)
+    in.retarder_applied = -1;
     acc.setExternalInputs(&in);
     acc.step();
     const auto &out = acc.getExternalOutputs();
@@ -41,9 +49,10 @@ int main()
     xe += v * dt;
     vl += al * dt; xl += vl * dt;
     if (k % 20 == 0) {
-      std::printf("t %5.1f  mode %u  a_des %6.2f  thr %.2f  brk %.3f  ret %d  v %5.1f  vl %5.1f  gap %5.1f\n",
+      std::printf("t %5.1f  mode %u  a_des %6.2f  thr %.2f  brk %.3f  ret %d  v %5.1f  vl %5.1f  gap %5.1f  mass %.0f +- %.0f kg%s\n",
                   t, static_cast<unsigned>(out.mode), out.a_des_mps2, out.throttle, out.brake,
-                  static_cast<int>(out.retarder_step), v * 3.6, vl * 3.6, xl - xe);
+                  static_cast<int>(out.retarder_step), v * 3.6, vl * 3.6, xl - xe,
+                  out.mass_est_kg, out.mass_sigma_kg, out.mass_valid ? " (valid)" : "");
     }
   }
   ets2::AccController::terminate();

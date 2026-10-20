@@ -9,7 +9,7 @@
 //
 // Model version                  : 1.1
 // Simulink Coder version         : 26.2 (R2026b) 22-May-2026
-// C/C++ source code generated on : Tue Oct 20 21:31:27 2026
+// C/C++ source code generated on : Wed Oct 21 02:24:25 2026
 //
 // Target selection: ert.tlc
 // Embedded hardware selection: Intel->x86-64 (Windows64)
@@ -25,64 +25,64 @@ const ets2::AccController::ConstB_ACC_Controller_T ACC_Controller_ConstB{
     ,
     0.0
   }
-  ,                                    // '<S10>/Math Function1'
+  ,                                    // '<S11>/Math Function1'
 
   {
     0.0
     ,
     0.0
   }
-  ,                                    // '<S10>/Math Function2'
+  ,                                    // '<S11>/Math Function2'
 
   {
     0.0
     ,
     0.0
   }
-  ,                                    // '<S10>/Reshape4'
+  ,                                    // '<S11>/Reshape4'
 
   {
     0.0
     ,
     0.0
   }
-  ,                                    // '<S10>/Reshape5'
+  ,                                    // '<S11>/Reshape5'
 
   {
     0.0
     ,
     0.0
   }
-  ,                                    // '<S32>/Math Function1'
+  ,                                    // '<S33>/Math Function1'
 
   {
     0.0
     ,
     0.0
   }
-  ,                                    // '<S32>/Math Function2'
+  ,                                    // '<S33>/Math Function2'
 
   {
     0.0
     ,
     0.0
   }
-  ,                                    // '<S32>/Reshape4'
+  ,                                    // '<S33>/Reshape4'
 
   {
     0.0
     ,
     0.0
   }
-  // '<S32>/Reshape5'
+  // '<S33>/Reshape5'
 };
 
 // Constant parameters (default storage)
 const ets2::AccController::ConstP_ACC_Controller_T ACC_Controller_ConstP{
   // Pooled Parameter (Expression: MVscale(:,ones(1,p+1))')
   //  Referenced by:
-  //    '<S10>/umin_scale3'
-  //    '<S32>/umin_scale3'
+  //    '<S11>/umin_scale3'
+  //    '<S33>/umin_scale3'
 
   { 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
     2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,

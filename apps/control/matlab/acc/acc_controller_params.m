@@ -56,6 +56,83 @@ C.veh.brk_a = [lo; lo; hi; hi];
 % 0.69-0.74 m/s^2. 0-10 km/h (clutch slip) about 2; above 75 km/h not measured (extrapolated).
 C.veh.afull_v = [0 2.8 5.6 7 11 12.5 15.3 18 20.8 25];
 C.veh.afull_a = [2.0 2.4 2.4 1.85 1.7 1.25 1.1 0.95 0.72 0.45];
+% Engine-side inertia seen by the vehicle speed with the clutch closed (Simulink longitudinal
+% fit, J_locked 4.598 kg m^2) and the body lag between wheel forces and the measured
+% acceleration (tau_body 0.2 s, same fit). Torque rise-rate limit (Nm/s) by (engine torque,
+% rpm) with the clutch closed (turbo lag): longitudinal_fitted_tables.m (gear-20261020-151650);
+% the torque drops within one frame.
+C.veh.J_locked = 4.6;
+C.veh.tau_body = 0.2;
+C.veh.rate_te_bp = [0 400 800 1200 1600 2000 2400 2800];
+C.veh.rate_rpm_bp = [800 950 1100 1250 1400 1600 2000];
+C.veh.rate_up = [3812 3812 3401 3798 3914 3914 3914
+                 1931 2165 3271 3682 3897 3897 3897
+                 1718 2108 3193 3564 3767 3767 3767
+                 1669 2041 2945 3403 3503 3503 3503
+                 1740 1747 2718 3099 3099 2555 2555
+                 1577 1577 2453 2507 2549 2549 2549
+                 1429 1429 2124 1849 1959 1959 1959
+                 1429 1429 2124 1849 1959 1959 1959];
+% Service brake with another mass. The table above was measured with the empty trailer (20.3 t).
+% Heavier: the brake torques are per wheel, so the deceleration per unit of input is taken to
+% fall as m_ref/m (more input for the same request; if the game's trailer brake grows with the
+% load the truck brakes harder than asked, which errs on the safe side). Lighter means without
+% the trailer, whose brakes give more than half of the force (0.1: trailer 28.6 kN, truck
+% 13.6 kN, docs/31 ACC용 측정): the truck alone (12 t) brakes less per unit, not more, net
+% 0.1 -> 1.35 / 0.3 -> 3.57 m/s^2 against 2.38 / 4.72 with the trailer (docs/31 서비스 브레이크,
+% tag up, ratio 0.57 / 0.76). Below 20.3 t the factor is interpolated to 0.6 at 12 t.
+C.veh.brk_light_m = [12000 20300];
+C.veh.brk_light_k = [0.6 1.0];
+
+% ---------------- mass estimator (acc_mass_estimate.m) -----------------------------------------
+% Recursive least squares on theta = m_ref/m from the identified drive-force model:
+%   m*(a + g*(crr + sin(pitch))) = F_drive - c_air*v^2 - J*(ratio*fd/r)^2*a
+% F_drive = eta*ratio*fd/r*Te with Te from the applied throttle through the part-load map, the
+% full-load curve, the friction line and the torque rise-rate table (the same map the
+% allocator inverts, so the estimate is the mass that makes the throttle map right). The
+% force side gets the 0.2 s body lag; both sides a common first-order filter. Samples are used
+% only in informative windows (throttle on, no brake / retarder / engine brake, gear engaged
+% with the clutch closed, speed and drive force high enough), checked 1.5 s before and 1.0 s
+% after the sample (a delay line, so the clutch opening that starts 0.5 s before the SDK gear
+% changes is excluded too). The estimate is held otherwise.
+C.est.m_ref = C.veh.m;              % kg, default when no prior is given
+C.est.m_min = 10000;                % kg physical range: truck alone 12.0 t (docs/31) ...
+C.est.m_max = 44000;                % ... to a 44 t combination
+C.est.prior_sigma_known = 0.10;     % relative 1-sigma of mass_prior_kg (truck + trailer + SDK cargo)
+C.est.prior_sigma_unknown = 0.40;   % relative 1-sigma of the 20.3 t default
+C.est.prior_reset_kg = 1000;        % a prior change larger than this restarts the estimate
+C.est.noise = 0.15;                 % m/s^2, 1-sigma per sample of the filtered residual, counting the
+                                    % correlation of the 20 Hz samples (filter 0.4 s, body lag): about
+                                    % 0.05 m/s^2 white x sqrt(9). Sets how fast the prior is left.
+C.est.T_mem = 40;                   % s of informative data remembered (forgetting factor)
+C.est.tau_f = 0.4;                  % s, common low-pass on both sides
+C.est.v_min = 5.0;                  % m/s
+C.est.thr_min = 0.10;               % applied throttle
+C.est.brk_max = 0.002;              % service brake counted as off below this
+C.est.rpm_min = 850;  C.est.rpm_max = 2250;
+C.est.slip_rel = 0.04;              % clutch closed: |rpm - rpm(road speed, gear)| <= 4 % + 30 rpm
+C.est.slip_abs = 30;
+C.est.te_lag_max = 500;             % Nm, torque model may lag the request by at most this
+C.est.phi_min = 0.25;               % m/s^2, (F_drive - air - inertia)/m_ref: drive force well above rolling
+C.est.pitch_max = 0.10;             % rad
+C.est.t_pre = 1.5;                  % s informative before the sample (filters, body lag, torque)
+C.est.t_post = 1.0;                 % s informative after it (delay line: shift starts, brake)
+C.est.innov_gate = 3.0;             % residual clipped at this many predicted sigmas (Huber)
+C.est.valid_sigma = 0.05;           % mass_valid: relative 1-sigma at most this ...
+C.est.valid_time = 8.0;             % ... after at least this much informative data (s)
+C.est.change_T = 2.0;               % s of informative data averaged by the change detector
+C.est.change_z = 2.5;               % mean normalised residual that re-opens the covariance
+C.est.kb_hold = 0.4;                % s the brake must be on before its effect is measured
+C.est.kb_lag = 0.3;                 % s, first-order lag from the brake input to the measured deceleration
+                                    % (body 0.2 s + command latency + brake, identify_actuator_lag 0.29-0.32 s)
+C.est.kb_filter = 0.1;              % s, filter on the measured deceleration
+C.est.kb_tau = 0.5;                 % s, learning time constant of the brake effectiveness
+C.est.kb_pred_min = 0.3;            % m/s^2 expected brake deceleration needed to learn
+C.est.kb_min = 0.3;                 % lowest brake effectiveness relative to the table (40 t: about 0.5)
+C.est.kb_max_rel = 1.0;             % at most this times acc_brake_scale: learning only makes the brake weaker
+                                    % than the table says (the table errs on the weak side at large inputs)
+C.est.rate_kgps = 1500;             % kg/s, limit on the mass the controller uses
+C.est.adaptive = true;              % false: controller uses C.veh.m (estimator still runs)
 
 % ---------------- MPC (upper level) ---------------------------------------------------
 % Lags of the two acceleration paths (identify_actuator_lag.m, game recordings): brake
@@ -98,6 +175,9 @@ C.fol.k_stop = 0.8;                 % 1/s profile slope in STOP (lead stopped: s
 C.fol.k_open = 0.05;                % 1/s opening speed per m when closer than the target
 C.fol.vr_open_max = 0.5;            % m/s
 C.fol.vset_margin = 0.3;            % m/s allowed above the set speed (soft)
+C.fol.vset_down_rate = 0.5;         % m/s^2: a lower set speed is approached at most at this rate, and at
+                                    % 80 % of what coasting + retarder 4 give at this speed and mass,
+                                    % instead of a step that the soft bound enforces with the brake
 C.fol.a_lead_floor_T = 2.0;         % s: predicted lead deceleration limited to v_lead/2 s (the lead stops at most once in the prediction)
 C.fol.a_filter_tau = 0.1;           % s, first-order filter on the measured ego acceleration
 
@@ -117,6 +197,9 @@ C.fol.ttc_min_closing = 3.0;        % m/s: TTC for the mode logic only above thi
 C.mode.ttc_off = 4.0;               % s and required deceleration below dreq_off for emerg_hold s
 C.mode.dreq_off = 2.0;
 C.mode.emerg_hold = 1.0;
+C.mode.vset_stop = 0.5;             % m/s: a set speed below this is a stop request (CRUISE / FOLLOW / GO
+                                    % -> HOLD at standstill, no GO from HOLD; game 2026-10-21: set speed 0)
+C.mode.hold_release_v = 1.0;        % m/s: HOLD with a stop request -> CRUISE when the driver pushed the truck
 
 % ---------------- allocator (lower level) ---------------------------------------------------
 C.alc.db_drive = 0.08;              % m/s^2 above coasting before the throttle is used
@@ -139,6 +222,10 @@ C.alc.brk_max = 1.0;
 C.alc.hold_brake = 0.2;             % HOLD at standstill (docs/31: no creep, brake 0.2 holds)
 C.alc.stop_brake_v = 0.5;           % m/s: in STOP below this speed at least stop_brake_min
 C.alc.stop_brake_min = 0.05;
+C.alc.stop_assist_v = 2.0;          % m/s: below this a stop request (STOP, or set speed < vset_stop) adds an
+C.alc.stop_ki = 0.15;               % integral brake of stop_ki per (m/s^2 less deceleration than asked) per s,
+                                    % up to hold_brake: overcomes the automatic's idle creep (game 2026-10-21:
+                                    % 1.08 m/s steady with brake 0.085 and a_des -1.5)
 C.alc.ret5_on_mean = -2.2;          % m/s^2 predicted mean a_des over ret5_window for retarder 5
 C.alc.ret5_on_now = -2.0;
 C.alc.ret5_off_mean = -1.4;

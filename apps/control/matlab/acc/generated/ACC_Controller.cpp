@@ -9,7 +9,7 @@
 //
 // Model version                  : 1.1
 // Simulink Coder version         : 26.2 (R2026b) 22-May-2026
-// C/C++ source code generated on : Tue Oct 20 21:31:27 2026
+// C/C++ source code generated on : Wed Oct 21 02:24:25 2026
 //
 // Target selection: ert.tlc
 // Embedded hardware selection: Intel->x86-64 (Windows64)
@@ -21,10 +21,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <cmath>
-#include <cstring>
 #include "ACC_Controller_private.h"
+#include <cstring>
 
-// Named constants for MATLAB Function: '<S30>/optimizer'
+// Named constants for MATLAB Function: '<S31>/optimizer'
 const double ACC_Controller_RMDscale{ 0.25 };
 
 const int32_t ACC_Controller_degrees{ 13 };
@@ -52,7 +52,7 @@ const uint8_t ACC_Controller_IN_ON{ 2U };
 
 const uint8_t ACC_Controller_IN_STOP{ 6U };
 
-int32_t div_nde_s32_floor(int32_t numerator, int32_t denominator)
+int32_t ACC_Controller_div_nde_7h8hU5qm(int32_t numerator, int32_t denominator)
 {
   return (((numerator < 0) != (denominator < 0)) && (numerator % denominator !=
            0) ? -1 : 0) + numerator / denominator;
@@ -61,50 +61,108 @@ int32_t div_nde_s32_floor(int32_t numerator, int32_t denominator)
 namespace ets2
 {
   // Function for Chart: '<S1>/ModeLogic'
-  double AccController::ACC_Controller_follow_range(const double *v, const
-    double *vl, const double *th)
+  double AccController::ACC_Controller_follow_range(void) const
   {
     double a;
-    a = std::fmax(*v - *vl, 0.0);
-    return ((*th * *v + 5.0) + a * a / 4.0) + 20.0;
+    a = std::fmax(ACC_Controller_DW.v - ACC_Controller_DW.vl, 0.0);
+    return ((ACC_Controller_DW.th * ACC_Controller_DW.v + 5.0) + a * a / 4.0) +
+      20.0;
   }
 
   // Function for Chart: '<S1>/ModeLogic'
-  void AccController::ACC_Controller_GO(const double *v, const double *vl, const
-    double *dreq, const bool *lead_ok)
+  void AccController::ACC_Controller_FOLLOW(const double *vset, const double
+    *dreq, const bool *lead_ok, const double *gap, const double *ttc)
   {
+    bool d;
+
     // Outport: '<Root>/mode'
-    ACC_Controller_Y.mode = 5U;
-    if (*lead_ok && ((ACC_Controller_DW.ttc < 2.0) || (*dreq > 3.2))) {
+    ACC_Controller_Y.mode = 2U;
+    if (*lead_ok && ((*ttc < 2.0) || (*dreq > 3.2))) {
       ACC_Controller_DW.durationCounter_2 = 0U;
-      ACC_Controller_DW.durationCounter_1_l = 0U;
+      ACC_Controller_DW.durationCounter_1_g = 0U;
       ACC_Controller_DW.is_ON = ACC_Controller_IN_EMERGENCY;
 
       // Outport: '<Root>/mode'
       ACC_Controller_Y.mode = 6U;
-    } else if (*lead_ok && (*vl < 0.5) && (*v < 1.0)) {
+    } else if (*lead_ok && (ACC_Controller_DW.vl < 0.5)) {
       ACC_Controller_DW.durationCounter_1 = 0U;
       ACC_Controller_DW.is_ON = ACC_Controller_IN_STOP;
 
       // Outport: '<Root>/mode'
       ACC_Controller_Y.mode = 3U;
-    } else if ((*v > 2.0) && *lead_ok) {
-      ACC_Controller_DW.durationCounter_1_o = 0U;
-      ACC_Controller_DW.is_ON = ACC_Controller_IN_FOLLOW;
+    } else {
+      if (*lead_ok) {
+        ACC_Controller_DW.durationCounter_1_j = 0U;
+      }
 
-      // Outport: '<Root>/mode'
-      ACC_Controller_Y.mode = 2U;
-    } else if ((*v > 2.0) && !*lead_ok) {
-      ACC_Controller_DW.is_ON = ACC_Controller_IN_CRUISE;
+      if (ACC_Controller_DW.durationCounter_1_j > 10U) {
+        d = true;
+      } else if (*lead_ok) {
+        d = (*gap > ACC_Controller_follow_range() + 30.0);
+      } else {
+        d = false;
+      }
 
-      // Outport: '<Root>/mode'
-      ACC_Controller_Y.mode = 1U;
+      if (d) {
+        ACC_Controller_DW.is_ON = ACC_Controller_IN_CRUISE;
+
+        // Outport: '<Root>/mode'
+        ACC_Controller_Y.mode = 1U;
+      } else if ((*vset < 0.5) && (ACC_Controller_DW.v < 0.15)) {
+        ACC_Controller_DW.t_hold = 99.0;
+        ACC_Controller_DW.gap_stop = *gap;
+        ACC_Controller_DW.is_ON = ACC_Controller_IN_HOLD;
+
+        // Outport: '<Root>/mode'
+        ACC_Controller_Y.mode = 4U;
+      }
     }
   }
 
   // Function for Chart: '<S1>/ModeLogic'
-  void AccController::ACC_Controller_ON(const double *v, const double *vl, const
-    double *dreq, const double *th, const bool *lead_ok, const double *gap)
+  void AccController::ACC_Controller_GO(const double *vset, const double *dreq,
+    const bool *lead_ok, const double *gap, const double *ttc)
+  {
+    // Outport: '<Root>/mode'
+    ACC_Controller_Y.mode = 5U;
+    if (*lead_ok && ((*ttc < 2.0) || (*dreq > 3.2))) {
+      ACC_Controller_DW.durationCounter_2 = 0U;
+      ACC_Controller_DW.durationCounter_1_g = 0U;
+      ACC_Controller_DW.is_ON = ACC_Controller_IN_EMERGENCY;
+
+      // Outport: '<Root>/mode'
+      ACC_Controller_Y.mode = 6U;
+    } else if (*lead_ok && (ACC_Controller_DW.vl < 0.5) && (ACC_Controller_DW.v <
+                1.0)) {
+      ACC_Controller_DW.durationCounter_1 = 0U;
+      ACC_Controller_DW.is_ON = ACC_Controller_IN_STOP;
+
+      // Outport: '<Root>/mode'
+      ACC_Controller_Y.mode = 3U;
+    } else if ((ACC_Controller_DW.v > 2.0) && *lead_ok) {
+      ACC_Controller_DW.durationCounter_1_j = 0U;
+      ACC_Controller_DW.is_ON = ACC_Controller_IN_FOLLOW;
+
+      // Outport: '<Root>/mode'
+      ACC_Controller_Y.mode = 2U;
+    } else if ((ACC_Controller_DW.v > 2.0) && !*lead_ok) {
+      ACC_Controller_DW.is_ON = ACC_Controller_IN_CRUISE;
+
+      // Outport: '<Root>/mode'
+      ACC_Controller_Y.mode = 1U;
+    } else if ((*vset < 0.5) && (ACC_Controller_DW.v < 0.15)) {
+      ACC_Controller_DW.t_hold = 99.0;
+      ACC_Controller_DW.gap_stop = *gap;
+      ACC_Controller_DW.is_ON = ACC_Controller_IN_HOLD;
+
+      // Outport: '<Root>/mode'
+      ACC_Controller_Y.mode = 4U;
+    }
+  }
+
+  // Function for Chart: '<S1>/ModeLogic'
+  void AccController::ACC_Controller_ON(const double *vset, const double *dreq,
+    const bool *lead_ok, const double *gap, const double *ttc)
   {
     bool c;
 
@@ -120,26 +178,33 @@ namespace ets2
        case ACC_Controller_IN_CRUISE:
         // Outport: '<Root>/mode'
         ACC_Controller_Y.mode = 1U;
-        if (*lead_ok && ((ACC_Controller_DW.ttc < 2.0) || (*dreq > 3.2))) {
+        if (*lead_ok && ((*ttc < 2.0) || (*dreq > 3.2))) {
           ACC_Controller_DW.durationCounter_2 = 0U;
-          ACC_Controller_DW.durationCounter_1_l = 0U;
+          ACC_Controller_DW.durationCounter_1_g = 0U;
           ACC_Controller_DW.is_ON = ACC_Controller_IN_EMERGENCY;
 
           // Outport: '<Root>/mode'
           ACC_Controller_Y.mode = 6U;
         } else {
           if (*lead_ok) {
-            c = (*gap < ACC_Controller_follow_range(v, vl, th));
+            c = (*gap < ACC_Controller_follow_range());
           } else {
             c = false;
           }
 
           if (c) {
-            ACC_Controller_DW.durationCounter_1_o = 0U;
+            ACC_Controller_DW.durationCounter_1_j = 0U;
             ACC_Controller_DW.is_ON = ACC_Controller_IN_FOLLOW;
 
             // Outport: '<Root>/mode'
             ACC_Controller_Y.mode = 2U;
+          } else if ((*vset < 0.5) && (ACC_Controller_DW.v < 0.15)) {
+            ACC_Controller_DW.t_hold = 99.0;
+            ACC_Controller_DW.gap_stop = *gap;
+            ACC_Controller_DW.is_ON = ACC_Controller_IN_HOLD;
+
+            // Outport: '<Root>/mode'
+            ACC_Controller_Y.mode = 4U;
           }
         }
         break;
@@ -147,7 +212,7 @@ namespace ets2
        case ACC_Controller_IN_EMERGENCY:
         // Outport: '<Root>/mode'
         ACC_Controller_Y.mode = 6U;
-        if (*v < 0.15) {
+        if (ACC_Controller_DW.v < 0.15) {
           ACC_Controller_DW.t_hold = 0.0;
           ACC_Controller_DW.gap_stop = *gap;
           ACC_Controller_DW.is_ON = ACC_Controller_IN_HOLD;
@@ -156,7 +221,7 @@ namespace ets2
           ACC_Controller_Y.mode = 4U;
         } else {
           if (*lead_ok) {
-            if (!(ACC_Controller_DW.ttc > 4.0) || !(*dreq < 2.0)) {
+            if (!(*ttc > 4.0) || !(*dreq < 2.0)) {
               ACC_Controller_DW.durationCounter_2 = 0U;
             }
 
@@ -166,17 +231,17 @@ namespace ets2
           }
 
           if (c) {
-            ACC_Controller_DW.durationCounter_1_o = 0U;
+            ACC_Controller_DW.durationCounter_1_j = 0U;
             ACC_Controller_DW.is_ON = ACC_Controller_IN_FOLLOW;
 
             // Outport: '<Root>/mode'
             ACC_Controller_Y.mode = 2U;
           } else {
             if (*lead_ok) {
-              ACC_Controller_DW.durationCounter_1_l = 0U;
+              ACC_Controller_DW.durationCounter_1_g = 0U;
             }
 
-            if (ACC_Controller_DW.durationCounter_1_l > 20U) {
+            if (ACC_Controller_DW.durationCounter_1_g > 20U) {
               ACC_Controller_DW.is_ON = ACC_Controller_IN_CRUISE;
 
               // Outport: '<Root>/mode'
@@ -187,45 +252,11 @@ namespace ets2
         break;
 
        case ACC_Controller_IN_FOLLOW:
-        // Outport: '<Root>/mode'
-        ACC_Controller_Y.mode = 2U;
-        if (*lead_ok && ((ACC_Controller_DW.ttc < 2.0) || (*dreq > 3.2))) {
-          ACC_Controller_DW.durationCounter_2 = 0U;
-          ACC_Controller_DW.durationCounter_1_l = 0U;
-          ACC_Controller_DW.is_ON = ACC_Controller_IN_EMERGENCY;
-
-          // Outport: '<Root>/mode'
-          ACC_Controller_Y.mode = 6U;
-        } else if (*lead_ok && (*vl < 0.5)) {
-          ACC_Controller_DW.durationCounter_1 = 0U;
-          ACC_Controller_DW.is_ON = ACC_Controller_IN_STOP;
-
-          // Outport: '<Root>/mode'
-          ACC_Controller_Y.mode = 3U;
-        } else {
-          if (*lead_ok) {
-            ACC_Controller_DW.durationCounter_1_o = 0U;
-          }
-
-          if (ACC_Controller_DW.durationCounter_1_o > 10U) {
-            c = true;
-          } else if (*lead_ok) {
-            c = (*gap > ACC_Controller_follow_range(v, vl, th) + 30.0);
-          } else {
-            c = false;
-          }
-
-          if (c) {
-            ACC_Controller_DW.is_ON = ACC_Controller_IN_CRUISE;
-
-            // Outport: '<Root>/mode'
-            ACC_Controller_Y.mode = 1U;
-          }
-        }
+        ACC_Controller_FOLLOW(vset, dreq, lead_ok, gap, ttc);
         break;
 
        case ACC_Controller_IN_GO:
-        ACC_Controller_GO(v, vl, dreq, lead_ok);
+        ACC_Controller_GO(vset, dreq, lead_ok, gap, ttc);
         break;
 
        case ACC_Controller_IN_HOLD:
@@ -233,12 +264,18 @@ namespace ets2
         ACC_Controller_Y.mode = 4U;
 
         // Inport: '<Root>/resume'
-        if (ACC_Controller_U.resume || ((ACC_Controller_DW.t_hold <= 3.0) &&
-             *lead_ok && (*gap > ACC_Controller_DW.gap_stop + 2.0))) {
+        if ((*vset >= 0.5) && (ACC_Controller_U.resume ||
+                               ((ACC_Controller_DW.t_hold <= 3.0) && *lead_ok &&
+              (*gap > ACC_Controller_DW.gap_stop + 2.0)))) {
           ACC_Controller_DW.is_ON = ACC_Controller_IN_GO;
 
           // Outport: '<Root>/mode'
           ACC_Controller_Y.mode = 5U;
+        } else if ((*vset < 0.5) && (ACC_Controller_DW.v > 1.0)) {
+          ACC_Controller_DW.is_ON = ACC_Controller_IN_CRUISE;
+
+          // Outport: '<Root>/mode'
+          ACC_Controller_Y.mode = 1U;
         } else {
           ACC_Controller_DW.t_hold += 0.05;
         }
@@ -250,22 +287,22 @@ namespace ets2
         // Outport: '<Root>/mode'
         // case IN_STOP:
         ACC_Controller_Y.mode = 3U;
-        if (*lead_ok && ((ACC_Controller_DW.ttc < 2.0) || (*dreq > 3.2))) {
+        if (*lead_ok && ((*ttc < 2.0) || (*dreq > 3.2))) {
           ACC_Controller_DW.durationCounter_2 = 0U;
-          ACC_Controller_DW.durationCounter_1_l = 0U;
+          ACC_Controller_DW.durationCounter_1_g = 0U;
           ACC_Controller_DW.is_ON = ACC_Controller_IN_EMERGENCY;
 
           // Outport: '<Root>/mode'
           ACC_Controller_Y.mode = 6U;
-        } else if (*v < 0.15) {
+        } else if (ACC_Controller_DW.v < 0.15) {
           ACC_Controller_DW.t_hold = 0.0;
           ACC_Controller_DW.gap_stop = *gap;
           ACC_Controller_DW.is_ON = ACC_Controller_IN_HOLD;
 
           // Outport: '<Root>/mode'
           ACC_Controller_Y.mode = 4U;
-        } else if (*lead_ok && (*vl > 1.0)) {
-          ACC_Controller_DW.durationCounter_1_o = 0U;
+        } else if (*lead_ok && (ACC_Controller_DW.vl > 1.0)) {
+          ACC_Controller_DW.durationCounter_1_j = 0U;
           ACC_Controller_DW.is_ON = ACC_Controller_IN_FOLLOW;
 
           // Outport: '<Root>/mode'
@@ -288,8 +325,311 @@ namespace ets2
 
     // End of Inport: '<Root>/enable'
   }
+}
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+double ACC_Controller_rt_powd_snf(double u0, double u1)
+{
+  double y;
+  if (std::isnan(u0) || std::isnan(u1)) {
+    y = (rtNaN);
+  } else {
+    double tmp;
+    double tmp_0;
+    tmp = std::abs(u0);
+    tmp_0 = std::abs(u1);
+    if (std::isinf(u1)) {
+      if (tmp == 1.0) {
+        y = 1.0;
+      } else if (tmp > 1.0) {
+        if (u1 > 0.0) {
+          y = (rtInf);
+        } else {
+          y = 0.0;
+        }
+      } else if (u1 > 0.0) {
+        y = 0.0;
+      } else {
+        y = (rtInf);
+      }
+    } else if (tmp_0 == 0.0) {
+      y = 1.0;
+    } else if (tmp_0 == 1.0) {
+      if (u1 > 0.0) {
+        y = u0;
+      } else {
+        y = 1.0 / u0;
+      }
+    } else if (u1 == 2.0) {
+      y = u0 * u0;
+    } else if ((u1 == 0.5) && (u0 >= 0.0)) {
+      y = std::sqrt(u0);
+    } else if ((u0 < 0.0) && (u1 > std::floor(u1))) {
+      y = (rtNaN);
+    } else {
+      y = std::pow(u0, u1);
+    }
+  }
+
+  return y;
+}
+
+namespace ets2
+{
+  // Function for MATLAB Function: '<S1>/MassEstimator'
+  int32_t AccController::ACC_Controller_bsearch(const double x[8], double xi)
+  {
+    int32_t high_i;
+    int32_t low_ip1;
+    int32_t n;
+    high_i = 8;
+    n = 1;
+    low_ip1 = 2;
+    while (high_i > low_ip1) {
+      int32_t mid_i;
+      mid_i = (n + high_i) >> 1;
+      if (xi >= x[mid_i - 1]) {
+        n = mid_i;
+        low_ip1 = mid_i + 1;
+      } else {
+        high_i = mid_i;
+      }
+    }
+
+    return n;
+  }
+
+  // Function for MATLAB Function: '<S1>/MassEstimator'
+  double AccController::ACC_Controller_interp1_o(double varargin_3)
+  {
+    double Vq;
+    double r;
+    int32_t n;
+    static const double varargin_1[8]{ 300.0, 440.0, 1000.0, 1300.0, 1600.0,
+      1900.0, 2300.0, 2500.0 };
+
+    static const int16_t b[8]{ 300, 440, 1000, 1300, 1600, 1900, 2300, 2500 };
+
+    static const double c[8]{ 0.1, 0.4, 1.0, 1.0, 0.82, 0.72, 0.4, 0.1 };
+
+    Vq = (rtNaN);
+    if (!std::isnan(varargin_3) && (!(varargin_3 > 2500.0) && !(varargin_3 <
+          300.0))) {
+      n = ACC_Controller_bsearch(varargin_1, varargin_3) - 1;
+      r = (varargin_3 - static_cast<double>(b[n])) / static_cast<double>(b[n + 1]
+        - b[n]);
+      if (r == 0.0) {
+        Vq = c[n];
+      } else if (r == 1.0) {
+        Vq = c[n + 1];
+      } else if (c[n + 1] == c[n]) {
+        Vq = c[n];
+      } else {
+        Vq = (1.0 - r) * c[n] + c[n + 1] * r;
+      }
+    }
+
+    return Vq;
+  }
+
+  // Function for MATLAB Function: '<S1>/MassEstimator'
+  double AccController::ACC_Controller_interp2(double varargin_4, double
+    varargin_5)
+  {
+    double tmp[8];
+    double Vq;
+    double qx1;
+    double rx;
+    int32_t high_i;
+    int32_t low_i;
+    int32_t low_ip1;
+    int32_t mid_i;
+    int16_t tmp_0;
+    int16_t tmp_1;
+    static const int16_t b[7]{ 800, 950, 1100, 1250, 1400, 1600, 2000 };
+
+    static const int16_t V[56]{ 3812, 1931, 1718, 1669, 1740, 1577, 1429, 1429,
+      3812, 2165, 2108, 2041, 1747, 1577, 1429, 1429, 3401, 3271, 3193, 2945,
+      2718, 2453, 2124, 2124, 3798, 3682, 3564, 3403, 3099, 2507, 1849, 1849,
+      3914, 3897, 3767, 3503, 3099, 2549, 1959, 1959, 3914, 3897, 3767, 3503,
+      2555, 2549, 1959, 1959, 3914, 3897, 3767, 3503, 2555, 2549, 1959, 1959 };
+
+    if ((varargin_4 >= 800.0) && (varargin_4 <= 2000.0) && (varargin_5 >= 0.0) &&
+        (varargin_5 <= 2800.0)) {
+      high_i = 7;
+      low_i = 0;
+      low_ip1 = 2;
+      while (high_i > low_ip1) {
+        mid_i = ((low_i + high_i) + 1) >> 1;
+        if (varargin_4 >= b[mid_i - 1]) {
+          low_i = mid_i - 1;
+          low_ip1 = mid_i + 1;
+        } else {
+          high_i = mid_i;
+        }
+      }
+
+      for (low_ip1 = 0; low_ip1 < 8; low_ip1++) {
+        tmp[low_ip1] = 400.0 * static_cast<double>(low_ip1);
+      }
+
+      high_i = ACC_Controller_bsearch(tmp, varargin_5);
+      rx = b[low_i];
+      if (varargin_4 == rx) {
+        low_i = (low_i << 3) + high_i;
+        qx1 = V[low_i - 1];
+        Vq = V[low_i];
+      } else if (b[low_i + 1] == varargin_4) {
+        low_i = ((low_i + 1) << 3) + high_i;
+        qx1 = V[low_i - 1];
+        Vq = V[low_i];
+      } else {
+        rx = (varargin_4 - rx) / static_cast<double>(b[low_i + 1] - b[low_i]);
+        low_ip1 = ((low_i + 1) << 3) + high_i;
+        tmp_0 = V[low_ip1 - 1];
+        low_i = (low_i << 3) + high_i;
+        tmp_1 = V[low_i - 1];
+        if (tmp_0 == tmp_1) {
+          qx1 = tmp_1;
+        } else {
+          qx1 = (1.0 - rx) * static_cast<double>(tmp_1) + static_cast<double>
+            (tmp_0) * rx;
+        }
+
+        tmp_0 = V[low_ip1];
+        tmp_1 = V[low_i];
+        if (tmp_0 == tmp_1) {
+          Vq = tmp_1;
+        } else {
+          Vq = (1.0 - rx) * static_cast<double>(tmp_1) + static_cast<double>
+            (tmp_0) * rx;
+        }
+      }
+
+      rx = static_cast<double>(high_i - 1) * 400.0;
+      if ((rx == varargin_5) || (qx1 == Vq)) {
+        Vq = qx1;
+      } else if (!(400.0 * static_cast<double>(high_i) == varargin_5)) {
+        rx = (varargin_5 - rx) / (400.0 * static_cast<double>(high_i) - rx);
+        Vq = (1.0 - rx) * qx1 + rx * Vq;
+      }
+    } else {
+      Vq = (rtNaN);
+    }
+
+    return Vq;
+  }
+
+  // Function for MATLAB Function: '<S1>/MassEstimator'
+  double AccController::ACC_Controller_interp1_oi(double varargin_3)
+  {
+    double Vq;
+    Vq = (rtNaN);
+    if (!std::isnan(varargin_3) && (!(varargin_3 > 20300.0) && !(varargin_3 <
+          12000.0))) {
+      double r;
+      r = (varargin_3 - 12000.0) / 8300.0;
+      if (r == 0.0) {
+        Vq = 0.6;
+      } else if (r == 1.0) {
+        Vq = 1.0;
+      } else {
+        Vq = (1.0 - r) * 0.6 + r;
+      }
+    }
+
+    return Vq;
+  }
+
+  // Function for MATLAB Function: '<S1>/Allocator'
+  double AccController::ACC_Controller_interp1(const double varargin_2[4],
+    double varargin_3)
+  {
+    double Vq;
+    static const double b[4]{ 0.0, 5.6, 12.0, 30.0 };
+
+    Vq = (rtNaN);
+    if (!std::isnan(varargin_3) && (!(varargin_3 > 30.0) && !(varargin_3 < 0.0)))
+    {
+      double r;
+      int32_t high_i;
+      int32_t low_i;
+      int32_t low_ip1;
+      high_i = 4;
+      low_i = 1;
+      low_ip1 = 2;
+      while (high_i > low_ip1) {
+        int32_t mid_i;
+        mid_i = (low_i + high_i) >> 1;
+        if (varargin_3 >= b[mid_i - 1]) {
+          low_i = mid_i;
+          low_ip1 = mid_i + 1;
+        } else {
+          high_i = mid_i;
+        }
+      }
+
+      r = b[low_i - 1];
+      r = (varargin_3 - r) / (b[low_i] - r);
+      if (r == 0.0) {
+        Vq = varargin_2[low_i - 1];
+      } else if (r == 1.0) {
+        Vq = varargin_2[low_i];
+      } else if (varargin_2[low_i - 1] == varargin_2[low_i]) {
+        Vq = varargin_2[low_i - 1];
+      } else {
+        Vq = (1.0 - r) * varargin_2[low_i - 1] + r * varargin_2[low_i];
+      }
+    }
+
+    return Vq;
+  }
+
+  // Function for MATLAB Function: '<S1>/MassEstimator'
+  double AccController::ACC_Controller_interp1_oimb(const double varargin_2[10],
+    double varargin_3)
+  {
+    double Vq;
+    static const double b[10]{ 0.0, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.75,
+      1.0 };
+
+    Vq = (rtNaN);
+    if (!std::isnan(varargin_3) && (!(varargin_3 > 1.0) && !(varargin_3 < 0.0)))
+    {
+      double r;
+      int32_t high_i;
+      int32_t low_i;
+      int32_t low_ip1;
+      high_i = 10;
+      low_i = 1;
+      low_ip1 = 2;
+      while (high_i > low_ip1) {
+        int32_t mid_i;
+        mid_i = (low_i + high_i) >> 1;
+        if (varargin_3 >= b[mid_i - 1]) {
+          low_i = mid_i;
+          low_ip1 = mid_i + 1;
+        } else {
+          high_i = mid_i;
+        }
+      }
+
+      r = b[low_i - 1];
+      r = (varargin_3 - r) / (b[low_i] - r);
+      if (r == 0.0) {
+        Vq = varargin_2[low_i - 1];
+      } else if (r == 1.0) {
+        Vq = varargin_2[low_i];
+      } else if (varargin_2[low_i - 1] == varargin_2[low_i]) {
+        Vq = varargin_2[low_i - 1];
+      } else {
+        Vq = (1.0 - r) * varargin_2[low_i - 1] + r * varargin_2[low_i];
+      }
+    }
+
+    return Vq;
+  }
+
+  // Function for MATLAB Function: '<S31>/optimizer'
   int32_t AccController::ACC_Controller_xpotrf(double b_A[169])
   {
     int32_t info;
@@ -349,7 +689,7 @@ namespace ets2
     return info;
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   double AccController::ACC_Controller_minimum(const double x[13])
   {
     double ex;
@@ -385,57 +725,8 @@ namespace ets2
 
     return ex;
   }
-}
 
-double rt_powd_snf(double u0, double u1)
-{
-  double y;
-  if (std::isnan(u0) || std::isnan(u1)) {
-    y = (rtNaN);
-  } else {
-    double tmp;
-    double tmp_0;
-    tmp = std::abs(u0);
-    tmp_0 = std::abs(u1);
-    if (std::isinf(u1)) {
-      if (tmp == 1.0) {
-        y = 1.0;
-      } else if (tmp > 1.0) {
-        if (u1 > 0.0) {
-          y = (rtInf);
-        } else {
-          y = 0.0;
-        }
-      } else if (u1 > 0.0) {
-        y = 0.0;
-      } else {
-        y = (rtInf);
-      }
-    } else if (tmp_0 == 0.0) {
-      y = 1.0;
-    } else if (tmp_0 == 1.0) {
-      if (u1 > 0.0) {
-        y = u0;
-      } else {
-        y = 1.0 / u0;
-      }
-    } else if (u1 == 2.0) {
-      y = u0 * u0;
-    } else if ((u1 == 0.5) && (u0 >= 0.0)) {
-      y = std::sqrt(u0);
-    } else if ((u0 < 0.0) && (u1 > std::floor(u1))) {
-      y = (rtNaN);
-    } else {
-      y = std::pow(u0, u1);
-    }
-  }
-
-  return y;
-}
-
-namespace ets2
-{
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   void AccController::ACC_Contr_validateHessianMatrix(double b_H[169], double
     b_L[169], double *BadH)
   {
@@ -490,7 +781,7 @@ namespace ets2
       } else {
         Tries = 0;
         while (Tries <= 4) {
-          normH = rt_powd_snf(10.0, static_cast<double>(Tries)) *
+          normH = ACC_Controller_rt_powd_snf(10.0, static_cast<double>(Tries)) *
             1.4901161193847656E-7;
           std::memset(&b[0], 0, 169U * sizeof(int8_t));
           for (j = 0; j < 13; j++) {
@@ -529,7 +820,7 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   void AccController::ACC_Controller_trisolve(const double b_A[169], double B
     [169])
   {
@@ -555,8 +846,8 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S52>/optimizer'
-  void AccController::ACC_Controller_tic_d(double *tstart_tv_sec, double
+  // Function for MATLAB Function: '<S53>/optimizer'
+  void AccController::ACC_Controller_tic_n(double *tstart_tv_sec, double
     *tstart_tv_nsec)
   {
     coderTimespec origTimespec;
@@ -570,7 +861,7 @@ namespace ets2
     *tstart_tv_nsec = origTimespec.tv_nsec;
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   double AccController::ACC_Controller_norm(const double x[13])
   {
     double scale;
@@ -615,8 +906,8 @@ namespace ets2
     return y;
   }
 
-  // Function for MATLAB Function: '<S52>/optimizer'
-  double AccController::ACC_Controller_toc_b(double tstart_tv_sec, double
+  // Function for MATLAB Function: '<S53>/optimizer'
+  double AccController::ACC_Controller_toc_h(double tstart_tv_sec, double
     tstart_tv_nsec)
   {
     coderTimespec origTimespec;
@@ -630,7 +921,7 @@ namespace ets2
       (origTimespec.tv_sec - tstart_tv_sec);
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   double AccController::ACC_Controller_maximum(const double x[13])
   {
     double ex;
@@ -667,7 +958,7 @@ namespace ets2
     return ex;
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   double AccController::ACC_Controller_xnrm2(int32_t n, const double x[169],
     int32_t ix0)
   {
@@ -722,7 +1013,7 @@ namespace ets2
   }
 }
 
-double rt_hypotd_snf(double u0, double u1)
+double ACC_Controller_rt_hypotd_snf(double u0, double u1)
 {
   double a;
   double b;
@@ -746,7 +1037,7 @@ double rt_hypotd_snf(double u0, double u1)
 
 namespace ets2
 {
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   void AccController::ACC_Controller_xgemv(int32_t b_m, int32_t n, const double
     b_A[169], int32_t ia0, const double x[169], int32_t ix0, double y[13])
   {
@@ -773,7 +1064,7 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   void AccController::ACC_Controller_xgerc(int32_t b_m, int32_t n, double alpha1,
     int32_t ix0, const double y[13], double b_A[169], int32_t ia0)
   {
@@ -797,7 +1088,7 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   double AccController::ACC_Controller_KWIKfactor(const double b_Ac[2704], const
     int32_t iC[208], int32_t nA, const double b_Linv[169], double RLinv[169],
     double D[169], double b_H[169], int32_t n)
@@ -841,7 +1132,7 @@ namespace ets2
         tau[i] = 0.0;
         xnorm = ACC_Controller_xnrm2(12 - i, b_A, ii + 2);
         if (xnorm != 0.0) {
-          xnorm = rt_hypotd_snf(b_A[ii], xnorm);
+          xnorm = ACC_Controller_rt_hypotd_snf(b_A[ii], xnorm);
           if (b_A[ii] >= 0.0) {
             xnorm = -xnorm;
           }
@@ -859,7 +1150,8 @@ namespace ets2
               atmp *= 9.9792015476736E+291;
             } while ((std::abs(xnorm) < 1.0020841800044864E-292) && (knt < 20));
 
-            xnorm = rt_hypotd_snf(atmp, ACC_Controller_xnrm2(12 - i, b_A, ii + 2));
+            xnorm = ACC_Controller_rt_hypotd_snf(atmp, ACC_Controller_xnrm2(12 -
+              i, b_A, ii + 2));
             if (atmp >= 0.0) {
               xnorm = -xnorm;
             }
@@ -1080,7 +1372,7 @@ namespace ets2
     return factorStatus;
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   void AccController::ACC_Controller_DropConstraint(int32_t kDrop, bool iA[208],
     int32_t *nA, int32_t iC[208])
   {
@@ -1097,8 +1389,8 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S52>/optimizer'
-  void AccController::ACC_Controller_qpkwik_n(const double b_Linv[169], const
+  // Function for MATLAB Function: '<S53>/optimizer'
+  void AccController::ACC_Controller_qpkwik_h(const double b_Linv[169], const
     double b_Hinv[169], const double f[13], const double b[208], bool iA[208],
     int32_t maxiter, double FeasTol, double x[13], double lambda[208], int32_t
     *status)
@@ -1755,7 +2047,7 @@ namespace ets2
     int32_t exitg3;
     bool guard1;
     bool guard2;
-    ACC_Controller_tic_d(&stopwatch_TimerSeed_tv_sec,
+    ACC_Controller_tic_n(&stopwatch_TimerSeed_tv_sec,
                          &stopwatch_TimerSeed_tv_nsec);
     std::memset(&x[0], 0, 13U * sizeof(double));
     std::memset(&lambda[0], 0, 208U * sizeof(double));
@@ -1794,7 +2086,7 @@ namespace ets2
       do {
         exitg3 = 0;
         if (!DualFeasible && (nA > 0) && (*status <= maxiter)) {
-          ACC_Controller_toc_b(stopwatch_TimerSeed_tv_sec,
+          ACC_Controller_toc_h(stopwatch_TimerSeed_tv_sec,
                                stopwatch_TimerSeed_tv_nsec);
           Xnorm0 = ACC_Controller_KWIKfactor(b_Ac, iC, nA, b_Linv, RLinv, D, b_H,
             ACC_Controller_degrees);
@@ -1908,7 +2200,7 @@ namespace ets2
     if (guard1) {
       Xnorm0 = ACC_Controller_norm(x);
       while (*status <= maxiter) {
-        ACC_Controller_toc_b(stopwatch_TimerSeed_tv_sec,
+        ACC_Controller_toc_h(stopwatch_TimerSeed_tv_sec,
                              stopwatch_TimerSeed_tv_nsec);
         cMin = -FeasTol;
         tmp = -1;
@@ -2130,7 +2422,7 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   void AccController::ACC_Controll_enforceInputLimits(const double uk[2], const
     double uk1[2], const double b_uoff[2], const double b_Mlim[208], const
     int32_t b_Mrows[208], int32_t b_ny, int32_t b_degrees, double uk_clipped[2])
@@ -2199,8 +2491,8 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S52>/optimizer'
-  void AccController::ACC_Contro_mpcblock_optimizer_p(const double rseq[240],
+  // Function for MATLAB Function: '<S53>/optimizer'
+  void AccController::ACC_Contro_mpcblock_optimizer_b(const double rseq[240],
     const double vseq[162], const double umin[2], const double umax[2], const
     double ymin[3], const double ymax[3], int32_t switch_in, const double x[5],
     const double old_u[2], const bool iA[208], const double b_yoff[3], int32_t
@@ -16201,7 +16493,7 @@ namespace ets2
             Bc[i] += b_Wy_0;
             i++;
           } else if (b_Mrows[i] <= 480) {
-            ii = (b_Mrows[i] - div_nde_s32_floor(b_Mrows[i] - 241,
+            ii = (b_Mrows[i] - ACC_Controller_div_nde_7h8hU5qm(b_Mrows[i] - 241,
                    ACC_Controller_ny) * ACC_Controller_ny) - 241;
             Suboptimal = ymin_incr_flag[ii];
             if (!ymin_incr_flag[ii]) {
@@ -16289,7 +16581,7 @@ namespace ets2
           }
         }
 
-        ACC_Controller_qpkwik_n(c_Linv, d_Linv, f, Bc, iAout, 200, 1.0E-6, aux,
+        ACC_Controller_qpkwik_h(c_Linv, d_Linv, f, Bc, iAout, 200, 1.0E-6, aux,
           b_a, &ii);
         if (ii < 0) {
           std::memset(&aux[0], 0, 13U * sizeof(double));
@@ -16445,37 +16737,37 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   void AccController::ACC_Controller_tic(double *tstart_tv_sec, double
     *tstart_tv_nsec)
   {
     coderTimespec origTimespec;
-    if (!ACC_Controller_DW.freq_not_empty_a) {
-      ACC_Controller_DW.freq_not_empty_a = true;
-      coderInitTimeFunctions(&ACC_Controller_DW.freq_c);
+    if (!ACC_Controller_DW.freq_not_empty_k) {
+      ACC_Controller_DW.freq_not_empty_k = true;
+      coderInitTimeFunctions(&ACC_Controller_DW.freq_o);
     }
 
-    coderTimeClockGettimeMonotonic(&origTimespec, ACC_Controller_DW.freq_c);
+    coderTimeClockGettimeMonotonic(&origTimespec, ACC_Controller_DW.freq_o);
     *tstart_tv_sec = origTimespec.tv_sec;
     *tstart_tv_nsec = origTimespec.tv_nsec;
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   double AccController::ACC_Controller_toc(double tstart_tv_sec, double
     tstart_tv_nsec)
   {
     coderTimespec origTimespec;
-    if (!ACC_Controller_DW.freq_not_empty_a) {
-      ACC_Controller_DW.freq_not_empty_a = true;
-      coderInitTimeFunctions(&ACC_Controller_DW.freq_c);
+    if (!ACC_Controller_DW.freq_not_empty_k) {
+      ACC_Controller_DW.freq_not_empty_k = true;
+      coderInitTimeFunctions(&ACC_Controller_DW.freq_o);
     }
 
-    coderTimeClockGettimeMonotonic(&origTimespec, ACC_Controller_DW.freq_c);
+    coderTimeClockGettimeMonotonic(&origTimespec, ACC_Controller_DW.freq_o);
     return (origTimespec.tv_nsec - tstart_tv_nsec) / 1.0E+9 +
       (origTimespec.tv_sec - tstart_tv_sec);
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   void AccController::ACC_Controller_qpkwik(const double b_Linv[169], const
     double b_Hinv[169], const double f[13], const double b[208], bool iA[208],
     int32_t maxiter, double FeasTol, double x[13], double lambda[208], int32_t
@@ -17507,7 +17799,7 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S30>/optimizer'
+  // Function for MATLAB Function: '<S31>/optimizer'
   void AccController::ACC_Controll_mpcblock_optimizer(const double rseq[240],
     const double vseq[162], const double umin[2], const double umax[2], const
     double ymin[3], const double ymax[3], int32_t switch_in, const double x[5],
@@ -31505,7 +31797,7 @@ namespace ets2
             Bc[i] += b_Wy_0;
             i++;
           } else if (b_Mrows[i] <= 480) {
-            ii = (b_Mrows[i] - div_nde_s32_floor(b_Mrows[i] - 241,
+            ii = (b_Mrows[i] - ACC_Controller_div_nde_7h8hU5qm(b_Mrows[i] - 241,
                    ACC_Controller_ny) * ACC_Controller_ny) - 241;
             Suboptimal = ymin_incr_flag[ii];
             if (!ymin_incr_flag[ii]) {
@@ -31749,50 +32041,6 @@ namespace ets2
   }
 
   // Function for MATLAB Function: '<S1>/Allocator'
-  double AccController::ACC_Controller_interp1(const double varargin_2[4],
-    double varargin_3)
-  {
-    double Vq;
-    static const double b[4]{ 0.0, 5.6, 12.0, 30.0 };
-
-    Vq = (rtNaN);
-    if (!std::isnan(varargin_3) && (!(varargin_3 > 30.0) && !(varargin_3 < 0.0)))
-    {
-      double r;
-      int32_t high_i;
-      int32_t low_i;
-      int32_t low_ip1;
-      high_i = 4;
-      low_i = 1;
-      low_ip1 = 2;
-      while (high_i > low_ip1) {
-        int32_t mid_i;
-        mid_i = (low_i + high_i) >> 1;
-        if (varargin_3 >= b[mid_i - 1]) {
-          low_i = mid_i;
-          low_ip1 = mid_i + 1;
-        } else {
-          high_i = mid_i;
-        }
-      }
-
-      r = b[low_i - 1];
-      r = (varargin_3 - r) / (b[low_i] - r);
-      if (r == 0.0) {
-        Vq = varargin_2[low_i - 1];
-      } else if (r == 1.0) {
-        Vq = varargin_2[low_i];
-      } else if (varargin_2[low_i - 1] == varargin_2[low_i]) {
-        Vq = varargin_2[low_i - 1];
-      } else {
-        Vq = (1.0 - r) * varargin_2[low_i - 1] + r * varargin_2[low_i];
-      }
-    }
-
-    return Vq;
-  }
-
-  // Function for MATLAB Function: '<S1>/Allocator'
   double AccController::ACC_Controller_interp1_p(const double varargin_1[10],
     double varargin_3)
   {
@@ -31854,7 +32102,7 @@ namespace ets2
 
   // Function for MATLAB Function: '<S1>/Allocator'
   double AccController::ACC_Contro_acc_inverse_throttle(double a_req, double v,
-    double gear, double rpm)
+    double gear, double rpm, double m)
   {
     double a;
     double b_r;
@@ -31913,9 +32161,10 @@ namespace ets2
     }
 
     r = -(0.0512 * r + 215.1);
-    thr = 1.0 - rt_powd_snf(1.0 - std::fmin(std::fmax((((a * a * 4.6 + 20300.0) *
-      a_req + (v * v * 3.0 + 1433.8296)) / (g * 0.972 * 2.59 / 0.506) - r) / std::
-      fmax(2700.0 * b_r - r, 1.0), 0.0), 1.0), 0.7518796992481203);
+    thr = 1.0 - ACC_Controller_rt_powd_snf(1.0 - std::fmin(std::fmax((((a * a *
+      4.6 + m) * a_req + (v * v * 3.0 + 0.0072 * m * 9.81)) / (g * 0.972 * 2.59 /
+      0.506) - r) / std::fmax(2700.0 * b_r - r, 1.0), 0.0), 1.0),
+      0.7518796992481203);
     return thr;
   }
 }
@@ -31925,24 +32174,38 @@ namespace ets2
   // Model step function
   void AccController::step()
   {
-    double rseq[240];
-    double vr_ref[80];
     double row[10];
-    double F;
+    double Te_req;
     double a;
-    double a1;
-    double cap;
-    double r;
-    double u1min;
-    double vli;
-    double vln;
+    double fric;
+    double kw;
+    double phi_raw;
+    double pt;
+    double sig0;
+    double th;
     double vrel;
     double x;
+    bool a_ok;
+    bool b;
+    bool lead_ok;
+    bool locked;
+    static const double d[40]{ 0.0, 0.0, 0.0, 0.0, 0.36, 0.36, 0.48, 0.48, 0.85,
+      0.85, 1.17, 1.17, 1.7, 1.7, 2.29, 2.29, 3.25, 3.25, 3.3, 3.3, 3.95, 3.95,
+      4.15, 4.15, 4.25, 4.25, 4.9, 4.9, 5.45, 5.45, 6.0, 6.0, 7.2, 7.2, 8.5, 8.5,
+      8.5, 8.5, 9.6, 9.6 };
+
+    double rseq[240];
+    double vr_ref[80];
+    double vset_ref[80];
+    double u1min;
+    double vln;
+    int32_t b_high_i;
+    int32_t b_low_i;
+    int32_t b_low_ip1;
+    int32_t b_mid_i;
     int32_t high_i;
     int32_t low_i;
     int32_t low_ip1;
-    int32_t mid_i;
-    bool slipping;
     static const double h[40]{ 0.0, 0.0, 0.0, 0.0, 0.36, 0.36, 0.48, 0.48, 0.85,
       0.85, 1.17, 1.17, 1.7, 1.7, 2.29, 2.29, 3.25, 3.25, 3.3, 3.3, 3.95, 3.95,
       4.15, 4.15, 4.25, 4.25, 4.9, 4.9, 5.45, 5.45, 6.0, 6.0, 7.2, 7.2, 8.5, 8.5,
@@ -31956,24 +32219,27 @@ namespace ets2
     double ymax[3];
     double ymin[3];
     double last_mv_DSTATE[2];
-    double last_mv_DSTATE_f[2];
+    double last_mv_DSTATE_k[2];
     double tmp[2];
     double umax[2];
     double umin[2];
-    double cost_j;
+    double cost_l;
     double gap;
-    double status;
-    double th;
-    double vr_ref_0;
-    bool lead_ok;
-    static const double f[10]{ 0.0, 2.8, 5.6, 7.0, 11.0, 12.5, 15.3, 18.0, 20.8,
-      25.0 };
+    double ttc;
+    static const double c[14]{ 20.81, 16.16, 12.57, 9.76, 7.56, 5.87, 4.55, 3.53,
+      2.77, 2.15, 1.66, 1.29, 1.0, 0.78 };
 
-    static const double g[10]{ 2.0, 2.4, 2.4, 1.85, 1.7, 1.25, 1.1, 0.95, 0.72,
+    static const double f[4]{ 4.33, 9.04, 14.69, 21.03 };
+
+    static const double h_0[10]{ 0.0, 2.8, 5.6, 7.0, 11.0, 12.5, 15.3, 18.0,
+      20.8, 25.0 };
+
+    static const double l[10]{ 2.0, 2.4, 2.4, 1.85, 1.7, 1.25, 1.1, 0.95, 0.72,
       0.45 };
 
-    static const double f_0[14]{ 20.81, 16.16, 12.57, 9.76, 7.56, 5.87, 4.55,
-      3.53, 2.77, 2.15, 1.66, 1.29, 1.0, 0.78 };
+    static const double f_0[4]{ 0.0, 5.6, 12.0, 30.0 };
+
+    static const double g[4]{ 8.5, 8.5, 9.6, 9.6 };
 
     bool tmp_1[208];
     bool guard1;
@@ -31989,6 +32255,7 @@ namespace ets2
     //   Inport: '<Root>/lead_valid'
     //   Inport: '<Root>/set_speed_mps'
     //   Inport: '<Root>/time_gap_s'
+    //   MATLAB Function: '<S1>/MassEstimator'
 
     x = ACC_Controller_U.time_gap_s;
     if (!(ACC_Controller_U.time_gap_s > 0.0)) {
@@ -31998,20 +32265,21 @@ namespace ets2
       x = 2.0;
     }
 
-    th = std::fmin(std::fmax(x, 1.0), 3.0);
-    status = std::fmax(0.0, ACC_Controller_U.set_speed_mps);
-    if (std::isinf(status)) {
-      status = 0.0;
-    }
-
-    x = std::fmax(0.0, ACC_Controller_U.ego_speed_mps);
+    ACC_Controller_DW.th = std::fmin(std::fmax(x, 1.0), 3.0);
+    x = std::fmax(0.0, ACC_Controller_U.set_speed_mps);
     if (std::isinf(x)) {
       x = 0.0;
     }
 
+    ACC_Controller_DW.v = std::fmax(0.0, ACC_Controller_U.ego_speed_mps);
+    if (std::isinf(ACC_Controller_DW.v)) {
+      ACC_Controller_DW.v = 0.0;
+    }
+
     a = ACC_Controller_U.ego_accel_mps2;
-    if (std::isinf(ACC_Controller_U.ego_accel_mps2) || std::isnan
-        (ACC_Controller_U.ego_accel_mps2)) {
+    locked = std::isinf(ACC_Controller_U.ego_accel_mps2);
+    a_ok = std::isnan(ACC_Controller_U.ego_accel_mps2);
+    if (locked || a_ok) {
       a = ACC_Controller_DW.af;
     }
 
@@ -32023,32 +32291,33 @@ namespace ets2
       (ACC_Controller_U.lead_speed_mps) && (ACC_Controller_U.lead_gap_m > 0.0))));
     if (lead_ok) {
       gap = ACC_Controller_U.lead_gap_m;
-      vli = std::fmax(0.0, ACC_Controller_U.lead_speed_mps);
+      ACC_Controller_DW.vl = std::fmax(0.0, ACC_Controller_U.lead_speed_mps);
       vrel = ACC_Controller_U.lead_accel_mps2;
       if (std::isinf(ACC_Controller_U.lead_accel_mps2) || std::isnan
           (ACC_Controller_U.lead_accel_mps2)) {
         vrel = 0.0;
       }
 
-      cost_j = std::fmax(vrel, -vli / 2.0);
-      vrel = x - vli;
+      cost_l = std::fmax(vrel, -ACC_Controller_DW.vl / 2.0);
+      vrel = ACC_Controller_DW.v - ACC_Controller_DW.vl;
       if (vrel > 3.0) {
-        ACC_Controller_DW.ttc = ACC_Controller_U.lead_gap_m / vrel;
+        ttc = ACC_Controller_U.lead_gap_m / vrel;
       } else {
-        ACC_Controller_DW.ttc = 99.0;
+        ttc = 99.0;
       }
 
       a = std::fmax(vrel, 0.0);
       vrel = a * a / (std::fmax(ACC_Controller_U.lead_gap_m - 3.0, 0.5) * 2.0);
-      if (cost_j < -0.1) {
-        vrel = std::fmax(vrel, x * x / (std::fmax((vli * vli / (2.0 * -cost_j) +
-          ACC_Controller_U.lead_gap_m) - 3.0, 0.5) * 2.0));
+      if (cost_l < -0.1) {
+        vrel = std::fmax(vrel, ACC_Controller_DW.v * ACC_Controller_DW.v / (std::
+          fmax((ACC_Controller_DW.vl * ACC_Controller_DW.vl / (2.0 * -cost_l) +
+                ACC_Controller_U.lead_gap_m) - 3.0, 0.5) * 2.0));
       }
     } else {
       gap = 200.0;
-      vli = x;
-      cost_j = 0.0;
-      ACC_Controller_DW.ttc = 99.0;
+      ACC_Controller_DW.vl = ACC_Controller_DW.v;
+      cost_l = 0.0;
+      ttc = 99.0;
       vrel = 0.0;
     }
 
@@ -32056,7 +32325,7 @@ namespace ets2
     //   Inport: '<Root>/enable'
     //   MATLAB Function: '<S1>/InputConditioning'
 
-    // ACC modes: 0 OFF, 1 CRUISE, 2 FOLLOW, 3 STOP, 4 HOLD, 5 GO, 6 EMERGENCY. enable false -> OFF. FOLLOW when a lead is within the follow range; STOP when the lead has stopped; HOLD at standstill (brake held); GO automatically when the lead pulls away by more than MODE_go_gap within MODE_go_window s of stopping, otherwise on resume; EMERGENCY when TTC < MODE_ttc_on or the required deceleration > MODE_dreq_on. 
+    // ACC modes: 0 OFF, 1 CRUISE, 2 FOLLOW, 3 STOP, 4 HOLD, 5 GO, 6 EMERGENCY. enable false -> OFF. FOLLOW when a lead is within the follow range; STOP when the lead has stopped; HOLD at standstill (brake held); GO automatically when the lead pulls away by more than MODE_go_gap within MODE_go_window s of stopping, otherwise on resume; EMERGENCY when TTC < MODE_ttc_on or the required deceleration > MODE_dreq_on. A set speed below MODE_vset_stop is a stop request: CRUISE / FOLLOW / GO go to HOLD at standstill, HOLD does not go to GO and returns to CRUISE if the driver pushes the truck above MODE_hold_release_v. 
     if (ACC_Controller_DW.is_active_c3_ACC_Controller == 0) {
       ACC_Controller_DW.is_active_c3_ACC_Controller = 1U;
       ACC_Controller_DW.is_c3_ACC_Controller = ACC_Controller_IN_OFF;
@@ -32069,7 +32338,7 @@ namespace ets2
       ACC_Controller_Y.mode = 0U;
       if (ACC_Controller_U.enable) {
         ACC_Controller_DW.is_c3_ACC_Controller = ACC_Controller_IN_ON;
-        if (x < 0.15) {
+        if (ACC_Controller_DW.v < 0.15) {
           ACC_Controller_DW.t_hold = 99.0;
           ACC_Controller_DW.gap_stop = gap;
           ACC_Controller_DW.is_ON = ACC_Controller_IN_HOLD;
@@ -32078,13 +32347,13 @@ namespace ets2
           ACC_Controller_Y.mode = 4U;
         } else {
           if (lead_ok) {
-            slipping = (gap < ACC_Controller_follow_range(&x, &vli, &th));
+            b = (gap < ACC_Controller_follow_range());
           } else {
-            slipping = false;
+            b = false;
           }
 
-          if (slipping) {
-            ACC_Controller_DW.durationCounter_1_o = 0U;
+          if (b) {
+            ACC_Controller_DW.durationCounter_1_j = 0U;
             ACC_Controller_DW.is_ON = ACC_Controller_IN_FOLLOW;
 
             // Outport: '<Root>/mode'
@@ -32099,20 +32368,20 @@ namespace ets2
       }
     } else {
       // case IN_ON:
-      ACC_Controller_ON(&x, &vli, &vrel, &th, &lead_ok, &gap);
+      ACC_Controller_ON(&x, &vrel, &lead_ok, &gap, &ttc);
     }
 
     if (!lead_ok) {
       ACC_Controller_DW.durationCounter_1++;
-      ACC_Controller_DW.durationCounter_1_o++;
-      ACC_Controller_DW.durationCounter_1_l++;
+      ACC_Controller_DW.durationCounter_1_j++;
+      ACC_Controller_DW.durationCounter_1_g++;
     } else {
       ACC_Controller_DW.durationCounter_1 = 0U;
-      ACC_Controller_DW.durationCounter_1_o = 0U;
-      ACC_Controller_DW.durationCounter_1_l = 0U;
+      ACC_Controller_DW.durationCounter_1_j = 0U;
+      ACC_Controller_DW.durationCounter_1_g = 0U;
     }
 
-    if ((ACC_Controller_DW.ttc > 4.0) && (vrel < 2.0)) {
+    if ((ttc > 4.0) && (vrel < 2.0)) {
       ACC_Controller_DW.durationCounter_2++;
     } else {
       ACC_Controller_DW.durationCounter_2 = 0U;
@@ -32120,139 +32389,428 @@ namespace ets2
 
     // End of Chart: '<S1>/ModeLogic'
 
+    // MATLAB Function: '<S1>/MassEstimator' incorporates:
+    //   Inport: '<Root>/actuation_valid'
+    //   Inport: '<Root>/brake_applied'
+    //   Inport: '<Root>/ego_accel_mps2'
+    //   Inport: '<Root>/ego_speed_mps'
+    //   Inport: '<Root>/engine_rpm'
+    //   Inport: '<Root>/gear'
+    //   Inport: '<Root>/mass_prior_kg'
+    //   Inport: '<Root>/pitch_rad'
+    //   Inport: '<Root>/retarder_applied'
+    //   Inport: '<Root>/throttle_applied'
+    //   MATLAB Function: '<S1>/Allocator'
+    //   MATLAB Function: '<S1>/MPC_Prep'
+    //   UnitDelay: '<S1>/eb_last'
+
+    if (ACC_Controller_U.actuation_valid) {
+      if (!std::isinf(ACC_Controller_U.throttle_applied) && !std::isnan
+          (ACC_Controller_U.throttle_applied)) {
+        ACC_Controller_Y.throttle = ACC_Controller_U.throttle_applied;
+      }
+
+      if (!std::isinf(ACC_Controller_U.brake_applied) && !std::isnan
+          (ACC_Controller_U.brake_applied)) {
+        ACC_Controller_Y.brake = ACC_Controller_U.brake_applied;
+      }
+    }
+
+    if (ACC_Controller_U.actuation_valid && (ACC_Controller_U.retarder_applied >=
+         0)) {
+      ACC_Controller_DW.ret_last_DSTATE = ACC_Controller_U.retarder_applied;
+    }
+
+    if (!std::isinf(ACC_Controller_U.mass_prior_kg) && !std::isnan
+        (ACC_Controller_U.mass_prior_kg) && (ACC_Controller_U.mass_prior_kg >
+         0.0)) {
+      ttc = std::fmin(std::fmax(ACC_Controller_U.mass_prior_kg, 10000.0),
+                      44000.0);
+      sig0 = 0.1;
+    } else {
+      ttc = 20300.0;
+      sig0 = 0.4;
+    }
+
+    if (!ACC_Controller_DW.init || (std::abs(ttc -
+          ACC_Controller_DW.m_prev_prior) > 1000.0)) {
+      ACC_Controller_DW.init = true;
+      ACC_Controller_DW.m_prev_prior = ttc;
+      ACC_Controller_DW.theta = 20300.0 / ttc;
+      a = sig0 * ACC_Controller_DW.theta / 0.15;
+      ACC_Controller_DW.P = a * a;
+      ACC_Controller_DW.s2 = 0.0225;
+      ACC_Controller_DW.t_info = 0.0;
+      ACC_Controller_DW.cnt = 0.0;
+      ACC_Controller_DW.m_out = ttc;
+      ACC_Controller_DW.zbar = 0.0;
+      ACC_Controller_DW.kb_n = 0.0;
+    }
+
+    a = sig0 * 20300.0 / ttc / 0.15;
+    ttc = a * a;
+    lead_ok = ((ACC_Controller_U.gear >= 1) && (ACC_Controller_U.gear <= 14));
+    if (lead_ok) {
+      sig0 = c[ACC_Controller_U.gear - 1];
+    } else {
+      sig0 = 0.0;
+    }
+
+    kw = sig0 * 2.59 / 0.506;
+    sig0 = std::fmin(std::fmax(ACC_Controller_U.engine_rpm, 300.0), 2500.0);
+    fric = -(0.0512 * sig0 + 215.1);
+    th = std::fmin(std::fmax(ACC_Controller_Y.throttle, 0.0), 1.0);
+    Te_req = (1.0 - ACC_Controller_rt_powd_snf(1.0 - th, 1.33)) * (2700.0 *
+      ACC_Controller_interp1_o(sig0) - fric) + fric;
+    if (lead_ok && (Te_req > ACC_Controller_DW.Te_m)) {
+      ACC_Controller_DW.Te_m = std::fmin(Te_req, ACC_Controller_interp2(std::
+        fmin(std::fmax(sig0, 800.0), 2000.0), std::fmin(std::fmax
+        (ACC_Controller_DW.Te_m, 0.0), 2800.0)) * 0.05 + ACC_Controller_DW.Te_m);
+    } else {
+      ACC_Controller_DW.Te_m = Te_req;
+    }
+
+    sig0 = std::fmax(ACC_Controller_U.ego_speed_mps, 0.0);
+    if (std::isinf(sig0)) {
+      sig0 = 0.0;
+    }
+
+    a = sig0 * sig0 * 3.0;
+    ACC_Controller_DW.F_lag += ((0.972 * kw * ACC_Controller_DW.Te_m - a) -
+      ACC_Controller_DW.F_lag) * 0.22119921692859512;
+    a_ok = (!locked && !a_ok);
+    fric = ACC_Controller_U.ego_accel_mps2;
+    if (!a_ok) {
+      fric = 0.0;
+    }
+
+    pt = ACC_Controller_U.pitch_rad;
+    if (std::isinf(ACC_Controller_U.pitch_rad) || std::isnan
+        (ACC_Controller_U.pitch_rad)) {
+      pt = 0.0;
+    }
+
+    phi_raw = (ACC_Controller_DW.F_lag - kw * kw * 4.6 * fric) / 20300.0;
+    u1min = std::fmin(1.0, sig0 * 10.0);
+    ACC_Controller_DW.yf += (((0.0072 * u1min + std::sin(pt)) * 9.81 + fric) -
+      ACC_Controller_DW.yf) * 0.11750309741540454;
+    ACC_Controller_DW.phif += (phi_raw - ACC_Controller_DW.phif) *
+      0.11750309741540454;
+    locked = false;
+    if (lead_ok) {
+      kw = sig0 * kw * 60.0 / 6.283185307179586;
+      locked = (std::abs(ACC_Controller_U.engine_rpm - kw) <= 0.04 * kw + 30.0);
+    }
+
+    b = !ACC_Controller_DW.eb_last_DSTATE;
+    locked = (lead_ok && locked && (ACC_Controller_U.gear ==
+               ACC_Controller_DW.gear_last) && (sig0 >= 5.0) && (th >= 0.1) &&
+              !(ACC_Controller_Y.brake > 0.002) &&
+              (ACC_Controller_DW.ret_last_DSTATE == 0.0) && b &&
+              (ACC_Controller_U.engine_rpm >= 850.0) &&
+              (ACC_Controller_U.engine_rpm <= 2250.0) && (Te_req -
+               ACC_Controller_DW.Te_m <= 500.0) && (phi_raw >= 0.25) && ((std::
+                abs(pt) <= 0.1) && a_ok));
+    ACC_Controller_DW.gear_last = ACC_Controller_U.gear;
+    if (locked) {
+      ACC_Controller_DW.cnt = std::fmin(ACC_Controller_DW.cnt + 1.0, 52.0);
+    } else {
+      ACC_Controller_DW.cnt = 0.0;
+    }
+
+    ACC_Controller_DW.yb[static_cast<int32_t>(ACC_Controller_DW.w) - 1] =
+      ACC_Controller_DW.yf;
+    ACC_Controller_DW.pb[static_cast<int32_t>(ACC_Controller_DW.w) - 1] =
+      ACC_Controller_DW.phif;
+    ACC_Controller_DW.w++;
+    if (ACC_Controller_DW.w > 21.0) {
+      ACC_Controller_DW.w = 1.0;
+    }
+
+    if (ACC_Controller_DW.cnt >= 51.0) {
+      pt = std::fmax(ACC_Controller_DW.s2, 0.0024999999999999996);
+      th = ACC_Controller_DW.pb[static_cast<int32_t>(ACC_Controller_DW.w) - 1];
+      Te_req = th * th;
+      phi_raw = (Te_req * ACC_Controller_DW.P + 1.0) * pt;
+      kw = ACC_Controller_DW.yb[static_cast<int32_t>(ACC_Controller_DW.w) - 1] -
+        th * ACC_Controller_DW.theta;
+      ACC_Controller_DW.zbar += (kw / std::sqrt(phi_raw) -
+        ACC_Controller_DW.zbar) * 0.025;
+      if ((ACC_Controller_DW.t_info >= 8.0) && (std::abs(ACC_Controller_DW.zbar)
+           > 2.5)) {
+        ACC_Controller_DW.P = ttc;
+        ACC_Controller_DW.zbar = 0.0;
+        ACC_Controller_DW.n_open++;
+        ACC_Controller_DW.kb_n = 0.0;
+        phi_raw = (Te_req * ACC_Controller_DW.P + 1.0) * pt;
+      }
+
+      pt = 3.0 * std::sqrt(phi_raw);
+      kw = std::fmin(std::fmax(kw, -pt), pt);
+      Te_req = Te_req * ACC_Controller_DW.P + 0.99875;
+      ACC_Controller_DW.theta += th * ACC_Controller_DW.P / Te_req * kw;
+      ACC_Controller_DW.P = std::fmin(ACC_Controller_DW.P / Te_req, ttc);
+      ACC_Controller_DW.theta = std::fmin(std::fmax(ACC_Controller_DW.theta,
+        0.46136363636363636), 2.03);
+      ACC_Controller_DW.s2 = kw * kw * 0.0012499999999999734 + 0.99875 *
+        ACC_Controller_DW.s2;
+      ACC_Controller_DW.t_info += 0.05;
+    }
+
+    ACC_Controller_Y.mass_est_kg = 20300.0 / ACC_Controller_DW.theta;
+    ACC_Controller_Y.mass_sigma_kg = ACC_Controller_Y.mass_est_kg * std::fmax
+      (0.15, std::sqrt(ACC_Controller_DW.s2)) * std::sqrt(ACC_Controller_DW.P) /
+      ACC_Controller_DW.theta;
+    ACC_Controller_DW.m_out += std::fmin(std::fmax(ACC_Controller_Y.mass_est_kg
+      - ACC_Controller_DW.m_out, -75.0), 75.0);
+    if (std::isinf(ACC_Controller_Y.brake) || std::isnan(ACC_Controller_Y.brake))
+    {
+      ACC_Controller_Y.brake = 0.0;
+    }
+
+    if (ACC_Controller_Y.brake >= 0.01) {
+      ACC_Controller_DW.bt += 0.05;
+    } else {
+      ACC_Controller_DW.bt = 0.0;
+    }
+
+    if (ACC_Controller_DW.m_out >= 20300.0) {
+      ttc = 20300.0 / ACC_Controller_DW.m_out;
+    } else {
+      ttc = ACC_Controller_interp1_oi(std::fmax(ACC_Controller_DW.m_out, 12000.0));
+    }
+
+    kw = std::fmin(sig0, 30.0);
+    for (high_i = 0; high_i < 10; high_i++) {
+      row[high_i] = ACC_Controller_interp1(&d[high_i << 2], kw);
+    }
+
+    if ((ACC_Controller_DW.ret_last_DSTATE >= 1.0) &&
+        (ACC_Controller_DW.ret_last_DSTATE <= 4.0)) {
+      kw = 0.75;
+      Te_req = f[static_cast<int32_t>(ACC_Controller_DW.ret_last_DSTATE) - 1] *
+        sig0 * 26.199831273727124 / ACC_Controller_DW.m_out;
+    } else {
+      kw = 0.0;
+      Te_req = 0.0;
+    }
+
+    th = 0.0072 * ACC_Controller_DW.m_out * 9.81;
+    a += th * u1min;
+    locked = (lead_ok && (ACC_Controller_U.engine_rpm > 800.0));
+    if (locked && (sig0 > 3.0)) {
+      a += std::fmin((0.0512 * ACC_Controller_U.engine_rpm + 215.1) *
+                     c[ACC_Controller_U.gear - 1] * 0.972 * 2.59 / 0.506, 0.35 *
+                     ACC_Controller_DW.m_out);
+    }
+
+    ACC_Controller_DW.pred_f += (ACC_Controller_interp1_oimb(row, std::fmin(std::
+      fmax(ACC_Controller_Y.brake, 0.0), 1.0)) - ACC_Controller_DW.pred_f) *
+      0.15351827510938598;
+    ACC_Controller_DW.meas_f += (((-a / ACC_Controller_DW.m_out - fric) - kw *
+      Te_req) - ACC_Controller_DW.meas_f) * 0.3934693402873666;
+    if ((ACC_Controller_DW.bt >= 0.4) && (ACC_Controller_Y.brake >= 0.01) &&
+        (ACC_Controller_DW.pred_f * ttc >= 0.3) && (sig0 > 3.0) &&
+        (ACC_Controller_DW.ret_last_DSTATE <= 4.0) && b && a_ok) {
+      if (ACC_Controller_DW.kb_n == 0.0) {
+        ACC_Controller_DW.kb_tot = ttc;
+      }
+
+      ACC_Controller_DW.kb_tot += (std::fmin(std::fmax(ACC_Controller_DW.meas_f /
+        ACC_Controller_DW.pred_f, 0.3), ttc) - ACC_Controller_DW.kb_tot) * 0.1;
+      ACC_Controller_DW.kb_n++;
+    }
+
+    if (ACC_Controller_DW.kb_n > 0.0) {
+      ttc = ACC_Controller_DW.kb_tot;
+    }
+
     // MATLAB Function: '<S1>/MPC_Prep' incorporates:
     //   MATLAB Function: '<S1>/Allocator'
     //   MATLAB Function: '<S1>/InputConditioning'
+    //   MATLAB Function: '<S1>/MassEstimator'
     //   Outport: '<Root>/mode'
     //   UnitDelay: '<S1>/mv_last'
 
     ACC_Controller_DW.a2 = 0.8594048608885093 * ACC_Controller_DW.a2 +
       0.14059513911149069 * ACC_Controller_DW.mv_last_DSTATE[1];
-    lead_ok = ((ACC_Controller_Y.mode == 0) || (ACC_Controller_Y.mode == 4));
-    if (lead_ok) {
+    a_ok = ((ACC_Controller_Y.mode == 0) || (ACC_Controller_Y.mode == 4));
+    if (a_ok) {
       ACC_Controller_DW.a2 = 0.0;
     }
 
-    a1 = ACC_Controller_DW.af - ACC_Controller_DW.a2;
-    F = x * x * 3.0 + std::fmin(1.0, x * 10.0) * 1433.8296;
-    a = F;
-    if (x > 1.0) {
-      a = std::fmin(1200.0 / (x * 2.59 / 0.506 * 60.0 / 6.283185307179586), 9.76)
-        * 276.54 * 0.972 * 2.59 / 0.506 + F;
+    kw = ACC_Controller_DW.af - ACC_Controller_DW.a2;
+    fric = std::fmin(1.0, ACC_Controller_DW.v * 10.0) * th + ACC_Controller_DW.v
+      * ACC_Controller_DW.v * 3.0;
+    a = fric;
+    if (ACC_Controller_DW.v > 1.0) {
+      a = std::fmin(1200.0 / (ACC_Controller_DW.v * 2.59 / 0.506 * 60.0 /
+        6.283185307179586), 9.76) * 276.54 * 0.972 * 2.59 / 0.506 + fric;
     }
 
-    a = -a / 20300.0;
-    if (x > 3.0) {
-      u1min = a - 21.03 * x * 26.199831273727124 / 20300.0;
+    a = -a / ACC_Controller_DW.m_out;
+    if (ACC_Controller_DW.v > 3.0) {
+      u1min = a - 21.03 * ACC_Controller_DW.v * 26.199831273727124 /
+        ACC_Controller_DW.m_out;
     } else {
       u1min = a;
     }
 
-    r = std::fmin(x, 25.0);
+    sig0 = std::fmin(ACC_Controller_DW.v, 25.0);
     high_i = 10;
     low_i = 0;
     low_ip1 = 2;
     while (high_i > low_ip1) {
-      mid_i = ((low_i + high_i) + 1) >> 1;
-      if (r >= f[mid_i - 1]) {
-        low_i = mid_i - 1;
-        low_ip1 = mid_i + 1;
+      b_high_i = ((low_i + high_i) + 1) >> 1;
+      if (sig0 >= h_0[b_high_i - 1]) {
+        low_i = b_high_i - 1;
+        low_ip1 = b_high_i + 1;
       } else {
-        high_i = mid_i;
+        high_i = b_high_i;
       }
     }
 
-    r = (r - f[low_i]) / (f[low_i + 1] - f[low_i]);
-    if (r == 0.0) {
-      r = g[low_i];
-    } else if (r == 1.0) {
-      r = g[low_i + 1];
-    } else if (g[low_i + 1] == g[low_i]) {
-      r = g[low_i];
+    sig0 = (sig0 - h_0[low_i]) / (h_0[low_i + 1] - h_0[low_i]);
+    if (sig0 == 0.0) {
+      th = l[low_i];
+    } else if (sig0 == 1.0) {
+      th = l[low_i + 1];
+    } else if (l[low_i + 1] == l[low_i]) {
+      th = l[low_i];
     } else {
-      r = (1.0 - r) * g[low_i] + g[low_i + 1] * r;
+      th = (1.0 - sig0) * l[low_i] + l[low_i + 1] * sig0;
+    }
+
+    low_i = 0;
+    for (low_ip1 = 0; low_ip1 < 80; low_ip1++) {
+      vset_ref[low_ip1] = x;
+    }
+
+    if (x < ACC_Controller_DW.vs_f) {
+      sig0 = std::fmin(0.5, 0.8 * std::fmax(-u1min, 0.05)) * 0.05;
+      ACC_Controller_DW.vs_f = std::fmax(x, std::fmin(ACC_Controller_DW.vs_f -
+        sig0, ACC_Controller_DW.v + 0.3));
+      for (high_i = 0; high_i < 80; high_i++) {
+        vset_ref[high_i] = std::fmax(x, ACC_Controller_DW.vs_f - (static_cast<
+          double>(high_i) + 1.0) * sig0);
+      }
+
+      low_i = 1;
+    } else {
+      ACC_Controller_DW.vs_f = x;
     }
 
     if (ACC_Controller_Y.mode == 6) {
-      low_i = -6;
+      low_ip1 = -6;
       high_i = 2;
     } else {
-      low_i = -3;
+      low_ip1 = -3;
       high_i = 1;
     }
 
-    umin[1] = static_cast<double>(low_i) - u1min;
-    umax[0] = std::fmin(0.8, 0.85 * r);
+    sig0 = std::fmin(ACC_Controller_DW.v, 30.0);
+    b_high_i = 4;
+    b_low_i = 0;
+    b_low_ip1 = 2;
+    while (b_high_i > b_low_ip1) {
+      b_mid_i = ((b_low_i + b_high_i) + 1) >> 1;
+      if (sig0 >= f_0[b_mid_i - 1]) {
+        b_low_i = b_mid_i - 1;
+        b_low_ip1 = b_mid_i + 1;
+      } else {
+        b_high_i = b_mid_i;
+      }
+    }
+
+    Te_req = (sig0 - f_0[b_low_i]) / (f_0[b_low_i + 1] - f_0[b_low_i]);
+    if (Te_req == 0.0) {
+      Te_req = g[b_low_i];
+    } else if (Te_req == 1.0) {
+      Te_req = g[b_low_i + 1];
+    } else if (g[b_low_i + 1] == g[b_low_i]) {
+      Te_req = g[b_low_i];
+    } else {
+      Te_req = (1.0 - Te_req) * g[b_low_i] + g[b_low_i + 1] * Te_req;
+    }
+
+    umin[1] = std::fmax(static_cast<double>(low_ip1), u1min - Te_req * ttc *
+                        0.95) - u1min;
+    umax[0] = std::fmax(std::fmin(0.8, ((th + 0.070632) * 20300.0 /
+      ACC_Controller_DW.m_out - 0.070632) * 0.85), 0.05);
     if ((ACC_Controller_Y.mode == 2) || (ACC_Controller_Y.mode == 3) ||
         (ACC_Controller_Y.mode == 5) || (ACC_Controller_Y.mode == 6)) {
       x_0[0] = gap;
-      x_0[1] = vli - x;
-      x_0[2] = x;
-      x_0[3] = a1;
+      x_0[1] = ACC_Controller_DW.vl - ACC_Controller_DW.v;
+      x_0[2] = ACC_Controller_DW.v;
+      x_0[3] = kw;
       x_0[4] = ACC_Controller_DW.a2;
       if (ACC_Controller_Y.mode == 3) {
-        a1 = 5.0;
+        kw = 5.0;
       } else {
-        a1 = th * vli + 5.0;
+        kw = ACC_Controller_DW.th * ACC_Controller_DW.vl + 5.0;
       }
 
-      a1 = gap - a1;
-      r = 0.4;
+      th = gap - kw;
+      kw = 0.4;
       if (ACC_Controller_Y.mode == 3) {
-        r = 0.8;
+        kw = 0.8;
       }
 
-      r = 2.0 / r;
-      cap = std::fmin(std::fmax(x - vli, 1.5), 25.0);
-      for (low_i = 0; low_i < 80; low_i++) {
-        if (a1 > 0.0) {
-          vr_ref_0 = -std::fmin(std::sqrt(4.0 * a1 + r * r) - r, cap);
+      Te_req = 2.0 / kw;
+      pt = std::fmin(std::fmax(ACC_Controller_DW.v - ACC_Controller_DW.vl, 1.5),
+                     25.0);
+      phi_raw = ACC_Controller_DW.vl;
+      for (low_ip1 = 0; low_ip1 < 80; low_ip1++) {
+        if (th > 0.0) {
+          kw = -std::fmin(std::sqrt(4.0 * th + Te_req * Te_req) - Te_req, pt);
         } else {
-          vr_ref_0 = std::fmin(-0.05 * a1, 0.5);
+          kw = std::fmin(-0.05 * th, 0.5);
         }
 
-        vr_ref[low_i] = vr_ref_0;
-        vln = std::fmax(0.0, cost_j * 0.05 + vli);
-        a1 += vr_ref_0 * 0.05;
+        kw = std::fmax(kw, phi_raw - ACC_Controller_DW.vs_f);
+        vr_ref[low_ip1] = kw;
+        vln = std::fmax(0.0, cost_l * 0.05 + phi_raw);
+        th += kw * 0.05;
         if (ACC_Controller_Y.mode != 3) {
-          a1 -= (vln - vli) * th;
+          th -= (vln - phi_raw) * ACC_Controller_DW.th;
         }
 
-        vli = vln;
+        phi_raw = vln;
       }
 
-      if ((ACC_Controller_Y.mode == 3) && (x < 1.0) && (gap < 8.0)) {
+      if ((ACC_Controller_Y.mode == 3) && (ACC_Controller_DW.v < 1.0) && (gap <
+           8.0)) {
         umax[0] = std::fmin(umax[0], a);
       }
 
-      if ((ACC_Controller_Y.mode != 5) && (cost_j < 0.2)) {
+      if ((ACC_Controller_Y.mode != 5) && (cost_l < 0.2)) {
         umax[0] = std::fmin(umax[0], 0.4);
       }
 
-      a = (th - 2.0) * x + 5.0;
-      for (low_i = 0; low_i < 80; low_i++) {
-        ref[low_i] = a;
-        ref[low_i + 80] = vr_ref[low_i];
-        ref[low_i + 160] = status;
+      a = (ACC_Controller_DW.th - 2.0) * ACC_Controller_DW.v + 5.0;
+      for (low_ip1 = 0; low_ip1 < 80; low_ip1++) {
+        ref[low_ip1] = a;
+        ref[low_ip1 + 80] = vr_ref[low_ip1];
+        ref[low_ip1 + 160] = vset_ref[low_ip1];
       }
 
-      ymin[0] = (0.5 * th - 2.0) * x + 3.0;
+      ymin[0] = (0.5 * ACC_Controller_DW.th - 2.0) * ACC_Controller_DW.v + 3.0;
       ymin[1] = -1000.0;
       ymin[2] = -1000.0;
       rtb_ywt[0] = 0.05;
       rtb_ywt[1] = 0.5;
       rtb_ywt[2] = 0.0;
     } else {
-      x_0[0] = (2.0 * x + 5.0) + 200.0;
+      x_0[0] = (2.0 * ACC_Controller_DW.v + 5.0) + 200.0;
       x_0[1] = 0.0;
-      x_0[2] = x;
-      x_0[3] = a1;
+      x_0[2] = ACC_Controller_DW.v;
+      x_0[3] = kw;
       x_0[4] = ACC_Controller_DW.a2;
-      a = ((th - 2.0) * x + 5.0) + 200.0;
-      for (low_i = 0; low_i < 80; low_i++) {
-        ref[low_i] = a;
-        ref[low_i + 80] = 0.0;
-        ref[low_i + 160] = status;
+      a = ((ACC_Controller_DW.th - 2.0) * ACC_Controller_DW.v + 5.0) + 200.0;
+      for (low_ip1 = 0; low_ip1 < 80; low_ip1++) {
+        ref[low_ip1] = a;
+        ref[low_ip1 + 80] = 0.0;
+        ref[low_ip1 + 160] = vset_ref[low_ip1];
       }
 
       ymin[0] = -1000.0;
@@ -32264,36 +32822,36 @@ namespace ets2
     }
 
     if (high_i == 2) {
-      low_i = 3;
-      th = 3.0;
-      low_ip1 = 12;
+      low_ip1 = 3;
+      gap = 3.0;
+      b_high_i = 12;
       a = 6.0;
     } else {
-      low_i = 1;
-      th = 1.5;
-      low_ip1 = 2;
+      low_ip1 = 1;
+      gap = 1.5;
+      b_high_i = 2;
       a = 2.5;
     }
 
     umax[0] = std::fmax(umax[0], ACC_Controller_DW.mv_last_DSTATE[0] -
-                        static_cast<double>(low_i) * 0.05);
-    umin[0] = std::fmin(u1min, th * 0.05 + ACC_Controller_DW.mv_last_DSTATE[0]);
+                        static_cast<double>(low_ip1) * 0.05);
+    umin[0] = std::fmin(u1min, gap * 0.05 + ACC_Controller_DW.mv_last_DSTATE[0]);
     umax[1] = std::fmax(0.0, ACC_Controller_DW.mv_last_DSTATE[1] - static_cast<
-                        double>(low_ip1) * 0.05);
+                        double>(b_high_i) * 0.05);
     umin[1] = std::fmin(umin[1], a * 0.05 + ACC_Controller_DW.mv_last_DSTATE[1]);
     ymax[0] = 1000.0;
     ymax[1] = 1000.0;
-    ymax[2] = status + 0.3;
+    ymax[2] = (ACC_Controller_DW.vs_f + 0.3) + static_cast<double>(low_i);
 
-    // MATLAB Function: '<S52>/optimizer' incorporates:
-    //   Gain: '<S32>/ext.mv_scale'
+    // MATLAB Function: '<S53>/optimizer' incorporates:
+    //   Gain: '<S33>/ext.mv_scale'
     //   MATLAB Function: '<S1>/InputConditioning'
-    //   MATLAB Function: '<S30>/optimizer'
+    //   MATLAB Function: '<S31>/optimizer'
     //   UnitDelay: '<S1>/mv_last'
 
     std::memset(&rtb_mvseq_switch[0], 0, 162U * sizeof(double));
-    for (low_i = 0; low_i < 81; low_i++) {
-      rtb_mvseq_switch[(low_i << 1) + 1] = 1.0;
+    for (low_ip1 = 0; low_ip1 < 81; low_ip1++) {
+      rtb_mvseq_switch[(low_ip1 << 1) + 1] = 1.0;
     }
 
     for (low_i = 0; low_i < 80; low_i++) {
@@ -32303,7 +32861,7 @@ namespace ets2
     }
 
     for (low_i = 0; low_i < 81; low_i++) {
-      rtb_mvseq_switch[low_i << 1] = ACC_Controller_RMDscale * cost_j;
+      rtb_mvseq_switch[low_i << 1] = ACC_Controller_RMDscale * cost_l;
     }
 
     tmp[0] = 0.5 * ACC_Controller_DW.mv_last_DSTATE[0];
@@ -32312,26 +32870,26 @@ namespace ets2
     tmp_0[1] = 0.0;
     tmp_0[2] = 0.0;
 
-    // Memory: '<S32>/Memory'
+    // Memory: '<S33>/Memory'
     std::memcpy(&tmp_1[0], &ACC_Controller_DW.Memory_PreviousInput[0], 208U *
                 sizeof(bool));
 
-    // Update for Memory: '<S32>/Memory' incorporates:
+    // Update for Memory: '<S33>/Memory' incorporates:
     //   MATLAB Function: '<S1>/MPC_Prep'
-    //   MATLAB Function: '<S52>/optimizer'
-    //   Math: '<S32>/Math Function'
+    //   MATLAB Function: '<S53>/optimizer'
+    //   Math: '<S33>/Math Function'
 
-    ACC_Contro_mpcblock_optimizer_p(rseq, rtb_mvseq_switch, umin, umax, ymin,
-      ymax, high_i, x_0, tmp, tmp_1, tmp_0, 2, rtb_ywt, last_mv_DSTATE, &th,
-      ACC_Controller_DW.useq, &status, ACC_Controller_DW.Memory_PreviousInput);
+    ACC_Contro_mpcblock_optimizer_b(rseq, rtb_mvseq_switch, umin, umax, ymin,
+      ymax, high_i, x_0, tmp, tmp_1, tmp_0, 2, rtb_ywt, last_mv_DSTATE, &a,
+      ACC_Controller_DW.useq, &gap, ACC_Controller_DW.Memory_PreviousInput);
 
-    // MATLAB Function: '<S30>/optimizer' incorporates:
+    // MATLAB Function: '<S31>/optimizer' incorporates:
     //   MATLAB Function: '<S1>/InputConditioning'
-    //   MATLAB Function: '<S52>/optimizer'
+    //   MATLAB Function: '<S53>/optimizer'
 
     std::memset(&rtb_mvseq_switch[0], 0, 162U * sizeof(double));
-    for (low_i = 0; low_i < 81; low_i++) {
-      rtb_mvseq_switch[(low_i << 1) + 1] = 1.0;
+    for (low_ip1 = 0; low_ip1 < 81; low_ip1++) {
+      rtb_mvseq_switch[(low_ip1 << 1) + 1] = 1.0;
     }
 
     for (low_i = 0; low_i < 80; low_i++) {
@@ -32341,52 +32899,52 @@ namespace ets2
     }
 
     for (low_i = 0; low_i < 81; low_i++) {
-      rtb_mvseq_switch[low_i << 1] = ACC_Controller_RMDscale * cost_j;
+      rtb_mvseq_switch[low_i << 1] = ACC_Controller_RMDscale * cost_l;
     }
 
     tmp_0[0] = 0.0;
     tmp_0[1] = 0.0;
     tmp_0[2] = 0.0;
 
-    // Memory: '<S10>/Memory'
-    std::memcpy(&tmp_1[0], &ACC_Controller_DW.Memory_PreviousInput_l[0], 208U *
+    // Memory: '<S11>/Memory'
+    std::memcpy(&tmp_1[0], &ACC_Controller_DW.Memory_PreviousInput_h[0], 208U *
                 sizeof(bool));
 
-    // Update for Memory: '<S10>/Memory' incorporates:
+    // Update for Memory: '<S11>/Memory' incorporates:
     //   MATLAB Function: '<S1>/MPC_Prep'
-    //   MATLAB Function: '<S30>/optimizer'
-    //   Math: '<S10>/Math Function'
+    //   MATLAB Function: '<S31>/optimizer'
+    //   Math: '<S11>/Math Function'
 
     ACC_Controll_mpcblock_optimizer(rseq, rtb_mvseq_switch, umin, umax, ymin,
-      ymax, high_i, x_0, tmp, tmp_1, tmp_0, 1, rtb_ywt, last_mv_DSTATE_f,
-      &cost_j, ACC_Controller_DW.useq_g, &th,
-      ACC_Controller_DW.Memory_PreviousInput_l);
+      ymax, high_i, x_0, tmp, tmp_1, tmp_0, 1, rtb_ywt, last_mv_DSTATE_k,
+      &cost_l, ACC_Controller_DW.useq_b, &a,
+      ACC_Controller_DW.Memory_PreviousInput_h);
 
     // MultiPortSwitch: '<S4>/mv.seq_switch' incorporates:
-    //   Gain: '<S10>/umin_scale1'
-    //   Gain: '<S10>/umin_scale3'
-    //   Gain: '<S32>/umin_scale1'
-    //   Gain: '<S32>/umin_scale3'
+    //   Gain: '<S11>/umin_scale1'
+    //   Gain: '<S11>/umin_scale3'
+    //   Gain: '<S33>/umin_scale1'
+    //   Gain: '<S33>/umin_scale3'
     //   MATLAB Function: '<S1>/MPC_Prep'
     //   MultiPortSwitch: '<S4>/mv_switch'
 
     if (high_i == 1) {
-      for (low_i = 0; low_i < 162; low_i++) {
-        rtb_mvseq_switch[low_i] = ACC_Controller_ConstP.pooled41[low_i] *
-          ACC_Controller_DW.useq_g[low_i];
+      for (low_ip1 = 0; low_ip1 < 162; low_ip1++) {
+        rtb_mvseq_switch[low_ip1] = ACC_Controller_ConstP.pooled41[low_ip1] *
+          ACC_Controller_DW.useq_b[low_ip1];
       }
 
       // MultiPortSwitch: '<S4>/qp.status_switch' incorporates:
-      //   Gain: '<S10>/umin_scale3'
+      //   Gain: '<S11>/umin_scale3'
       //   MultiPortSwitch: '<S4>/mv.seq_switch'
 
-      status = th;
-      ACC_Controller_DW.uk1_DSTATE[0] = 2.0 * last_mv_DSTATE_f[0];
-      ACC_Controller_DW.uk1_DSTATE[1] = 4.0 * last_mv_DSTATE_f[1];
+      gap = a;
+      ACC_Controller_DW.uk1_DSTATE[0] = 2.0 * last_mv_DSTATE_k[0];
+      ACC_Controller_DW.uk1_DSTATE[1] = 4.0 * last_mv_DSTATE_k[1];
     } else {
-      for (low_i = 0; low_i < 162; low_i++) {
-        rtb_mvseq_switch[low_i] = ACC_Controller_ConstP.pooled41[low_i] *
-          ACC_Controller_DW.useq[low_i];
+      for (low_ip1 = 0; low_ip1 < 162; low_ip1++) {
+        rtb_mvseq_switch[low_ip1] = ACC_Controller_ConstP.pooled41[low_ip1] *
+          ACC_Controller_DW.useq[low_ip1];
       }
 
       ACC_Controller_DW.uk1_DSTATE[0] = 2.0 * last_mv_DSTATE[0];
@@ -32399,11 +32957,11 @@ namespace ets2
     //   MultiPortSwitch: '<S4>/mv.seq_switch'
     //   UnitDelay: '<S1>/mv_last'
 
-    slipping = (status < 0.0);
+    b = (gap < 0.0);
     tmp[0] = std::fmin(ACC_Controller_DW.mv_last_DSTATE[0], 0.0);
     tmp[1] = ACC_Controller_DW.mv_last_DSTATE[1];
     for (high_i = 0; high_i < 2; high_i++) {
-      if (slipping) {
+      if (b) {
         ACC_Controller_DW.mv_last_DSTATE[high_i] = tmp[high_i];
       } else {
         ACC_Controller_DW.mv_last_DSTATE[high_i] =
@@ -32411,18 +32969,18 @@ namespace ets2
       }
 
       low_i = high_i * 80;
-      cost_j = rtb_mvseq_switch[static_cast<int32_t>(static_cast<uint32_t>(low_i)
+      cost_l = rtb_mvseq_switch[static_cast<int32_t>(static_cast<uint32_t>(low_i)
         / 80U) * 81 + low_i % 80];
       for (low_ip1 = 0; low_ip1 < 79; low_ip1++) {
-        mid_i = (low_i + low_ip1) + 1;
-        cost_j += rtb_mvseq_switch[static_cast<int32_t>(static_cast<uint32_t>
-          (mid_i) / 80U) * 81 + mid_i % 80];
+        b_high_i = (low_i + low_ip1) + 1;
+        cost_l += rtb_mvseq_switch[static_cast<int32_t>(static_cast<uint32_t>
+          (b_high_i) / 80U) * 81 + b_high_i % 80];
       }
 
-      umin[high_i] = cost_j;
+      umin[high_i] = cost_l;
     }
 
-    status = (umin[0] + umin[1]) / 80.0;
+    cost_l = (umin[0] + umin[1]) / 80.0;
 
     // End of MATLAB Function: '<S1>/MPC_Post'
 
@@ -32430,12 +32988,16 @@ namespace ets2
     //   Inport: '<Root>/engine_rpm'
     //   Inport: '<Root>/gear'
     //   MATLAB Function: '<S1>/InputConditioning'
+    //   MATLAB Function: '<S1>/MPC_Prep'
+    //   MATLAB Function: '<S1>/MassEstimator'
     //   Outport: '<Root>/mode'
+    //   UnitDelay: '<S1>/eb_last'
     //   UnitDelay: '<S1>/mv_last'
+    //   UnitDelay: '<S1>/ret_last'
 
     ACC_Controller_Y.throttle = 0.0;
     ACC_Controller_Y.brake = 0.0;
-    cost_j = 0.0;
+    ACC_Controller_DW.ret_last_DSTATE = 0.0;
     if (ACC_Controller_U.gear != ACC_Controller_DW.last_gear) {
       ACC_Controller_DW.gear_t = 0.0;
       ACC_Controller_DW.last_gear = ACC_Controller_U.gear;
@@ -32443,7 +33005,7 @@ namespace ets2
       ACC_Controller_DW.gear_t = std::fmin(ACC_Controller_DW.gear_t + 0.05, 10.0);
     }
 
-    if (lead_ok) {
+    if (a_ok) {
       ACC_Controller_DW.drv = false;
       ACC_Controller_DW.ret_dir = 0.0;
       ACC_Controller_DW.s = 0.0;
@@ -32453,6 +33015,7 @@ namespace ets2
       ACC_Controller_DW.r5 = false;
       ACC_Controller_DW.r5_t = 0.0;
       ACC_Controller_DW.r5_on_t = 0.0;
+      ACC_Controller_DW.stop_i = 0.0;
       ACC_Controller_Y.a_des_mps2 = 0.0;
       ACC_Controller_DW.mv_last_DSTATE[0] = std::fmin(std::fmax
         (ACC_Controller_DW.af, -1.5), 1.0);
@@ -32463,16 +33026,15 @@ namespace ets2
     } else {
       ACC_Controller_Y.a_des_mps2 = ACC_Controller_DW.mv_last_DSTATE[0] +
         ACC_Controller_DW.mv_last_DSTATE[1];
-      slipping = ((ACC_Controller_Y.mode == 6) ||
-                  (ACC_Controller_DW.mv_last_DSTATE[1] < -0.3));
-      lead_ok = ((ACC_Controller_U.gear >= 1) && (ACC_Controller_U.gear <= 14));
-      if (lead_ok && (ACC_Controller_U.engine_rpm > 800.0) && (x > 3.0)) {
-        F += std::fmin((0.0512 * ACC_Controller_U.engine_rpm + 215.1) *
-                       f_0[ACC_Controller_U.gear - 1] * 0.972 * 2.59 / 0.506,
-                       7105.0);
+      a_ok = ((ACC_Controller_Y.mode == 6) || (ACC_Controller_DW.mv_last_DSTATE
+               [1] < -0.3));
+      if (locked && (ACC_Controller_DW.v > 3.0)) {
+        fric += std::fmin((0.0512 * ACC_Controller_U.engine_rpm + 215.1) *
+                          c[ACC_Controller_U.gear - 1] * 0.972 * 2.59 / 0.506,
+                          0.35 * ACC_Controller_DW.m_out);
       }
 
-      a = -F / 20300.0;
+      a = -fric / ACC_Controller_DW.m_out;
       if (ACC_Controller_DW.drv) {
         ACC_Controller_DW.drv = ((ACC_Controller_Y.a_des_mps2 >= a) &&
           (ACC_Controller_Y.mode != 6));
@@ -32490,40 +33052,46 @@ namespace ets2
         ACC_Controller_DW.r5_t = 0.0;
         ACC_Controller_DW.r5_on_t = 0.0;
         ACC_Controller_DW.brk_on = false;
-        vrel = ACC_Controller_Y.a_des_mps2 - std::fmax(ACC_Controller_DW.af, a);
-        slipping = false;
+        ACC_Controller_DW.stop_i = 0.0;
+        kw = ACC_Controller_Y.a_des_mps2 - std::fmax(ACC_Controller_DW.af, a);
+        locked = false;
         if (lead_ok) {
-          slipping = (ACC_Controller_U.engine_rpm > x * 2.59 / 0.506 * 60.0 /
-                      6.283185307179586 * f_0[ACC_Controller_U.gear - 1] * 1.15
-                      + 100.0);
+          locked = (ACC_Controller_U.engine_rpm > ACC_Controller_DW.v * 2.59 /
+                    0.506 * 60.0 / 6.283185307179586 * c[ACC_Controller_U.gear -
+                    1] * 1.15 + 100.0);
         }
 
-        ACC_Controller_Y.throttle = ACC_Contro_acc_inverse_throttle((0.2 * vrel
-          + ACC_Controller_Y.a_des_mps2) + ACC_Controller_DW.integ, x,
-          static_cast<double>(ACC_Controller_U.gear),
-          ACC_Controller_U.engine_rpm);
-        if ((ACC_Controller_U.gear >= 1) && !slipping &&
+        ACC_Controller_Y.throttle = ACC_Contro_acc_inverse_throttle((0.2 * kw +
+          ACC_Controller_Y.a_des_mps2) + ACC_Controller_DW.integ,
+          ACC_Controller_DW.v, static_cast<double>(ACC_Controller_U.gear),
+          ACC_Controller_U.engine_rpm, ACC_Controller_DW.m_out);
+        if ((ACC_Controller_U.gear >= 1) && !locked &&
             !(ACC_Controller_DW.gear_t < 1.0) && (!(ACC_Controller_Y.throttle >=
-              1.0) || !(vrel > 0.0)) && (!(ACC_Controller_Y.throttle <= 0.0) ||
-             !(vrel < 0.0))) {
-          ACC_Controller_DW.integ = std::fmin(std::fmax(0.6 * vrel * 0.05 +
+              1.0) || !(kw > 0.0)) && (!(ACC_Controller_Y.throttle <= 0.0) ||
+             !(kw < 0.0))) {
+          ACC_Controller_DW.integ = std::fmin(std::fmax(0.6 * kw * 0.05 +
             ACC_Controller_DW.integ, -0.6), 0.6);
         }
       } else {
         ACC_Controller_DW.integ *= 0.95;
-        F = a - ACC_Controller_Y.a_des_mps2;
+        gap = a - ACC_Controller_Y.a_des_mps2;
         ACC_Controller_DW.ret_t += 0.05;
-        for (low_i = 0; low_i < 5; low_i++) {
-          x_0[low_i] = 0.0;
+        for (low_ip1 = 0; low_ip1 < 5; low_ip1++) {
+          x_0[low_ip1] = 0.0;
         }
 
-        x_0[1] = 4.33 * x * 26.199831273727124 / 20300.0;
-        x_0[2] = 9.04 * x * 26.199831273727124 / 20300.0;
-        x_0[3] = 14.69 * x * 26.199831273727124 / 20300.0;
-        x_0[4] = 21.03 * x * 26.199831273727124 / 20300.0;
-        if (((ACC_Controller_Y.mode == 1) || (ACC_Controller_Y.mode == 2) ||
-             (ACC_Controller_Y.mode == 3)) && (x > 8.3) && (status <= -2.2) &&
-            (ACC_Controller_Y.a_des_mps2 <= -2.0) && (vrel <= 2.5)) {
+        x_0[1] = 4.33 * ACC_Controller_DW.v * 26.199831273727124 /
+          ACC_Controller_DW.m_out;
+        x_0[2] = 9.04 * ACC_Controller_DW.v * 26.199831273727124 /
+          ACC_Controller_DW.m_out;
+        x_0[3] = 14.69 * ACC_Controller_DW.v * 26.199831273727124 /
+          ACC_Controller_DW.m_out;
+        x_0[4] = 21.03 * ACC_Controller_DW.v * 26.199831273727124 /
+          ACC_Controller_DW.m_out;
+        locked = ((ACC_Controller_Y.mode == 1) || (ACC_Controller_Y.mode == 2));
+        if ((locked || (ACC_Controller_Y.mode == 3)) && (ACC_Controller_DW.v >
+             8.3) && (cost_l <= -2.2) && (ACC_Controller_Y.a_des_mps2 <= -2.0) &&
+            (vrel <= 2.5)) {
           ACC_Controller_DW.r5_on_t += 0.05;
         } else {
           ACC_Controller_DW.r5_on_t = 0.0;
@@ -32537,25 +33105,25 @@ namespace ets2
         guard1 = false;
         if (ACC_Controller_DW.r5) {
           ACC_Controller_DW.r5_t += 0.05;
-          vrel = std::fmin(1.0, ACC_Controller_DW.r5_t / 3.1) * 2.3;
-          if ((status > -1.4) || (x < 7.300000000000001) ||
+          vrel = 46690.0 / ACC_Controller_DW.m_out * std::fmin(1.0,
+            ACC_Controller_DW.r5_t / 3.1);
+          if ((cost_l > -1.4) || (ACC_Controller_DW.v < 7.300000000000001) ||
               (ACC_Controller_Y.mode == 6) || ((ACC_Controller_DW.r5_t > 3.1) &&
-               (F > vrel + 0.6))) {
+               (gap > vrel + 0.6))) {
             ACC_Controller_DW.r5 = false;
             ACC_Controller_DW.s = 4.0;
             ACC_Controller_DW.ret_t = 0.0;
             guard1 = true;
           } else {
-            cost_j = 5.0;
-            vrel = F - vrel;
+            ACC_Controller_DW.ret_last_DSTATE = 5.0;
+            vrel = gap - vrel;
             if ((ACC_Controller_DW.r5_t <= 3.1) && (vrel > 0.12)) {
-              F = std::fmin(x, 30.0);
               for (high_i = 0; high_i < 10; high_i++) {
-                row[high_i] = ACC_Controller_interp1(&h[high_i << 2], F);
+                row[high_i] = ACC_Controller_interp1(&h[high_i << 2], sig0);
               }
 
               ACC_Controller_Y.brake = ACC_Controller_interp1_p(row, std::fmin
-                (vrel, row[9]));
+                (std::fmax(vrel / std::fmax(ttc, 0.05), 0.0), row[9]));
             }
 
             ACC_Controller_DW.brk_on = (ACC_Controller_Y.brake > 0.0);
@@ -32565,16 +33133,16 @@ namespace ets2
         }
 
         if (guard1) {
-          if (x < 3.0) {
+          if (ACC_Controller_DW.v < 3.0) {
             ACC_Controller_DW.s = 0.0;
           } else {
             guard2 = false;
             if ((ACC_Controller_DW.s < 4.0) && ((ACC_Controller_DW.ret_t >= 0.4)
                  && ((ACC_Controller_DW.ret_dir >= 0.0) ||
-                     (ACC_Controller_DW.ret_t >= 2.5) || slipping))) {
-              a1 = x_0[static_cast<int32_t>(ACC_Controller_DW.s + 1.0) - 1];
-              if (F >= (x_0[static_cast<int32_t>(ACC_Controller_DW.s + 2.0) - 1]
-                        - a1) * 0.7 + a1) {
+                     (ACC_Controller_DW.ret_t >= 2.5) || a_ok))) {
+              kw = x_0[static_cast<int32_t>(ACC_Controller_DW.s + 1.0) - 1];
+              if (gap >= (x_0[static_cast<int32_t>(ACC_Controller_DW.s + 2.0) -
+                          1] - kw) * 0.7 + kw) {
                 ACC_Controller_DW.s++;
                 ACC_Controller_DW.ret_t = 0.0;
                 ACC_Controller_DW.ret_dir = 1.0;
@@ -32588,7 +33156,7 @@ namespace ets2
             if (guard2) {
               if ((ACC_Controller_DW.s > 0.0) && ((ACC_Controller_DW.ret_t >=
                     1.0) && ((ACC_Controller_DW.ret_dir <= 0.0) ||
-                             (ACC_Controller_DW.ret_t >= 2.5))) && (F <= x_0[
+                             (ACC_Controller_DW.ret_t >= 2.5))) && (gap <= x_0[
                    static_cast<int32_t>(ACC_Controller_DW.s + 1.0) - 1] - (x_0[
                     static_cast<int32_t>(ACC_Controller_DW.s + 1.0) - 1] - x_0[
                     static_cast<int32_t>(ACC_Controller_DW.s) - 1]) * 0.7)) {
@@ -32599,38 +33167,50 @@ namespace ets2
             }
           }
 
-          cost_j = ACC_Controller_DW.s;
+          ACC_Controller_DW.ret_last_DSTATE = ACC_Controller_DW.s;
           vrel = 1.0;
           if (ACC_Controller_DW.brk_on) {
             vrel = 0.75;
           }
 
-          vrel = F - x_0[static_cast<int32_t>(ACC_Controller_DW.s + 1.0) - 1] *
+          vrel = gap - x_0[static_cast<int32_t>(ACC_Controller_DW.s + 1.0) - 1] *
             vrel;
           if (ACC_Controller_DW.brk_on) {
-            ACC_Controller_DW.brk_on = (!(vrel < 0.03) || slipping);
+            ACC_Controller_DW.brk_on = (!(vrel < 0.03) || a_ok);
           } else {
-            if (slipping) {
-              a1 = 0.02;
+            if (a_ok) {
+              kw = 0.02;
             } else {
-              a1 = 0.12;
+              kw = 0.12;
             }
 
-            ACC_Controller_DW.brk_on = (vrel > a1);
+            ACC_Controller_DW.brk_on = (vrel > kw);
           }
 
           if (ACC_Controller_DW.brk_on) {
-            F = std::fmin(x, 30.0);
             for (high_i = 0; high_i < 10; high_i++) {
-              row[high_i] = ACC_Controller_interp1(&h[high_i << 2], F);
+              row[high_i] = ACC_Controller_interp1(&h[high_i << 2], sig0);
             }
 
             ACC_Controller_Y.brake = ACC_Controller_interp1_p(row, std::fmin(std::
-              fmax(vrel, 0.0), row[9]));
+              fmax(std::fmax(vrel, 0.0) / std::fmax(ttc, 0.05), 0.0), row[9]));
           }
         }
 
-        if ((ACC_Controller_Y.mode == 3) && (x < 0.5)) {
+        lead_ok = ((ACC_Controller_Y.mode == 3) || ((locked ||
+          (ACC_Controller_Y.mode == 5)) && (x < 0.5)));
+        if (lead_ok && (ACC_Controller_DW.v < 2.0) &&
+            (ACC_Controller_Y.a_des_mps2 < 0.0)) {
+          ACC_Controller_DW.stop_i = std::fmin(std::fmax((ACC_Controller_DW.af -
+            ACC_Controller_Y.a_des_mps2) * 0.15 * 0.05 +
+            ACC_Controller_DW.stop_i, 0.0), 0.2);
+        } else {
+          ACC_Controller_DW.stop_i = std::fmax(ACC_Controller_DW.stop_i -
+            0.010000000000000002, 0.0);
+        }
+
+        ACC_Controller_Y.brake += ACC_Controller_DW.stop_i;
+        if (lead_ok && (ACC_Controller_DW.v < 0.5)) {
           ACC_Controller_Y.brake = std::fmax(ACC_Controller_Y.brake, 0.05);
         }
       }
@@ -32641,28 +33221,39 @@ namespace ets2
         0.0), 1.0);
     }
 
+    ACC_Controller_DW.eb_last_DSTATE = false;
+
     // Update for Delay: '<S4>/u[k-1]'
     ACC_Controller_DW.icLoad = false;
 
-    // DataTypeConversion: '<S1>/ret_int'
-    a1 = std::floor(cost_j);
-    if (std::isnan(a1) || std::isinf(a1)) {
-      a1 = 0.0;
+    // DataTypeConversion: '<S1>/ret_int' incorporates:
+    //   UnitDelay: '<S1>/ret_last'
+
+    kw = std::floor(ACC_Controller_DW.ret_last_DSTATE);
+    if (std::isnan(kw) || std::isinf(kw)) {
+      kw = 0.0;
     } else {
-      a1 = std::fmod(a1, 4.294967296E+9);
+      kw = std::fmod(kw, 4.294967296E+9);
     }
 
     // Outport: '<Root>/retarder_step' incorporates:
     //   DataTypeConversion: '<S1>/ret_int'
 
-    ACC_Controller_Y.retarder_step = a1 < 0.0 ? -static_cast<int32_t>(
-      static_cast<uint32_t>(-a1)) : static_cast<int32_t>(static_cast<uint32_t>
-      (a1));
+    ACC_Controller_Y.retarder_step = kw < 0.0 ? -static_cast<int32_t>(
+      static_cast<uint32_t>(-kw)) : static_cast<int32_t>(static_cast<uint32_t>
+      (kw));
 
-    // Outport: '<Root>/engine_brake' incorporates:
-    //   MATLAB Function: '<S1>/Allocator'
+    // End of Outputs for SubSystem: '<Root>/ACC_Controller'
 
+    // Outport: '<Root>/engine_brake'
     ACC_Controller_Y.engine_brake = false;
+
+    // Outputs for Atomic SubSystem: '<Root>/ACC_Controller'
+    // Outport: '<Root>/mass_valid' incorporates:
+    //   MATLAB Function: '<S1>/MassEstimator'
+
+    ACC_Controller_Y.mass_valid = ((ACC_Controller_DW.t_info >= 8.0) &&
+      (ACC_Controller_Y.mass_sigma_kg <= 0.05 * ACC_Controller_Y.mass_est_kg));
 
     // End of Outputs for SubSystem: '<Root>/ACC_Controller'
   }
@@ -32676,6 +33267,15 @@ namespace ets2
 
     // SystemInitialize for Chart: '<S1>/ModeLogic'
     ACC_Controller_DW.t_hold = 99.0;
+
+    // SystemInitialize for MATLAB Function: '<S1>/MassEstimator'
+    ACC_Controller_DW.theta = 1.0;
+    ACC_Controller_DW.P = 1.0;
+    ACC_Controller_DW.s2 = 0.0225;
+    ACC_Controller_DW.m_prev_prior = -1.0;
+    ACC_Controller_DW.w = 1.0;
+    ACC_Controller_DW.m_out = 20300.0;
+    ACC_Controller_DW.kb_tot = 1.0;
 
     // SystemInitialize for MATLAB Function: '<S1>/Allocator'
     ACC_Controller_DW.gear_t = 10.0;

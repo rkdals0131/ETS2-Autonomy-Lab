@@ -21,6 +21,10 @@ set_param(model, "ProdHWDeviceType", "Intel->x86-64 (Windows64)");   % host = SI
 set_param(model, "GenCodeOnly", "off");
 set_param(model, "InstructionSetExtensions", {'None'});   % no SSE intrinsics: portable C++
 set_param(model, "SaveFormat", "Dataset");
+% Utility functions outside the class (rt_powd_snf, rt_hypotd_snf, div_nde_s32_floor, ...) have
+% external linkage; prefix them with the model name so they do not clash with other generated
+% code linked into the same node (the LCC controller defines the same names).
+set_param(model, "CustomSymbolStrUtil", "$R$N$C");
 % C++ class ets2::AccController (code mappings)
 try
     cm = coder.mapping.api.get(model);
