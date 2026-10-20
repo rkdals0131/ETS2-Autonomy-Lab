@@ -17,7 +17,10 @@
 
 namespace ot {
 static const OtDriveHost* input_host{};
-static bool split_axes() {return input_host && input_host->size>=sizeof(OtDriveHost) && input_host->request_axes;}
+// A host advertises each optional tail by its size; older loaders end before request_aux.
+static bool has_tail(size_t end) {return input_host && input_host->size>=end;}
+static bool split_axes() {return has_tail(offsetof(OtDriveHost,request_axes)+sizeof(OtDriveHost::request_axes)) && input_host->request_axes;}
+static bool aux_brakes() {return has_tail(offsetof(OtDriveHost,request_aux)+sizeof(OtDriveHost::request_aux)) && input_host->request_aux;}
 static json drive_status(OtDriveStatus status) {
     const char* reasons[]={"disabled","disarmed","armed","command","expired","manual","paused","panic","disconnected","unloaded","input_unavailable","profile_unsupported"};
     // A newer resident loader may report reasons this core does not know.
@@ -32,8 +35,11 @@ static json current_drive() {
     OtDriveStatus status;const OtDriveRequest request{};
     if(input_host) input_host->request(input_host->context,&request,&status);
     uint32_t axes=status.armed?ot_drive_all:0;
-    if(split_axes()) input_host->request_axes(input_host->context,&request,ot_drive_all,&status,&axes);
-    auto result=drive_status(status);result["axes"]=axes;result["independent_axes"]=split_axes();return result;
+    OtDriveAux aux{-1,0};
+    if(aux_brakes()) input_host->request_aux(input_host->context,&request,ot_drive_all,nullptr,&status,&axes,&aux);
+    else if(split_axes()) input_host->request_axes(input_host->context,&request,ot_drive_all,&status,&axes);
+    auto result=drive_status(status);result["axes"]=axes;result["independent_axes"]=split_axes();
+    result["auxiliary_brakes"]=aux_brakes();result["retarder"]=aux.retarder;result["engine_brake"]=aux.engine_brake!=0;return result;
 }
 static void configure_drive(const json& settings) {
     if(!input_host) return;
@@ -468,16 +474,25 @@ json Runtime::command(const json& request) {
                 throw std::runtime_error("Driving axes must be finite steering [-1,1], pedals [0,1]");
         }
         const auto axes=request.value("axes",ot_drive_all);
-        if(!axes || axes>ot_drive_all) throw std::runtime_error("Driving axes must be steering=1, pedals=2 or both=3");
+        if(!axes || axes>ot_drive_all_aux || ((axes&ot_drive_auxiliary) && !(axes&ot_drive_pedals)))
+            throw std::runtime_error("Driving axes must be steering=1, pedals=2, both=3, plus auxiliary brakes=4 with the pedals");
         if(!split_axes() && axes!=ot_drive_all) throw std::runtime_error("Independent ACC/LCC requires the updated resident loader; exit and restart the game");
+        if((axes&ot_drive_auxiliary) && !aux_brakes()) throw std::runtime_error("Retarder and engine brake commands require the updated resident loader; exit and restart the game");
+        OtDriveAux aux{-1,0},actual_aux{-1,0};
+        if(action=="command" && (axes&ot_drive_auxiliary)) {
+            aux.retarder=request.at("retarder").get<int32_t>();aux.engine_brake=request.at("engine_brake").get<bool>();
+            if(aux.retarder<0 || aux.retarder>ot_drive_retarder_steps) throw std::runtime_error("Retarder step must be 0..5");
+        }
         OtDriveStatus status;uint32_t actual=0;
-        const bool accepted=split_axes()?input_host->request_axes(input_host->context,&decoded,axes,&status,&actual):input_host->request(input_host->context,&decoded,&status);
-        auto result=drive_status(status);result["axes"]=split_axes()?actual:(status.armed?ot_drive_all:0);result["independent_axes"]=split_axes();result["accepted"]=accepted;return result;
+        const bool accepted=aux_brakes()?input_host->request_aux(input_host->context,&decoded,axes,&aux,&status,&actual,&actual_aux):
+            split_axes()?input_host->request_axes(input_host->context,&decoded,axes,&status,&actual):input_host->request(input_host->context,&decoded,&status);
+        auto result=drive_status(status);result["axes"]=split_axes()?actual:(status.armed?ot_drive_all:0);result["independent_axes"]=split_axes();
+        result["auxiliary_brakes"]=aux_brakes();result["retarder"]=actual_aux.retarder;result["engine_brake"]=actual_aux.engine_brake!=0;result["accepted"]=accepted;return result;
     }
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","configs","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","parallel_passes"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","configs","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","drive_auxiliary_brakes","parallel_passes"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"parallel_passes_allowed",gate_ok_ && allow_tier1_ && allow_parallel_passes_},
         {"overlay",false},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false) || parallel_passes_->active()},

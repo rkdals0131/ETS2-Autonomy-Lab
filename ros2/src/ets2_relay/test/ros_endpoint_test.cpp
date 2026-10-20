@@ -75,6 +75,25 @@ TEST(RosEndpoint,PublishesDemandsAndForwardsDrive) {
         command.sent_steady_ns=steady_ns();commands->publish(command);return false;}));
     const auto sent=forwarded();
     EXPECT_EQ(sent.at("sequence"),2);EXPECT_EQ(sent.at("axes"),2);EXPECT_TRUE(sent.contains("deadline_ms"));
+    EXPECT_FALSE(sent.contains("retarder"));
+
+    // With the auxiliary brakes the retarder step and engine brake travel along; a step
+    // out of range or the retarder without the pedals is rejected here.
+    const auto rejected_after=[&](uint8_t axes,int8_t step) {
+        const auto before=endpoint.diagnostics().at("rejected_commands").get<uint64_t>();
+        command.axes=axes;command.retarder_step=step;
+        return spin_until(node,[&]{
+            command.sent_steady_ns=steady_ns();commands->publish(command);
+            return endpoint.diagnostics().at("rejected_commands").get<uint64_t>()>before;});
+    };
+    command.sequence=3;EXPECT_TRUE(rejected_after(4,0));EXPECT_TRUE(rejected_after(6,6));
+    command.axes=6;
+    command.retarder_step=3;command.engine_brake=true;command.sequence=5;
+    const auto with_retarder=[&]{for(const auto& call:core.snapshot()) if(call.at("action")=="command" && call.contains("retarder")) return call;return json{};};
+    ASSERT_TRUE(spin_until(node,[&]{
+        if(!with_retarder().is_null()) return true;
+        command.sent_steady_ns=steady_ns();commands->publish(command);return false;}));
+    EXPECT_EQ(with_retarder().at("axes"),6);EXPECT_EQ(with_retarder().at("retarder"),3);EXPECT_EQ(with_retarder().at("engine_brake"),true);
     const auto diagnostics=endpoint.diagnostics();
     EXPECT_GE(diagnostics.at("stale_commands").get<uint64_t>(),1u);
     EXPECT_GE(diagnostics.at("forwarded_commands").get<uint64_t>(),1u);

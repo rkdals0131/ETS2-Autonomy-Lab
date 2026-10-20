@@ -14,5 +14,10 @@ uint64 sent_steady_ns
 float32 steering
 float32 throttle
 float32 brake
-# Ownership: 1 steering, 2 throttle+brake, 3 both. 0 retains legacy both-axis mode.
+# Ownership: 1 steering, 2 throttle+brake, 3 both, plus 4 for the auxiliary brakes
+# (only with 2: 6 ACC with retarder, 7 all). 0 retains legacy both-axis mode.
 uint8 axes
+# With axes bit 4: retarder step 0..5 (0 off) and the engine brake held. The loader
+# pulses the step on change and every 0.5 s, and step 0 once when control ends.
+int8 retarder_step
+bool engine_brake

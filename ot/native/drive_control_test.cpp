@@ -2,10 +2,14 @@
 #include "manual_input.hpp"
 #include <fstream>
 #include <iostream>
+#include <source_location>
 #include <stdexcept>
+#include <string>
 
-static void check(bool value) {if(!value) throw std::runtime_error("Driving contract failed");}
-int main(int argc,char** argv) {
+static void check(bool value,std::source_location at=std::source_location::current()) {
+    if(!value) throw std::runtime_error("Driving contract failed at line "+std::to_string(at.line()));
+}
+int main(int argc,char** argv) try {
     using namespace ot;
     DriveControl control;OtDriveStatus state;
     OtDriveRequest arm;arm.action=OtDriveAction::arm;arm.owner="controller_a";
@@ -23,7 +27,9 @@ int main(int argc,char** argv) {
     command.sequence=2;command.throttle=.9f;check(control.request(command,1020,state));
     check(!control.request(arm,1021,state));control.release(OtDriveReason::panic);
     check(frame.next(index,value) && index==1 && value==.3f);
-    check(frame.next(index,value) && index==2 && value==.2f);check(!frame.next(index,value));
+    check(frame.next(index,value) && index==2 && value==.2f);
+    for(uint32_t i=3;i<DriveFrame::kInputs;++i) check(frame.next(index,value) && index==i && value==0 && DriveFrame::is_button(i));
+    check(!frame.next(index,value));
     frame.begin(control.frame(1022,true,{},false));check(frame.next(index,value) && value==0);
     check(!control.request(command,1022,state));check(!state.armed);
     check(control.request(arm,1023,state));check(state.epoch>first_epoch);
@@ -57,6 +63,35 @@ int main(int argc,char** argv) {
     command.epoch=state.epoch;command.sequence=1;command.deadline_ms=1690;
     check(control.request(command,1510,state,ot_drive_all));check(control.request(OtDriveRequest{},1511,state,ot_drive_all,&owned));check(owned==ot_drive_all);
     control.release(OtDriveReason::panic);check(control.request(OtDriveRequest{},1512,state,ot_drive_all,&owned));check(owned==0 && !state.armed);
+    // Auxiliary brakes: only with the pedals and the extended host; the retarder step is
+    // pulsed on change and refreshed, the engine brake held, and step 0 pulsed on release.
+    {
+        DriveControl aux;aux.configure(true,true,true);aux.paused(false);aux.frame(2000,true,{},0);
+        check(!aux.request(arm,2000,state,ot_drive_auxiliary|ot_drive_steering,nullptr,nullptr,nullptr,ot_drive_all_aux));
+        check(!aux.request(arm,2000,state,ot_drive_all_aux));  // old hosts allow axes up to 3 only
+        check(aux.request(arm,2000,state,ot_drive_pedals|ot_drive_auxiliary,nullptr,nullptr,nullptr,ot_drive_all_aux));
+        OtDriveRequest c;c.action=OtDriveAction::command;c.owner=arm.owner;c.epoch=state.epoch;c.sequence=1;c.deadline_ms=2190;c.throttle=0;c.brake=.05f;
+        const uint32_t acc=ot_drive_pedals|ot_drive_auxiliary;
+        check(!aux.request(c,2010,state,acc,nullptr,nullptr,nullptr,ot_drive_all_aux));  // aux owned but no aux values
+        OtDriveAux bad{6,0};check(!aux.request(c,2010,state,acc,nullptr,&bad,nullptr,ot_drive_all_aux));
+        OtDriveAux want{3,1},got{};uint32_t aux_owned=0;
+        check(aux.request(c,2010,state,acc,&aux_owned,&want,&got,ot_drive_all_aux));check(aux_owned==acc && got.retarder==3 && got.engine_brake==1);
+        check(aux.frame(2011,true,{},0)==std::array<float,3>{0,0,.05f});check((aux.aux_frame()==DriveAuxFrame{3,true}));
+        aux.frame(2011+DriveControl::kRetarderPulseMs,true,{},0);check((aux.aux_frame()==DriveAuxFrame{-1,true}));
+        DriveFrame f;f.begin({0,0,.05f},DriveAuxFrame{3,true});
+        for(uint32_t i=0;i<DriveFrame::kInputs;++i) {check(f.next(index,value) && index==i);check(value==(i==2?.05f:(i==3+3 || i==DriveFrame::kMotorbrake)?1.f:0.f));}
+        c.sequence=2;c.deadline_ms=2340;check(aux.request(c,2150,state,acc,nullptr,&want,nullptr,ot_drive_all_aux));
+        c.sequence=3;c.deadline_ms=2520;check(aux.request(c,2330,state,acc,nullptr,&want,nullptr,ot_drive_all_aux));
+        aux.frame(2400,true,{},0);check(aux.aux_frame().retarder_pulse==-1);  // same step: no new pulse yet
+        aux.frame(2011+DriveControl::kRetarderRefreshMs,true,{},0);check(aux.aux_frame().retarder_pulse==3);  // refreshed
+        want={1,0};c.sequence=4;c.deadline_ms=2600;check(aux.request(c,2512,state,acc,nullptr,&want,nullptr,ot_drive_all_aux));
+        aux.frame(2513,true,{},0);check((aux.aux_frame()==DriveAuxFrame{1,false}));
+        aux.frame(2590,true,{},ot_drive_pedals);  // the driver's pedal releases everything
+        check((aux.aux_frame()==DriveAuxFrame{0,false}));  // step 0 pulsed once
+        aux.frame(2590+DriveControl::kRetarderPulseMs,true,{},0);check((aux.aux_frame()==DriveAuxFrame{-1,false}));
+        uint32_t after=9;OtDriveAux echo{};check(aux.request(OtDriveRequest{},2800,state,ot_drive_all,&after,nullptr,&echo,ot_drive_all_aux));
+        check(after==0 && echo.retarder==-1 && state.reason==OtDriveReason::manual);
+    }
     if(argc>1) {
         ManualInput profile{std::filesystem::path(argv[1])};PhysicalInput input{true};
         check(!profile.evaluate(input).active);
@@ -90,5 +125,5 @@ int main(int argc,char** argv) {
         check(loads("keyboard.a?0 & (! keyboard.d?0)"));check(!loads("keyboard.a?0 && keyboard.d?0"));check(!loads("keyboard.a?0 || keyboard.d?0"));
         std::filesystem::remove(path);
     }
-    std::cout<<"Driving owner, epoch, expiry, takeover and SDK frame contracts passed\n";
-}
+    std::cout<<"Driving owner, epoch, expiry, takeover, auxiliary brake and SDK frame contracts passed\n";
+} catch(const std::exception& e) {std::cerr<<e.what()<<"\n";return 1;}

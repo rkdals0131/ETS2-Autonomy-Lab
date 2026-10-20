@@ -26,3 +26,8 @@ string error
 # Actual owner axes; 0 when released. This is not the requested UI mode.
 uint8 axes
 bool independent_axes
+# Retarder and engine brake (axes bit 4) need loader 0.42.0+; false/-1 otherwise.
+bool auxiliary_brakes
+# Commanded retarder step 0..5, -1 when the auxiliary brakes are not owned.
+int8 retarder_command
+bool engine_brake_command

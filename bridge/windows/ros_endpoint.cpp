@@ -65,7 +65,7 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control):impl_(std::make_u
         });
     m.drive_service=m.node->create_service<ets2_msgs::srv::DriveControl>("/ets2/drive/control",
         [&m](const ets2_msgs::srv::DriveControl::Request::SharedPtr request,ets2_msgs::srv::DriveControl::Response::SharedPtr response) {
-            if(!valid_owner(request->owner) || request->axes>3) {response->message="Invalid owner or axes";return;}
+            if(!valid_owner(request->owner) || request->axes>7 || ((request->axes&4) && !(request->axes&2))) {response->message="Invalid owner or axes";return;}
             try {
                 // Arm and disarm are rare; the pipe call may hold this executor briefly.
                 const auto state=m.control({{"cmd","drive"},{"action",request->arm?"arm":"disarm"},{"drive_owner",request->owner},
@@ -78,7 +78,8 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control):impl_(std::make_u
     m.drive_commands=m.node->create_subscription<ets2_msgs::msg::DriveCommand>("/ets2/drive/command",rclcpp::QoS(1).best_effort(),
         [&m](const ets2_msgs::msg::DriveCommand::SharedPtr command) {
             if(!valid_owner(command->owner) || !std::isfinite(command->steering) || !std::isfinite(command->throttle) || !std::isfinite(command->brake) ||
-               std::abs(command->steering)>1 || command->throttle<0 || command->throttle>1 || command->brake<0 || command->brake>1 || command->axes>3) {++m.rejected;return;}
+               std::abs(command->steering)>1 || command->throttle<0 || command->throttle>1 || command->brake<0 || command->brake>1 || command->axes>7 ||
+               ((command->axes&4) && (!(command->axes&2) || command->retarder_step<0 || command->retarder_step>5))) {++m.rejected;return;}
             const auto age=std::chrono::steady_clock::now().time_since_epoch()-std::chrono::nanoseconds(command->sent_steady_ns);
             if(!command->sent_steady_ns || age<0ns || age>m.max_age) {
                 ++m.stale;
@@ -90,6 +91,7 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control):impl_(std::make_u
                 m.drive_request=json{{"cmd","drive"},{"action","command"},{"drive_owner",command->owner},{"epoch",command->epoch},
                     {"sequence",command->sequence},{"steering",command->steering},{"throttle",command->throttle},{"brake",command->brake},
                     {"axes",command->axes?command->axes:3}};
+                if(command->axes&4) {(*m.drive_request)["retarder"]=command->retarder_step;(*m.drive_request)["engine_brake"]=bool(command->engine_brake);}
                 m.drive_sent_ns=command->sent_steady_ns;
             }
             m.drive_ready.notify_one();

@@ -16,18 +16,23 @@ public:
         permitted_=permitted;control_.configure(available_,permitted_,bool(profile_),error_.c_str());
         sample();
     }
-    bool request(const OtDriveRequest& request,OtDriveStatus& result,uint32_t axes=ot_drive_all,uint32_t* actual_axes=nullptr) noexcept {
+    bool request(const OtDriveRequest& request,OtDriveStatus& result,uint32_t axes=ot_drive_all,uint32_t* actual_axes=nullptr,
+                 const OtDriveAux* aux=nullptr,OtDriveAux* actual_aux=nullptr,uint32_t allowed_axes=ot_drive_all) noexcept {
         std::lock_guard lock(mutex_);
         if(request.action==OtDriveAction::arm) sample();
-        return control_.request(request,GetTickCount64(),result,axes,actual_axes);
+        return control_.request(request,GetTickCount64(),result,axes,actual_axes,aux,actual_aux,allowed_axes);
     }
     void release(OtDriveReason reason) {std::lock_guard lock(mutex_);control_.release(reason);}
     void pause(bool paused) {std::lock_guard lock(mutex_);control_.paused(paused);}
     void available(bool value) {std::lock_guard lock(mutex_);available_=value;if(!value) active_=false;control_.configure(available_,permitted_,bool(profile_),error_.c_str());}
     static scs_result_t SCSAPIFUNC event(scs_input_event_t* event,scs_u32_t flags,scs_context_t context) noexcept {
         auto& self=*static_cast<InputDevice*>(context);std::lock_guard lock(self.mutex_);
-        if(flags&SCS_INPUT_EVENT_CALLBACK_FLAG_first_in_frame) self.frame_.begin(self.sample());
-        return self.frame_.next(event->input_index,event->value_float.value)?SCS_RESULT_ok:SCS_RESULT_not_found;
+        if(flags&SCS_INPUT_EVENT_CALLBACK_FLAG_first_in_frame) {const auto axes=self.sample();self.frame_.begin(axes,self.control_.aux_frame());}
+        float value{};
+        if(!self.frame_.next(event->input_index,value)) return SCS_RESULT_not_found;
+        if(DriveFrame::is_button(event->input_index)) event->value_bool.value=value!=0;
+        else event->value_float.value=value;
+        return SCS_RESULT_ok;
     }
     static void SCSAPIFUNC active(scs_u8_t active,scs_context_t context) noexcept {
         auto& self=*static_cast<InputDevice*>(context);std::lock_guard lock(self.mutex_);self.active_=active!=0;
@@ -67,7 +72,9 @@ const OtDriveHost host{1,sizeof(OtDriveHost),&device,
     [](void* context,bool allowed,const char* path){static_cast<InputDevice*>(context)->configure(allowed,path);},
     [](void* context,const OtDriveRequest* request,OtDriveStatus* result){return static_cast<InputDevice*>(context)->request(*request,*result);},
     [](void* context,OtDriveReason reason){static_cast<InputDevice*>(context)->release(reason);},
-    [](void* context,const OtDriveRequest* request,uint32_t axes,OtDriveStatus* result,uint32_t* actual){return static_cast<InputDevice*>(context)->request(*request,*result,axes,actual);}};
+    [](void* context,const OtDriveRequest* request,uint32_t axes,OtDriveStatus* result,uint32_t* actual){return static_cast<InputDevice*>(context)->request(*request,*result,axes,actual);},
+    [](void* context,const OtDriveRequest* request,uint32_t axes,const OtDriveAux* aux,OtDriveStatus* result,uint32_t* actual,OtDriveAux* actual_aux){
+        return static_cast<InputDevice*>(context)->request(*request,*result,axes,actual,aux,actual_aux,ot_drive_all_aux);}};
 }
 const OtDriveHost* drive_host() {return &host;}
 void input_release(OtDriveReason reason) {device.release(reason);}
@@ -78,9 +85,15 @@ scs_result_t input_initialize(scs_u32_t version,const scs_input_init_params_t* p
     if(!params) return SCS_RESULT_invalid_parameter;
     const auto& sdk=*static_cast<const scs_input_init_params_v100_t*>(params);
     if(!sdk.common.game_id || std::strcmp(sdk.common.game_id,"eut2")) return SCS_RESULT_unsupported;
-    static const scs_input_device_input_t axes[]={{"steering","Steering",SCS_VALUE_TYPE_float},{"aforward","Throttle",SCS_VALUE_TYPE_float},{"abackward","Brake",SCS_VALUE_TYPE_float}};
+    // Order matches DriveFrame. Semantical inputs feed the mixes of the same name
+    // (controls.sii "semantical.retarder3?0"), so no binding is needed.
+    static const scs_input_device_input_t inputs[]={{"steering","Steering",SCS_VALUE_TYPE_float},{"aforward","Throttle",SCS_VALUE_TYPE_float},{"abackward","Brake",SCS_VALUE_TYPE_float},
+        {"retarder0","Retarder off",SCS_VALUE_TYPE_bool},{"retarder1","Retarder 1",SCS_VALUE_TYPE_bool},{"retarder2","Retarder 2",SCS_VALUE_TYPE_bool},
+        {"retarder3","Retarder 3",SCS_VALUE_TYPE_bool},{"retarder4","Retarder 4",SCS_VALUE_TYPE_bool},{"retarder5","Retarder 5",SCS_VALUE_TYPE_bool},
+        {"motorbrake","Engine brake",SCS_VALUE_TYPE_bool}};
+    static_assert(std::size(inputs)==DriveFrame::kInputs);
     scs_input_device_t description{};description.name="ot_drive";description.display_name="OT Driving Commands";
-    description.type=SCS_INPUT_DEVICE_TYPE_semantical;description.input_count=3;description.inputs=axes;
+    description.type=SCS_INPUT_DEVICE_TYPE_semantical;description.input_count=DriveFrame::kInputs;description.inputs=inputs;
     description.callback_context=&device;description.input_event_callback=InputDevice::event;description.input_active_callback=InputDevice::active;
     const auto result=sdk.register_device(&description);device.available(result==SCS_RESULT_ok);return result;
 }
