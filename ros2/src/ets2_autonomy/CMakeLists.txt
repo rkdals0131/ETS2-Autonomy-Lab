@@ -23,5 +23,8 @@ if(BUILD_TESTING)
   target_link_libraries(lateral_sim_test nlohmann_json::nlohmann_json)
   # Real map lane from map_lane_provider; the test skips that scenario when absent.
   target_compile_definitions(lateral_sim_test PRIVATE ETS2_LANE_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../../bridge/recordings/gt-path/current-lane.json")
+  ament_add_gtest(longitudinal_test test/longitudinal_test.cpp)
+  target_compile_features(longitudinal_test PRIVATE cxx_std_20)
+  target_include_directories(longitudinal_test PRIVATE src)
 endif()
 ament_package()

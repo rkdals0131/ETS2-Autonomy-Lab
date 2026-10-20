@@ -8,6 +8,7 @@
 #include <std_msgs/msg/string.hpp>
 #include "control/parameters.hpp"
 #include "control/kinematic_axles.hpp"
+#include "control/lead_tracker.hpp"
 #include <ets2_msgs/msg/wheel_state.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <algorithm>
@@ -57,7 +58,7 @@ int main(int argc,char** argv) {
     double ego_x=0,ego_y=0,ego_yaw=0,front_axle=0;bool pose_received=false,traffic_received=false,wheels_received=false,liftable=false;
     std::map<uint32_t,AxleWheel> axle_wheels;std::map<uint32_t,bool> grounded;
     Clock::time_point pose_time{},traffic_time{};
-    struct Actor {double x,y,yaw,speed,length,width;};std::vector<Actor> actors;
+    struct Actor {uint64_t id;double x,y,yaw,speed,length,width;};std::vector<Actor> actors;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr ps;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr config;
     rclcpp::Subscription<ets2_msgs::msg::WheelState>::SharedPtr ws;
@@ -93,7 +94,7 @@ int main(int argc,char** argv) {
             if(msg->x.size()!=n || msg->y.size()!=n || msg->yaw.size()!=n || msg->speed_mps.size()!=n || msg->length_m.size()!=n || msg->width_m.size()!=n) throw std::runtime_error("Misaligned GT traffic arrays");
             actors.clear();
             for(size_t i=0;i<n;++i) {
-                Actor a{msg->x[i],msg->y[i],msg->yaw[i],msg->speed_mps[i],msg->length_m[i],msg->width_m[i]};
+                Actor a{msg->id[i],msg->x[i],msg->y[i],msg->yaw[i],msg->speed_mps[i],msg->length_m[i],msg->width_m[i]};
                 if(!std::isfinite(a.x)||!std::isfinite(a.y)||!std::isfinite(a.yaw)||!std::isfinite(a.speed)||!std::isfinite(a.length)||!std::isfinite(a.width)||a.length<=0||a.width<=0) throw std::runtime_error("Invalid GT traffic actor");
                 actors.push_back(a);
             }
@@ -123,6 +124,7 @@ int main(int argc,char** argv) {
         std::cout<<"Driving armed; owner="<<owner<<", epoch="<<epoch<<". Ctrl+C releases control."<<std::endl;
         auto report=Clock::now(),previous=report;double speed_integral=0,previous_speed=vehicle->speed_mps;
         VirtualEps eps;
+        LeadTracker leads;const auto started=Clock::now();
         // Fixed 50 Hz schedule: sleep_until the next 20 ms deadline keeps the mean
         // period at 20 ms even with Windows' coarse sleep granularity; after an
         // overrun the schedule restarts from now instead of bursting to catch up.
@@ -141,6 +143,7 @@ int main(int argc,char** argv) {
             auto speed_target=settings->target_speed_mps;
             auto steering_target=settings->steering_target;double steering_rate=0;
             double path_error=0,path_offset=0,remaining=0,lead_gap=std::numeric_limits<double>::infinity();
+            std::optional<uint64_t> lead_id;double lead_speed=0;
             if(lane) {
                 if(now-pose_time>200ms || now-traffic_time>200ms) throw std::runtime_error("Current GT path/traffic observation is unavailable");
                 const auto axles=kinematic_axles(axle_wheels,grounded);
@@ -174,10 +177,11 @@ int main(int argc,char** argv) {
                     const auto gap=ahead-actor.length/2;
                     const auto desired=front_axle+settings->standstill_gap_m+std::max(0.0,vehicle->speed_mps)*settings->following_time_s;
                     speed_target=std::min(speed_target,std::max(0.0,actor.speed+settings->following_gain*(gap-desired)));
-                    lead_gap=std::min(lead_gap,gap);
+                    if(gap<lead_gap) {lead_gap=gap;lead_id=actor.id;lead_speed=actor.speed;}
                 }
                 if(lcc && remaining<=1 && (!acc || std::abs(vehicle->speed_mps)<0.1)) {std::cout<<"Lane reference ended; releasing control"<<std::endl;break;}
             }
+            const auto lead=leads.update(lead_id,lead_gap,lead_speed,std::chrono::duration<double>(now-started).count(),{});
             const auto error=speed_target-vehicle->speed_mps;
             ets2_msgs::msg::DriveCommand command;
             command.owner=owner;command.epoch=epoch;command.sequence=++sequence;
@@ -198,7 +202,7 @@ int main(int argc,char** argv) {
             command.throttle=acc?std::max(0.0,effort):0;command.brake=acc?std::max(0.0,-effort):0;
             publisher->publish(command);
             if(now>=report) {
-                std::cout<<"speed="<<vehicle->speed_mps<<" target="<<speed_target<<" path_error="<<path_error<<" path_offset="<<path_offset<<" remaining="<<remaining<<" lead_gap="<<lead_gap
+                std::cout<<"speed="<<vehicle->speed_mps<<" target="<<speed_target<<" path_error="<<path_error<<" path_offset="<<path_offset<<" remaining="<<remaining<<" lead_gap="<<lead_gap<<" lead_accel="<<lead.accel_mps2
                     <<" steering_target="<<steering_target<<" steering_applied="<<drive->steering_applied<<" steering_input="<<command.steering<<" throttle="<<command.throttle<<" brake="<<command.brake
                     <<" axes="<<unsigned(drive->axes)<<" accepted_sequence="<<drive->sequence<<std::endl;
                 report=now+1s;
