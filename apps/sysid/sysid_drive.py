@@ -301,6 +301,9 @@ class Session:
                                 sequence=self.seq, deadline_ms=int(ticks()) + 190, axes=3,
                                 steering=self.steer, throttle=self.thr, brake=self.brk)
         if not r.get("accepted"):
+            # The command window ran out during a game hitch before frame() saw the release.
+            if r.get("reason") == "expired":
+                raise Expired("command rejected: expired")
             raise Stop(f"command rejected: {r.get('reason')}")
 
     # building blocks
