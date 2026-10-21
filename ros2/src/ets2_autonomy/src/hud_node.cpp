@@ -17,7 +17,8 @@
 // - debug/mpc: the lateral MPC's plan for the rear point over 1.5 s (/ets2/drive/mpc_plan),
 //   to compare what it intends with what the truck then does (layout default: off).
 //   markings / junctions / signals: the map around the truck from the provider's scene file
-//     (path_file's .scene, about 40 m, read twice a second), grey background: lane dividers
+//     (path_file's .scene, 120 m, read when it changes; hud_scene.hpp), drawn within
+//     scene_view_m (60 m) of the truck each frame, grey background: lane dividers
 //     dashed, the divider between the directions a double line, road edges solid; prefab
 //     navigation curves faint; traffic lights as a pole and a head with a tick towards the
 //     traffic they face (positions only: the game reports no light state).
@@ -26,6 +27,7 @@
 // paused) clears the road marks; the scene stays while GT arrives.
 #include "control/drive_session.hpp"
 #include "control/hud_marks.hpp"
+#include "control/hud_scene.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <ets2_msgs/msg/assist_state.hpp>
 #include <ets2_msgs/msg/traffic_state.hpp>
@@ -33,6 +35,7 @@
 #include <nav_msgs/msg/path.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -56,51 +59,12 @@ int main(int argc,char** argv) {
         const auto path_file=node->declare_parameter<std::string>("path_file","");
         std::array<hud::Points,2> sides; // left, right
         auto next_sides=Clock::now();
-        // The provider's map around the truck (Foxglove only), as LINE_LIST point pairs, read twice a second.
-        struct Light {double x,y,z,height;std::optional<double> heading;};
-        struct Scene {std::vector<geometry_msgs::msg::Point> lane,centre,edge,junction;std::vector<Light> lights;double x=0,y=0,radius=0;bool valid=false;} scene;
+        // The provider's map around the truck (Foxglove only): read when the file changes (checked
+        // every 0.1 s), drawn within scene_view_m of the truck.
+        const double scene_view=node->declare_parameter("scene_view_m",60.0);
+        hud::Scene scene;
+        std::filesystem::file_time_type scene_written{};
         auto next_scene=Clock::now();
-        const auto read_scene=[](const std::string& file) {
-            Scene out;
-            std::ifstream input(file);
-            const auto data=nlohmann::json::parse(input);
-            if(data.at("frame_id")!="world") throw std::runtime_error("Scene must use ROS world coordinates");
-            out.x=data.at("center").at(0).get<double>();out.y=data.at("center").at(1).get<double>();out.radius=data.at("radius_m").get<double>();
-            const auto point=[](double x,double y,double z) {geometry_msgs::msg::Point p;p.x=x;p.y=y;p.z=z+.05;return p;};
-            for(const auto& line:data.at("lines")) {
-                std::vector<std::array<double,3>> q;
-                for(const auto& p:line.at("points")) q.push_back({p.at(0).get<double>(),p.at(1).get<double>(),p.at(2).get<double>()});
-                if(q.size()<2) continue;
-                const std::string kind=line.at("kind");
-                if(kind=="lane") {
-                    // 3 m dashes and gaps from the line's arc length on the road (s0), so they stay put as the file rolls.
-                    double s=line.value("s0",0.0);
-                    for(size_t i=0;i+1<q.size();++i) {
-                        const auto& a=q[i];const auto& b=q[i+1];
-                        const double l=std::hypot(b[0]-a[0],b[1]-a[1]);
-                        for(double u=0;u<l;) {
-                            const double phase=std::fmod(s+u,6.0),step=std::max(1e-3,std::min(l-u,phase<3?3-phase:6-phase));
-                            if(phase<3) for(const double v:{u,u+step}) out.lane.push_back(point(a[0]+(b[0]-a[0])*v/l,a[1]+(b[1]-a[1])*v/l,a[2]+(b[2]-a[2])*v/l));
-                            u+=step;
-                        }
-                        s+=l;
-                    }
-                    continue;
-                }
-                // The divider between the directions is a double line 0.25 m apart.
-                for(const double offset:kind=="centre"?std::vector<double>{-.125,.125}:std::vector<double>{0})
-                    for(size_t i=0;i+1<q.size();++i) for(const auto k:{i,i+1}) {
-                        const double dx=q[i+1][0]-q[i][0],dy=q[i+1][1]-q[i][1],l=std::max(1e-6,std::hypot(dx,dy));
-                        (kind=="edge"?out.edge:kind=="centre"?out.centre:out.junction).push_back(point(q[k][0]-offset*dy/l,q[k][1]+offset*dx/l,q[k][2]));
-                    }
-            }
-            for(const auto& light:data.at("signals")) {
-                const auto& p=light.at("position");
-                out.lights.push_back({p.at(0).get<double>(),p.at(1).get<double>(),p.at(2).get<double>(),light.value("height_m",0.0),light.contains("heading") && light["heading"].is_number()?std::optional<double>(light["heading"].get<double>()):std::nullopt});
-            }
-            out.valid=true;
-            return out;
-        };
         // Truck outline, from the last armed AssistState (the off messages carry none).
         double truck_front=5.3,truck_rear=-2.5;
         double trailer_yaw=0;Clock::time_point trailer_time{};
@@ -223,33 +187,42 @@ int main(int argc,char** argv) {
             }
             // The map around the truck: lane markings, junction curves, traffic lights (grey: background).
             if(!path_file.empty() && now>=next_scene) {
-                next_scene=now+500ms;
+                next_scene=now+100ms;
                 const auto dot=path_file.rfind('.');
                 const auto file=path_file.substr(0,dot)+".scene"+(dot==std::string::npos?"":path_file.substr(dot));
-                try {scene=std::filesystem::exists(file)?read_scene(file):Scene{};}
-                catch(const std::exception&) {} // a file being replaced: keep the last scene
+                std::error_code error;
+                const auto written=std::filesystem::last_write_time(file,error);
+                if(error) scene=hud::Scene{};
+                else if(written!=scene_written) {
+                    try {std::ifstream input(file);scene=hud::read_scene(nlohmann::json::parse(input));scene_written=written;}
+                    catch(const std::exception&) {} // a file being replaced: keep the last scene, read it next time
+                }
             }
-            // Not when the provider stopped following the truck (stale file).
-            if(scene.valid && std::hypot(scene.x-ex,scene.y-ey)<=scene.radius+30) {
-                const auto lines=[&](const std::string& ns,const std::vector<geometry_msgs::msg::Point>& pts,double width,std::array<float,4> c) {
+            // Only while the truck is inside what the file covers (not a stopped provider's stale file).
+            if(scene.valid && std::hypot(scene.x-ex,scene.y-ey)<=scene.radius) {
+                const auto lines=[&](const std::string& ns,const std::vector<hud::Point3>& pairs,double width,std::array<float,4> c) {
+                    const auto pts=hud::within(pairs,ex,ey,scene_view);
                     if(pts.size()<2) return;
-                    auto m=marker(ns,Marker::LINE_LIST);m.scale.x=width;colour(m,c[0],c[1],c[2],c[3]);m.points=pts;
+                    auto m=marker(ns,Marker::LINE_LIST);m.scale.x=width;colour(m,c[0],c[1],c[2],c[3]);
+                    for(const auto& [x,y,z]:pts) {geometry_msgs::msg::Point p;p.x=x;p.y=y;p.z=z;m.points.push_back(p);}
                     array.markers.push_back(std::move(m));
                 };
                 lines("scene/markings",scene.lane,.12,{.75f,.78f,.8f,.45f});
                 lines("scene/markings",scene.centre,.1,{.85f,.87f,.9f,.6f});
                 lines("scene/markings",scene.edge,.15,{.85f,.87f,.9f,.7f});
                 lines("scene/junctions",scene.junction,.06,{.6f,.65f,.7f,.2f});
-                if(!scene.lights.empty()) {
+                if(std::any_of(scene.lights.begin(),scene.lights.end(),[&](const auto& l) {return std::hypot(l.position[0]-ex,l.position[1]-ey)<=scene_view;})) {
                     // Pole (light on the ground or on a pole head) or an overhead head alone; the tick
                     // points from the head towards the traffic it faces.
                     auto poles=marker("scene/signals",Marker::LINE_LIST);poles.scale.x=.15;colour(poles,.7f,.72f,.75f,.8f);
                     auto heads=marker("scene/signals",Marker::CUBE_LIST);heads.scale.x=heads.scale.y=.45;heads.scale.z=1;colour(heads,.7f,.72f,.75f,.9f);
                     for(const auto& l:scene.lights) {
+                        const auto [lx,ly,lz]=l.position;
+                        if(std::hypot(lx-ex,ly-ey)>scene_view) continue;
                         const bool overhead=l.height>=4.5;
-                        const double top=l.z+(overhead?l.height:std::max(l.height,3.2));
-                        geometry_msgs::msg::Point p;p.x=l.x;p.y=l.y;
-                        if(!overhead) {p.z=l.z;poles.points.push_back(p);p.z=top-.5;poles.points.push_back(p);}
+                        const double top=lz+(overhead?l.height:std::max(l.height,3.2));
+                        geometry_msgs::msg::Point p;p.x=lx;p.y=ly;
+                        if(!overhead) {p.z=lz;poles.points.push_back(p);p.z=top-.5;poles.points.push_back(p);}
                         p.z=top;heads.points.push_back(p);
                         if(l.heading) {
                             poles.points.push_back(p);

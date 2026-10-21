@@ -11,6 +11,7 @@
 #include "control/lcc_mpc.hpp"
 #include "control/hud_path.hpp"
 #include "control/hud_marks.hpp"
+#include "control/hud_scene.hpp"
 #include "control/lane_merge.hpp"
 #include "control/curve_speed.hpp"
 #include <gtest/gtest.h>
@@ -498,6 +499,26 @@ TEST(Hud,MarksForEachState) {
     // ACC off: its marks go and the animation restarts.
     in.acc=false;in.change_request=0;
     EXPECT_EQ(composer.update(in,.033).size(),1u);EXPECT_EQ(composer.join(),0);
+}
+
+TEST(Hud,SceneDashesAndViewRadius) {
+    // A 20 m lane divider from arc length 1 (dashes on 0-3, 6-9, ...), a centre line, a light.
+    const auto data=nlohmann::json::parse(R"({"frame_id":"world","center":[0,0,0],"radius_m":120,
+        "lines":[{"kind":"lane","s0":1,"points":[[0,0,0],[20,0,0]]},{"kind":"centre","points":[[0,5,0],[100,5,0]]}],
+        "signals":[{"position":[50,0,0],"height_m":5,"heading":null}]})");
+    const auto scene=hud::read_scene(data);
+    ASSERT_TRUE(scene.valid);EXPECT_EQ(scene.radius,120);
+    // Dashes [-1,2], [5,8], [11,14], [17,20] along the line.
+    ASSERT_EQ(scene.lane.size(),8u);
+    EXPECT_NEAR(scene.lane[0][0],0,1e-9);EXPECT_NEAR(scene.lane[1][0],2,1e-9);EXPECT_NEAR(scene.lane[2][0],5,1e-9);EXPECT_NEAR(scene.lane[7][0],20,1e-9);
+    // The centre line is two lines 0.25 m apart, one segment each.
+    ASSERT_EQ(scene.centre.size(),4u);EXPECT_NEAR(scene.centre[0][1]-scene.centre[2][1],-.25,1e-9);
+    ASSERT_EQ(scene.lights.size(),1u);EXPECT_FALSE(scene.lights[0].heading);
+    // Drawn near the truck: pairs with an end within the radius, whole.
+    const auto kept=hud::within(scene.lane,10,0,4);
+    ASSERT_EQ(kept.size(),4u);EXPECT_NEAR(kept[0][0],5,1e-9);EXPECT_NEAR(kept[3][0],14,1e-9);
+    EXPECT_TRUE(hud::within(scene.lane,60,0,30).empty());
+    EXPECT_EQ(hud::within(scene.centre,0,0,6).size(),4u);
 }
 
 TEST(KinematicAxles,TagAxleMovesTheRearPoint) {

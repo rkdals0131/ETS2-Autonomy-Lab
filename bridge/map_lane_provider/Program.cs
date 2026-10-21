@@ -41,8 +41,9 @@ try
     bool follow = options.ContainsKey("--follow");
     // Rolling mode: extend once less than extend-below is left ahead, drop points keep-behind past the truck.
     double extendBelow = Number("--extend-below-m", Math.Min(600, distance)), keepBehind = Number("--keep-behind-m", 300, 0), period = Number("--period-s", .5);
-    // Follow: the map around the truck for Foxglove (<out>.scene.json); 0 turns it off.
-    double sceneRadius = Number("--scene-radius-m", 40, 0);
+    // Follow: the map around the truck for Foxglove (<out>.scene.json); 0 turns it off. Wide:
+    // the hud draws a smaller radius around the truck from it until the next rewrite.
+    double sceneRadius = Number("--scene-radius-m", 120, 0);
     string? snapshotSource = options.GetValueOrDefault("--snapshot");
     string output = options.GetValueOrDefault("--out", Path.Combine(Environment.CurrentDirectory, "bridge", "recordings", "gt-path", "current-lane.json"));
     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
@@ -997,8 +998,8 @@ sealed class Neighbour(int side, string file)
 // The map around the truck for Foxglove (<out>.scene.json, follow mode): within the radius
 // (ground plane) the lane boundaries of every road piece in both directions from the lane
 // model, the navigation curves of prefabs (junctions) and their traffic lights. Geometry is
-// cached per map item; the file is replaced when the truck moved more than 2 m or the items
-// in range changed (a map reopen, a look or prefab read for the first time).
+// cached per map item; the file is replaced when the truck moved more than a tenth of the
+// radius or the items in range changed (a map reopen, a look or prefab read for the first time).
 sealed class Scene(string file, double radius)
 {
     const float Step = 2;          // m between samples along a line
@@ -1040,7 +1041,7 @@ sealed class Scene(string file, double radius)
         }
         long sig = near.Count;
         foreach (var (uid, _) in near.OrderBy(n => n.uid)) sig = unchecked(sig * 1000003 + (long)uid);
-        if (!float.IsNaN(last.X) && Vector2.Distance(last, here) <= 2 && sig == signature) return (false, Stopwatch.GetElapsedTime(started).TotalMilliseconds, near.Count);
+        if (!float.IsNaN(last.X) && Vector2.Distance(last, here) <= radius / 10 && sig == signature) return (false, Stopwatch.GetElapsedTime(started).TotalMilliseconds, near.Count);
         double r2 = radius * radius;
         bool In(Vector3 p) {double dx = p.X - here.X, dy = -p.Z - here.Y;return dx * dx + dy * dy <= r2;}
         static double R(double v) => Math.Round(v, 2);
