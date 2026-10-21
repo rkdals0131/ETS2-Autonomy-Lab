@@ -203,7 +203,10 @@ int main(int argc,char** argv) {
     };
     constexpr uint64_t lane_end_id=std::numeric_limits<uint64_t>::max();
     // One armed epoch. set_speed is the cruise speed in cruise mode (else the parameter).
-    enum class End {Stopped,Released,Toggle,Reengage};
+    // Paused: the game paused (or a hitch read as one); the standby engages again at the same
+    // set speed if the game runs again within 3 s.
+    enum class End {Stopped,Released,Toggle,Reengage,Paused};
+    double resume_speed=0; // the set speed of the last session, for a resume after a pause
     const auto session=[&](double set_speed)->End {
         taken=0;
         if(!axes()) throw std::runtime_error("Enable ACC or LCC explicitly before starting");
@@ -265,12 +268,15 @@ int main(int argc,char** argv) {
         // (as the driver's brake does); a later press of the button turns it on again, which
         // reads as the driver's switch: off while ACC runs, re-engage after a brake cancel.
         bool cancel_pending=cruise_engage,toggle_off=false,cruise_seen_off=false;auto cancel_until=started+3s;
+        std::optional<ets2_msgs::msg::DriveCommand> last_command;std::optional<Clock::time_point> stale_since;
+        resume_speed=set_speed;
         // Fixed 50 Hz schedule: sleep_until the next 20 ms deadline keeps the mean
         // period at 20 ms even with Windows' coarse sleep granularity; after an
         // overrun the schedule restarts from now instead of bursting to catch up.
         for(auto next=Clock::now();!stopped() && rclcpp::ok();) {
             rclcpp::spin_some(node);const auto now=Clock::now();
             if(!drive->armed || drive->owner!=owner || drive->epoch!=epoch) {
+                if(drive->reason=="paused") {std::cout<<"Released by a game pause"<<std::endl;epoch=0;return End::Paused;}
                 if(drive->reason!="manual") throw std::runtime_error("Driving released: "+drive->reason);
                 std::cout<<"The driver took over; control released"<<std::endl;epoch=0;return End::Released;
             }
@@ -310,8 +316,25 @@ int main(int argc,char** argv) {
             }
             const bool driver_steering=lcc && now<driver_steering_until;
             if(!acc) speed_integral=0;
-            if(now-drive_time>200ms || now-vehicle_time>200ms || vehicle->paused || !std::isfinite(vehicle->speed_mps))
-                throw std::runtime_error("Current game state is unavailable or paused");
+            // A game hitch stops the state for a moment: up to 1 s the last command is sent again
+            // (the core's 200 ms command window stays open) and nothing is computed on old state;
+            // longer is a lost game. A paused game ends the session as a pause.
+            if(vehicle->paused) {std::cout<<"The game paused"<<std::endl;return End::Paused;}
+            if(now-drive_time>1s || now-vehicle_time>1s || !std::isfinite(vehicle->speed_mps))
+                throw std::runtime_error("Current game state is unavailable for over 1 s");
+            if(now-drive_time>200ms || now-vehicle_time>200ms) {
+                if(!stale_since) {stale_since=now;std::cout<<"Game state late; holding the last command"<<std::endl;}
+                if(last_command) {
+                    auto again=*last_command;again.sequence=++sequence;again.sent_steady_ns=steady_ns();publisher->publish(again);
+                }
+                next+=20ms;if(next<Clock::now()) next=Clock::now();
+                std::this_thread::sleep_until(next);
+                continue;
+            }
+            if(stale_since) {
+                std::cout<<"Game state back after "<<std::chrono::duration<double>(now-*stale_since).count()<<" s"<<std::endl;stale_since.reset();
+                previous=now; // the controllers' dt skips the hitch
+            }
             // Cruise mode, every 0.25 s: follow the provider's revisions of the lane in use (from
             // its file). A truck off its lane (the driver changed lanes) takes the lane it is in
             // from any of the three files at once, without waiting for the provider to reset.
@@ -526,7 +549,7 @@ int main(int argc,char** argv) {
             }
             if(cancel_pending && acc && cruise_speed()>0) {command.throttle=0;command.brake=std::max(command.brake,.05f);}
             if(enabled_axes&2) pedal_sequence=command.sequence;
-            publisher->publish(command);
+            publisher->publish(command);last_command=command;
             // HUD inputs. The ACC mark: the lead's rear bumper (150 m at most), or without a lead
             // the gap ACC keeps (front bumper + 5 m + time gap); along the lane when the truck is
             // on it, else on the arc of its yaw rate.
@@ -640,8 +663,26 @@ int main(int argc,char** argv) {
             if(!(axes()&2)) throw std::runtime_error("Cruise engage needs ACC enabled");
             std::cout<<"Standby: the game's cruise control button engages"<<std::endl;
             bool wait_off=!(cruise_speed()<=0),reengage=false;
+            std::optional<Clock::time_point> resume_until; // after a pause: engage again by itself until then
             while(!stopped() && rclcpp::ok()) {
                 rclcpp::spin_some(node);
+                if(resume_until) {
+                    const auto now=Clock::now();
+                    const bool running=vehicle && drive && now-vehicle_time<=200ms && now-drive_time<=200ms && !vehicle->paused && drive->available;
+                    if(now>resume_until) {resume_until.reset();std::cout<<"The pause lasted over 3 s; standby: the game's cruise control button engages"<<std::endl;continue;}
+                    if(!running || driver_input()) {std::this_thread::sleep_for(20ms);continue;}
+                    resume_until.reset();
+                    std::cout<<"The game runs again: engaging at "<<resume_speed*3.6<<" km/h"<<std::endl;
+                    taken=0;std::tie(lane,lane_side)=find_lane();
+                    End end=End::Released;
+                    try {end=session(resume_speed);} catch(const std::exception& error) {std::cerr<<error.what()<<std::endl;}
+                    release();taken=0;
+                    if(end==End::Stopped) break;
+                    if(end==End::Paused) {resume_until=Clock::now()+3s;continue;}
+                    reengage=end==End::Reengage;wait_off=!reengage;
+                    std::cout<<(reengage?"Re-engaging":"Standby: the game's cruise control button engages")<<std::endl;
+                    continue;
+                }
                 if(!reengage) {
                     const auto cruise=cruise_speed();
                     if(cruise<=0) wait_off=false;
@@ -661,6 +702,7 @@ int main(int argc,char** argv) {
                 try {end=session(cruise_speed());} catch(const std::exception& error) {std::cerr<<error.what()<<std::endl;}
                 release();taken=0;
                 if(end==End::Stopped) break;
+                if(end==End::Paused) {resume_until=Clock::now()+3s;continue;}
                 reengage=end==End::Reengage;wait_off=!reengage;
                 std::cout<<(reengage?"Re-engaging":"Standby: the game's cruise control button engages")<<std::endl;
             }

@@ -1,6 +1,7 @@
 {
   "configById": {
-    "3D!sensors": {
+    "3D!lidar": {
+      "foxglovePanelTitle": "라이다 (앞·왼쪽·오른쪽)",
       "cameraState": {
         "perspective": true,
         "distance": 45,
@@ -85,17 +86,33 @@
         "/ets2/hud/markers": {
           "visible": true,
           "namespaces": {
+            "road/lcc_path": {
+              "visible": false
+            },
+            "road/acc": {
+              "visible": false
+            },
+            "road/lane_change": {
+              "visible": false
+            },
+            "scene/lane": {
+              "visible": false
+            },
             "scene/traffic": {
-              "visible": true
+              "visible": false
             },
             "scene/ego": {
               "visible": true
+            },
+            "scene/status": {
+              "visible": false
             }
           }
         }
       }
     },
     "Image!C_FN": {
+      "foxglovePanelTitle": "앞 카메라 (좁은 화각)",
       "imageMode": {
         "imageTopic": "/ets2/camera/C_FN/preview/image/compressed",
         "calibrationTopic": "/ets2/camera/C_FN/preview/camera_info"
@@ -109,6 +126,7 @@
       "publish": {}
     },
     "Image!C_FW": {
+      "foxglovePanelTitle": "앞 카메라 (넓은 화각)",
       "imageMode": {
         "imageTopic": "/ets2/camera/C_FW/preview/image/compressed",
         "calibrationTopic": "/ets2/camera/C_FW/preview/camera_info"
@@ -122,6 +140,7 @@
       "publish": {}
     },
     "Image!C_RL": {
+      "foxglovePanelTitle": "왼쪽 뒤 카메라",
       "imageMode": {
         "imageTopic": "/ets2/camera/C_RL/preview/image/compressed",
         "calibrationTopic": "/ets2/camera/C_RL/preview/camera_info"
@@ -135,6 +154,7 @@
       "publish": {}
     },
     "Image!C_RR": {
+      "foxglovePanelTitle": "오른쪽 뒤 카메라",
       "imageMode": {
         "imageTopic": "/ets2/camera/C_RR/preview/image/compressed",
         "calibrationTopic": "/ets2/camera/C_RR/preview/camera_info"
@@ -147,64 +167,68 @@
       "layers": {},
       "publish": {}
     },
-    "Plot!imu": {
-      "paths": [
-        {
-          "value": "/ets2/imu/data_raw.linear_acceleration.x",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "ax"
-        },
-        {
-          "value": "/ets2/imu/data_raw.linear_acceleration.y",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "ay"
-        },
-        {
-          "value": "/ets2/imu/data_raw.angular_velocity.z",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "yaw rate"
-        }
-      ],
-      "showXAxisLabels": true,
-      "showYAxisLabels": true,
-      "showLegend": true,
-      "legendDisplay": "floating",
-      "showPlotValuesInLegend": true,
-      "isSynced": true,
-      "xAxisVal": "timestamp",
-      "followingViewWidth": 30
-    },
     "Plot!speed": {
+      "foxglovePanelTitle": "속도: 차량 대 휠 오도메트리",
       "paths": [
         {
           "value": "/ets2/vehicle/state.speed_mps",
           "enabled": true,
           "timestampMethod": "receiveTime",
-          "label": "speed m/s"
+          "label": "차량 (SDK)",
+          "color": "#ffffff"
         },
         {
           "value": "/ets2/wheels/odometry.twist.twist.linear.x",
           "enabled": true,
           "timestampMethod": "receiveTime",
-          "label": "wheel odom"
+          "label": "휠 오도메트리",
+          "color": "#2e7d32"
         }
       ],
       "showXAxisLabels": true,
       "showYAxisLabels": true,
       "showLegend": true,
-      "legendDisplay": "floating",
+      "legendDisplay": "top",
       "showPlotValuesInLegend": true,
       "isSynced": true,
       "xAxisVal": "timestamp",
-      "followingViewWidth": 30
+      "followingViewWidth": 30,
+      "yAxisLabel": "m/s"
     },
-    "RawMessages!diag": {
-      "topicPath": "/diagnostics",
-      "diffEnabled": false,
-      "expansion": "none"
+    "Plot!imu": {
+      "foxglovePanelTitle": "IMU",
+      "paths": [
+        {
+          "value": "/ets2/imu/data_raw.linear_acceleration.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "전후 가속도",
+          "color": "#1565c0"
+        },
+        {
+          "value": "/ets2/imu/data_raw.linear_acceleration.y",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "좌우 가속도",
+          "color": "#f9a825"
+        },
+        {
+          "value": "/ets2/imu/data_raw.angular_velocity.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "요레이트 (rad/s)",
+          "color": "#2e7d32"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "top",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "yAxisLabel": "m/s² · rad/s"
     }
   },
   "globalVariables": {},
@@ -220,7 +244,7 @@
         "direction": "row",
         "splitPercentage": 50
       },
-      "second": "3D!sensors",
+      "second": "3D!lidar",
       "direction": "column",
       "splitPercentage": 45
     },
@@ -233,14 +257,9 @@
       },
       "second": {
         "first": "Plot!speed",
-        "second": {
-          "first": "Plot!imu",
-          "second": "RawMessages!diag",
-          "direction": "column",
-          "splitPercentage": 50.0
-        },
+        "second": "Plot!imu",
         "direction": "column",
-        "splitPercentage": 33.333333333333336
+        "splitPercentage": 50.0
       },
       "direction": "column",
       "splitPercentage": 50

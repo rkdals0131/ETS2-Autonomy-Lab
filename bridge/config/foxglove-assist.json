@@ -1,6 +1,7 @@
 {
   "configById": {
     "3D!assist": {
+      "foxglovePanelTitle": "주변",
       "cameraState": {
         "perspective": true,
         "distance": 60,
@@ -83,246 +84,283 @@
               "visible": true
             },
             "scene/status": {
-              "visible": true
+              "visible": false
             }
           }
-        },
-        "/ets2/drive/lane": {
-          "visible": false
-        },
-        "/ets2/drive/plan": {
-          "visible": false
         }
       }
     },
     "Indicator!acc": {
-      "path": "/ets2/drive/assist.acc_active",
+      "foxglovePanelTitle": "ACC",
+      "path": "/ets2/drive/assist.acc_mode",
       "style": "background",
       "fallbackColor": "#3a3a3a",
-      "fallbackLabel": "ACC off",
+      "fallbackLabel": "꺼짐",
       "rules": [
         {
           "operator": "=",
-          "rawValue": "true",
+          "rawValue": "1",
+          "color": "#1565c0",
+          "label": "정속"
+        },
+        {
+          "operator": "=",
+          "rawValue": "2",
           "color": "#2e7d32",
-          "label": "ACC"
+          "label": "앞차 추종"
+        },
+        {
+          "operator": "=",
+          "rawValue": "3",
+          "color": "#f9a825",
+          "label": "정지 중"
+        },
+        {
+          "operator": "=",
+          "rawValue": "4",
+          "color": "#6d6d6d",
+          "label": "정지 유지"
+        },
+        {
+          "operator": "=",
+          "rawValue": "5",
+          "color": "#2e7d32",
+          "label": "출발"
+        },
+        {
+          "operator": "=",
+          "rawValue": "6",
+          "color": "#c62828",
+          "label": "비상 제동"
         }
       ]
     },
     "Indicator!lcc": {
+      "foxglovePanelTitle": "LCC",
       "path": "/ets2/drive/assist.lcc_state",
       "style": "background",
       "fallbackColor": "#3a3a3a",
-      "fallbackLabel": "LCC off",
+      "fallbackLabel": "꺼짐",
       "rules": [
         {
           "operator": "=",
           "rawValue": "1",
           "color": "#2e7d32",
-          "label": "LCC steering"
+          "label": "조향 중"
         },
         {
           "operator": "=",
           "rawValue": "2",
           "color": "#f9a825",
-          "label": "LCC yields"
+          "label": "운전자 조향"
         },
         {
           "operator": "=",
           "rawValue": "3",
-          "color": "#8d6e63",
-          "label": "LCC searching"
-        }
-      ]
-    },
-    "Indicator!lead": {
-      "path": "/ets2/drive/assist.lead_valid",
-      "style": "background",
-      "fallbackColor": "#3a3a3a",
-      "fallbackLabel": "no lead",
-      "rules": [
-        {
-          "operator": "=",
-          "rawValue": "true",
-          "color": "#1565c0",
-          "label": "lead"
+          "color": "#6d6d6d",
+          "label": "차로 찾는 중"
         }
       ]
     },
     "Indicator!change": {
+      "foxglovePanelTitle": "차로 변경",
       "path": "/ets2/drive/assist.lane_change_active",
       "style": "background",
       "fallbackColor": "#3a3a3a",
-      "fallbackLabel": "lane kept",
+      "fallbackLabel": "없음",
       "rules": [
         {
           "operator": "=",
           "rawValue": "-1",
           "color": "#f9a825",
-          "label": "<- changing"
+          "label": "← 이동 중"
         },
         {
           "operator": "=",
           "rawValue": "1",
           "color": "#f9a825",
-          "label": "changing ->"
+          "label": "이동 중 →"
         }
       ]
     },
-    "Plot!speed": {
+    "StateTransitions!history": {
+      "foxglovePanelTitle": "보조 상태 기록",
       "paths": [
-        {
-          "value": "/ets2/vehicle/state.speed_mps",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "speed m/s"
-        },
-        {
-          "value": "/ets2/drive/assist.set_speed_mps",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "set"
-        },
-        {
-          "value": "/ets2/drive/assist.target_speed_mps",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "target (curve, lead)"
-        }
-      ],
-      "showXAxisLabels": true,
-      "showYAxisLabels": true,
-      "showLegend": true,
-      "legendDisplay": "floating",
-      "showPlotValuesInLegend": true,
-      "isSynced": true,
-      "xAxisVal": "timestamp",
-      "followingViewWidth": 30
-    },
-    "Plot!longitudinal": {
-      "paths": [
-        {
-          "value": "/ets2/drive/assist.accel_target_mps2",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "a target"
-        },
-        {
-          "value": "/ets2/vehicle/state.acceleration_base_mps2[0]",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "a actual"
-        },
-        {
-          "value": "/ets2/drive/assist.lead_gap_m",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "lead gap m"
-        }
-      ],
-      "showXAxisLabels": true,
-      "showYAxisLabels": true,
-      "showLegend": true,
-      "legendDisplay": "floating",
-      "showPlotValuesInLegend": true,
-      "isSynced": true,
-      "xAxisVal": "timestamp",
-      "followingViewWidth": 30
-    },
-    "Plot!lateral": {
-      "paths": [
-        {
-          "value": "/ets2/drive/assist.lateral_offset_m",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "offset m"
-        },
-        {
-          "value": "/ets2/drive/assist.merge_offset_m",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "merge ref m"
-        },
-        {
-          "value": "/ets2/drive/assist.heading_error_rad",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "heading err rad"
-        }
-      ],
-      "showXAxisLabels": true,
-      "showYAxisLabels": true,
-      "showLegend": true,
-      "legendDisplay": "floating",
-      "showPlotValuesInLegend": true,
-      "isSynced": true,
-      "xAxisVal": "timestamp",
-      "followingViewWidth": 30
-    },
-    "Plot!steering": {
-      "paths": [
-        {
-          "value": "/ets2/drive/assist.steering_input",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "input"
-        },
-        {
-          "value": "/ets2/drive/assist.steering_applied",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "applied"
-        },
-        {
-          "value": "/ets2/drive/state.steering_manual",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "driver"
-        }
-      ],
-      "showXAxisLabels": true,
-      "showYAxisLabels": true,
-      "showLegend": true,
-      "legendDisplay": "floating",
-      "showPlotValuesInLegend": true,
-      "isSynced": true,
-      "xAxisVal": "timestamp",
-      "followingViewWidth": 30
-    },
-    "StateTransitions!modes": {
-      "paths": [
-        {
-          "value": "/ets2/drive/assist.lcc_state",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "LCC 0 off 1 steer 2 yield 3 search"
-        },
         {
           "value": "/ets2/drive/assist.acc_mode",
           "enabled": true,
           "timestampMethod": "receiveTime",
-          "label": "ACC 1 cruise 2 follow 3 stop 4 hold 5 go 6 emerg"
+          "label": "ACC (0 꺼짐 1 정속 2 추종 3 정지 중 4 정지 유지 5 출발 6 비상)"
+        },
+        {
+          "value": "/ets2/drive/assist.lcc_state",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "LCC (0 꺼짐 1 조향 2 운전자 3 찾는 중)"
         },
         {
           "value": "/ets2/drive/assist.lane_change_active",
           "enabled": true,
           "timestampMethod": "receiveTime",
-          "label": "lane change"
-        },
-        {
-          "value": "/ets2/drive/state.armed",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "armed"
+          "label": "차로 변경 (-1 왼쪽 1 오른쪽)"
         }
       ],
       "isSynced": true,
       "showPoints": true
     },
-    "RawMessages!assist": {
-      "topicPath": "/ets2/drive/assist",
-      "diffEnabled": false,
-      "expansion": "none"
+    "Plot!speed": {
+      "foxglovePanelTitle": "속도",
+      "paths": [
+        {
+          "value": "/ets2/vehicle/state.speed_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "내 속도",
+          "color": "#ffffff"
+        },
+        {
+          "value": "/ets2/drive/assist.set_speed_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "설정 속도",
+          "color": "#6d6d6d"
+        },
+        {
+          "value": "/ets2/drive/assist.target_speed_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "목표 속도 (커브·앞차 반영)",
+          "color": "#1565c0"
+        },
+        {
+          "value": "/ets2/drive/assist.lead_speed_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "앞차 속도",
+          "color": "#2e7d32"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "top",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "yAxisLabel": "m/s"
+    },
+    "Plot!gap": {
+      "foxglovePanelTitle": "앞차 간격",
+      "paths": [
+        {
+          "value": "/ets2/drive/assist.lead_gap_m",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "범퍼 간 거리",
+          "color": "#2e7d32"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "top",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "yAxisLabel": "m"
+    },
+    "Plot!accel": {
+      "foxglovePanelTitle": "가감속",
+      "paths": [
+        {
+          "value": "/ets2/drive/assist.accel_target_mps2",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "ACC 요구",
+          "color": "#1565c0"
+        },
+        {
+          "value": "/ets2/vehicle/state.acceleration_base_mps2[0]",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "실제",
+          "color": "#ffffff"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "top",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "yAxisLabel": "m/s²"
+    },
+    "Plot!lateral": {
+      "foxglovePanelTitle": "차로 중심 오차",
+      "paths": [
+        {
+          "value": "/ets2/drive/assist.lateral_offset_m",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "트럭 위치 (왼쪽 +)",
+          "color": "#ffffff"
+        },
+        {
+          "value": "/ets2/drive/assist.merge_offset_m",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "합류·차로 변경 경로",
+          "color": "#1565c0"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "top",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "yAxisLabel": "m"
+    },
+    "Plot!steering": {
+      "foxglovePanelTitle": "조향",
+      "paths": [
+        {
+          "value": "/ets2/drive/assist.steering_input",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "LCC 명령",
+          "color": "#1565c0"
+        },
+        {
+          "value": "/ets2/drive/assist.steering_applied",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "게임 적용값",
+          "color": "#ffffff"
+        },
+        {
+          "value": "/ets2/drive/state.steering_manual",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "운전자 스틱",
+          "color": "#f9a825"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "top",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "yAxisLabel": "-1 … 1"
     }
   },
   "globalVariables": {},
@@ -333,52 +371,47 @@
   "layout": {
     "first": {
       "first": "3D!assist",
-      "second": "StateTransitions!modes",
+      "second": "StateTransitions!history",
       "direction": "column",
-      "splitPercentage": 78
+      "splitPercentage": 75
     },
     "second": {
       "first": {
         "first": "Indicator!acc",
         "second": {
           "first": "Indicator!lcc",
-          "second": {
-            "first": "Indicator!lead",
-            "second": "Indicator!change",
-            "direction": "row",
-            "splitPercentage": 50.0
-          },
+          "second": "Indicator!change",
           "direction": "row",
-          "splitPercentage": 33.333333333333336
+          "splitPercentage": 50.0
         },
         "direction": "row",
-        "splitPercentage": 25.0
+        "splitPercentage": 33.333333333333336
       },
       "second": {
         "first": {
           "first": "Plot!speed",
           "second": {
-            "first": "Plot!longitudinal",
-            "second": {
-              "first": "Plot!lateral",
-              "second": "Plot!steering",
-              "direction": "column",
-              "splitPercentage": 50.0
-            },
+            "first": "Plot!gap",
+            "second": "Plot!accel",
             "direction": "column",
-            "splitPercentage": 33.333333333333336
+            "splitPercentage": 50.0
           },
           "direction": "column",
-          "splitPercentage": 25.0
+          "splitPercentage": 33.333333333333336
         },
-        "second": "RawMessages!assist",
-        "direction": "column",
-        "splitPercentage": 82
+        "second": {
+          "first": "Plot!lateral",
+          "second": "Plot!steering",
+          "direction": "column",
+          "splitPercentage": 50.0
+        },
+        "direction": "row",
+        "splitPercentage": 50
       },
       "direction": "column",
-      "splitPercentage": 8
+      "splitPercentage": 9
     },
     "direction": "row",
-    "splitPercentage": 62
+    "splitPercentage": 55
   }
 }
