@@ -93,7 +93,7 @@ int main(int argc,char** argv) {
             in.ego_x=ex;in.ego_y=ey;in.ego_yaw=yaw;
             for(const auto& s:composer.update(in,dt)) line("road/"+s.kind,s.points,s.width_m,s.screen_px,s.rgba,ez);
             // Scene (Foxglove only): the lane in use with its edges.
-            if(assisted && lane.size()>=2) {
+            if(assisted && lane.size()>=2 && (assist->acc_active || assist->lcc_state)) {
                 line("scene/lane",lane,.08,0,{.6f,.65f,.7f,.5f},ez);
                 if(const auto w=assist->lane_width_m;w>0) for(const int side:{-1,1}) {
                     hud::Points edge;
@@ -126,7 +126,7 @@ int main(int argc,char** argv) {
                 array.markers.push_back(std::move(m));
             }
             // Status above the truck.
-            if(assisted) {
+            if(assisted && (assist->acc_active || assist->lcc_state)) {
                 const auto& a=*assist;
                 char text[160];
                 const char* lcc[]={"LCC off","LCC","LCC yields","LCC searching"};

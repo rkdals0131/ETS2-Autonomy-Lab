@@ -632,9 +632,16 @@ int main(int argc,char** argv) {
         }
         return End::Stopped;
     };
+    // Outside a session the assistance is off: AssistState says so at once and every 0.5 s
+    // after (Foxglove's indicators and the hud node read the latest message; without it the
+    // last armed state stayed on screen after a brake, 2026-10-21).
+    const auto publish_off=[&]() {
+        ets2_msgs::msg::AssistState state;state.header.stamp=pose_stamp;state.header.frame_id="world";
+        assist_state->publish(state);
+    };
     const auto release=[&]() {
         if(epoch) try {control(false);} catch(const std::exception& error) {std::cerr<<"Release: "<<error.what()<<std::endl;}
-        epoch=0;plan_clear();
+        epoch=0;plan_clear();publish_off();
     };
     const auto driver_input=[&]() {
         return ((axes()&1) && drive->steering_manual!=0) || ((axes()&2) && (drive->throttle_manual!=0 || drive->brake_manual!=0));
@@ -664,8 +671,10 @@ int main(int argc,char** argv) {
             std::cout<<"Standby: the game's cruise control button engages"<<std::endl;
             bool wait_off=!(cruise_speed()<=0),reengage=false;
             std::optional<Clock::time_point> resume_until; // after a pause: engage again by itself until then
+            auto next_off=Clock::now();
             while(!stopped() && rclcpp::ok()) {
                 rclcpp::spin_some(node);
+                if(Clock::now()>=next_off) {next_off=Clock::now()+500ms;publish_off();}
                 if(resume_until) {
                     const auto now=Clock::now();
                     const bool running=vehicle && drive && now-vehicle_time<=200ms && now-drive_time<=200ms && !vehicle->paused && drive->available;
