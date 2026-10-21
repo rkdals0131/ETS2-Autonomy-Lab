@@ -91,7 +91,7 @@ Packet state_messages(const json& state,const std::string& session,const V& base
         const auto flag=[&](const char* key) {return sdk.contains(key) && sdk.at(key).value("available",false) && sdk.at(key).at("value").get<bool>();};
         const bool retarder=sdk.contains("truck.brake.retarder") && sdk.at("truck.brake.retarder").value("available",false);
         c<<(retarder?sdk.at("truck.brake.retarder").at("value").get<uint32_t>():uint32_t{0});
-        c<<flag("truck.brake.motor")<<flag("truck.brake.parking")<<flag("truck.lift_axle");
+        c<<flag("truck.brake.motor")<<flag("truck.brake.parking")<<flag("truck.lift_axle")<<flag("truck.lblinker")<<flag("truck.rblinker");
         const auto nan=std::numeric_limits<double>::quiet_NaN();
         const json* drivetrain=state.contains("engine") && state.at("engine").contains("drivetrain") ? &state.at("engine").at("drivetrain") : nullptr;
         const bool available=drivetrain && drivetrain->value("available",false);

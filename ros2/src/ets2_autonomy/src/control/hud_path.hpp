@@ -5,6 +5,7 @@
 // ribbon ends in the bar (the relay paints distance to the polyline, so a bar drawn out and
 // back reads as a T); the bar alone is a two-point line across the lane.
 #include "path_following.hpp"
+#include "lane_merge.hpp"
 #include <array>
 #include <cmath>
 #include <vector>
@@ -13,11 +14,18 @@ namespace hud {
 using Points=std::vector<std::array<double,2>>;
 inline constexpr double step_m=2,bar_half_m=1.6;
 
-inline Points lane(const LanePath& path,double from_s,double length) {
+// The lane centre, or with a merge (re-engagement, lane change) the path LCC steers on:
+// the centre moved left by the merge offset.
+inline Points lane(const LanePath& path,double from_s,double length,const LaneMerge* merge=nullptr) {
     Points points;
     const auto end=std::min(from_s+length,path.points.back().s);
-    for(double s=from_s;s<end;s+=step_m) {const auto p=path.at(s);points.push_back({p.x,p.y});}
-    if(end>from_s) {const auto p=path.at(end);points.push_back({p.x,p.y});}
+    const auto add=[&](double s) {
+        auto p=path.at(s);
+        if(merge && !merge->done(s)) {const auto h=path.heading(s),r=merge->at(s).offset;p.x-=std::sin(h)*r;p.y+=std::cos(h)*r;}
+        points.push_back({p.x,p.y});
+    };
+    for(double s=from_s;s<end;s+=step_m) add(s);
+    if(end>from_s) add(end);
     return points;
 }
 inline Points arc(double x,double y,double yaw,double curvature,double length) {

@@ -391,10 +391,19 @@ TEST(LaneMerge,ReferenceShape) {
     const auto merge=LaneMerge::start(100,2.0,.03,25);
     const auto a=merge.at(100);EXPECT_NEAR(a.offset,2.0,1e-12);EXPECT_NEAR(a.heading,.03,1e-12);
     const auto b=merge.at(100+merge.length);EXPECT_EQ(b.offset,0);EXPECT_EQ(b.heading,0);
-    // Peak lateral acceleration of the reference at most 0.5 m/s^2.
-    double peak=0;for(double s=100;s<100+merge.length;s+=.5) peak=std::max(peak,std::abs(merge.at(s).curvature)*25*25);
-    EXPECT_LE(peak,.5+1e-3);EXPECT_GT(peak,.3);
+    const auto peak=[](const LaneMerge& m,double v) {
+        double result=0;for(double s=m.s0;s<m.s0+m.length;s+=.25) result=std::max(result,std::abs(m.at(s).curvature)*v*v);
+        return result;
+    };
+    // Quintic: no step of curvature at either end.
+    EXPECT_NEAR(merge.at(100).curvature,0,1e-9);EXPECT_NEAR(merge.at(100+merge.length-1e-6).curvature,0,1e-6);
+    // The offset term reaches its 0.5 m/s^2; the heading term may add up to as much again.
+    EXPECT_NEAR(peak(LaneMerge::start(0,2,0,25),25),.5,.01);
+    EXPECT_LE(peak(merge,25),1.0);
     EXPECT_GE(LaneMerge::start(0,0,0,25).length,50.0); // at least 2 s of driving
+    // A turn signal lane change one 4.5 m lane over at 90 km/h: about 5.4 s at 0.9 m/s^2.
+    const auto change=LaneMerge::start(0,-4.5,0,25,.9,4);
+    EXPECT_NEAR(change.length/25,5.4,.1);EXPECT_NEAR(peak(change,25),.9,.02);
 }
 
 TEST(CurveSpeed,PlansTheDecelerationAhead) {

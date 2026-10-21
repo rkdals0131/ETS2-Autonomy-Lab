@@ -87,6 +87,10 @@ try
     RollingLane? rolling = null;
     int revision = 0, pathId = 0;
     string? lastError = null;
+    // Follow mode also keeps the same-direction lane on each side (<out>.left.json,
+    // <out>.right.json; no file without one) for the driver's lane change by turn signal
+    // and for re-acquiring the lane the driver changed to before this lane resets.
+    var sides = new[] {new Neighbour(-1, SidePath(output, "left")), new Neighbour(1, SidePath(output, "right"))};
     for (var placement = first; ; )
     {
         long started = Stopwatch.GetTimestamp();
@@ -114,13 +118,14 @@ try
                 updated = true;
             }
             if (updated) rolling.Write(output, ++revision);
+            foreach (var side in sides) side.Update(world, rolling, projection.s, placement.position.Y, x, y, updated, reset, distance, keepBehind, ref pathId);
         }
         catch (Exception ex) {error = ex.Message;}
         // Replay mode reports every cycle so the driver can step in lockstep.
         if (updated || snapshotSource == "-" || (error is not null && error != lastError))
-            Console.WriteLine(JsonSerializer.Serialize(new {revision, path_id = pathId, updated, reset, start_s = rolling?.StartS, end_s = rolling?.EndS, truck_s = rolling is null ? (double?)null : projection.s,
+            Console.WriteLine(JsonSerializer.Serialize(new {revision, path_id = rolling?.PathId, updated, reset, start_s = rolling?.StartS, end_s = rolling?.EndS, truck_s = rolling is null ? (double?)null : projection.s,
                 ahead_m = rolling is null ? (double?)null : rolling.EndS - projection.s, offset_m = rolling is null ? (double?)null : projection.distance, point_count = rolling?.Points.Count,
-                end_reason = rolling?.EndReason, prefabs = rolling?.Walker.PrefabCount, sectors = world.Sectors, elapsed_ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds, error}));
+                end_reason = rolling?.EndReason, prefabs = rolling?.Walker.PrefabCount, left_path_id = sides[0].Lane?.PathId, right_path_id = sides[1].Lane?.PathId, sectors = world.Sectors, elapsed_ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds, error}));
         lastError = error;
         if (snapshotSource != "-") Thread.Sleep(TimeSpan.FromSeconds(Math.Max(0, period - Stopwatch.GetElapsedTime(started).TotalSeconds)));
         while (true)
@@ -150,6 +155,8 @@ static JsonDocument ReadSnapshot()
     if (!reply.RootElement.GetProperty("ok").GetBoolean()) throw new IOException(reply.RootElement.GetProperty("error").GetString());
     return JsonDocument.Parse(reply.RootElement.GetProperty("result").GetRawText());
 }
+
+static string SidePath(string output, string side) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output))!, Path.GetFileNameWithoutExtension(output) + "." + side + Path.GetExtension(output));
 
 // Lateral lane centres of a road look in the road frame (x right of the road direction).
 // Forward: traffic runs in the road direction. Drivable: not a tram/rail lane.
@@ -782,6 +789,48 @@ sealed class LaneWalker
     }
 }
 
+// The lane beside the followed one (side -1 left, +1 right of travel): started one lane
+// width across from the followed lane's centre at the truck, rolled with it, and started
+// again after the followed lane resets, when it no longer runs beside the truck (a lane
+// drop or a new lane) or when it ended, at most every 2 s.
+sealed class Neighbour(int side, string file)
+{
+    public RollingLane? Lane;
+    int revision;
+    long retryAfter;
+    public void Update(World world, RollingLane main, double truckS, float height, double x, double y, bool mainUpdated, bool reset, double distance, double keepBehind, ref int pathId)
+    {
+        var (cx, cy) = main.At(truckS);
+        var (hx, hy) = main.Direction(truckS);
+        // ROS world: left of the heading is (-hy, hx).
+        double sx = cx + side * hy * main.Width, sy = cy - side * hx * main.Width;
+        bool beside = false;
+        if (Lane is not null && !reset)
+        {
+            var p = Lane.Project(sx, sy);
+            beside = p.distance <= Lane.Width / 2 && Lane.EndS - p.s > 50;
+            if (beside && mainUpdated && Lane.Extendable) {Lane.Fill(p.s + distance);Lane.Trim(p.s - keepBehind);Lane.Write(file, ++revision);}
+        }
+        if (beside) return;
+        long now = Stopwatch.GetTimestamp();
+        if (Lane is null && !reset && now < retryAfter) return;
+        retryAfter = now + 2 * Stopwatch.Frequency;
+        RollingLane? next = null;
+        try
+        {
+            var candidate = RollingLane.Start(world, new Vector3((float)sx, height, -(float)sy), new Vector3((float)hx, 0, -(float)hy), pathId + 1);
+            candidate.Fill(distance);
+            // Not the followed lane again (no lane on this side) and beside it here.
+            var p = candidate.Project(sx, sy);
+            if (main.Project(candidate.At(p.s).x, candidate.At(p.s).y).distance > main.Width / 2 && p.distance <= candidate.Width / 2 && candidate.Points.Count >= 2) {next = candidate;++pathId;}
+        }
+        catch (InvalidOperationException) {}
+        Lane = next;
+        if (Lane is not null) Lane.Write(file, ++revision);
+        else if (File.Exists(file)) File.Delete(file);
+    }
+}
+
 // The published lane polyline (ROS world, arc length s from the path start) and the
 // walker that extends it. Points are only appended at the end and dropped at the start.
 sealed class RollingLane
@@ -840,6 +889,21 @@ sealed class RollingLane
         int keep = Points.FindIndex(p => p.S >= before) - 1;
         if (keep > 0) Points.RemoveRange(0, Math.Min(keep, Points.Count - 2));
         Events.RemoveAll(e => e.S < StartS);
+    }
+    // Point and unit direction at arc length s (clamped to the polyline).
+    public (double x, double y) At(double s)
+    {
+        int i = Points.FindIndex(p => p.S >= s);i = i < 0 ? Points.Count - 1 : Math.Max(i, 1);
+        var (ax, ay, aS) = Points[i - 1];var (bx, by, bS) = Points[i];
+        double t = bS > aS ? Math.Clamp((s - aS) / (bS - aS), 0, 1) : 0;
+        return (ax + t * (bx - ax), ay + t * (by - ay));
+    }
+    public (double x, double y) Direction(double s)
+    {
+        int i = Points.FindIndex(p => p.S >= s);i = i < 0 ? Points.Count - 1 : Math.Max(i, 1);
+        var (ax, ay, _) = Points[i - 1];var (bx, by, _) = Points[i];
+        double n = Math.Sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
+        return n > 0 ? ((bx - ax) / n, (by - ay) / n) : (1, 0);
     }
     // Nearest point on the polyline: arc length and distance.
     public (double s, double distance) Project(double x, double y)

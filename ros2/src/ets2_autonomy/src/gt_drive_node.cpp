@@ -53,6 +53,7 @@ int main(int argc,char** argv) {
     // start: the path file is read once now. cruise: it is the provider's follow output, read at
     // each engagement (it may not exist yet).
     std::unique_ptr<LanePath> lane;
+    int lane_side=0; // cruise mode: the file the lane came from, 0 followed, -1/1 left/right side lane
     if(!cruise_engage && !initial.path_file.empty()) try {lane=std::make_unique<LanePath>(initial.path_file);} catch(const std::exception& e) {
         std::cerr<<e.what()<<std::endl;rclcpp::shutdown();return 1;
     }
@@ -165,18 +166,34 @@ int main(int argc,char** argv) {
         const auto axles=kinematic_axles(axle_wheels,grounded);
         return std::array<double,2>{ego_x+axles.rear_x*std::cos(ego_yaw),ego_y+axles.rear_x*std::sin(ego_yaw)};
     };
-    // Cruise mode: the provider's follow file, if the truck is on its lane; why not otherwise.
+    // Cruise mode: the provider's follow file and its side lanes (<file>.left/.right.json, only
+    // where such a lane exists).
+    const auto side_file=[&](int side) {
+        if(!side) return initial.path_file;
+        const auto dot=initial.path_file.rfind('.');
+        return initial.path_file.substr(0,dot)+(side<0?".left":".right")+(dot==std::string::npos?"":initial.path_file.substr(dot));
+    };
+    const auto read_lane=[&](int side)->std::unique_ptr<LanePath> {
+        try {return std::make_unique<LanePath>(side_file(side));} catch(const std::exception&) {return nullptr;}
+    };
+    // The lane the truck is in (nearest, within half its width) from the three files, or none
+    // and why not.
     std::string lane_problem;
-    const auto load_lane=[&]()->std::unique_ptr<LanePath> {
-        if(initial.path_file.empty()) {lane_problem="no path_file";return nullptr;}
-        try {
-            auto fresh=std::make_unique<LanePath>(initial.path_file);
-            const auto [x,y]=rear_point();
+    const auto find_lane=[&]()->std::pair<std::unique_ptr<LanePath>,int> {
+        if(initial.path_file.empty()) {lane_problem="no path_file";return {nullptr,0};}
+        const auto [x,y]=rear_point();
+        std::pair<std::unique_ptr<LanePath>,int> best{nullptr,0};double best_d=0;
+        lane_problem.clear();
+        for(const int side:{0,-1,1}) {
+            std::unique_ptr<LanePath> fresh;
+            try {fresh=std::make_unique<LanePath>(side_file(side));}
+            catch(const std::exception& e) {if(!side) lane_problem=std::string("lane file unusable: ")+e.what();continue;}
             const auto p=fresh->track(x,y);
-            if(p.d<=fresh->width/2 && fresh->remaining()>50) {lane_problem.clear();return fresh;}
-            lane_problem="lane file is "+std::to_string(p.d)+" m from the truck, "+std::to_string(fresh->remaining())+" m ahead";
-        } catch(const std::exception& e) {lane_problem=std::string("lane file unusable: ")+e.what();}
-        return nullptr;
+            if(p.d<=fresh->width/2 && fresh->remaining()>50) {if(!best.first || p.d<best_d) {best_d=p.d;best={std::move(fresh),side};}}
+            else if(!side) lane_problem="lane file is "+std::to_string(p.d)+" m from the truck, "+std::to_string(fresh->remaining())+" m ahead";
+        }
+        if(best.first) lane_problem.clear();
+        return best;
     };
     constexpr uint64_t lane_end_id=std::numeric_limits<uint64_t>::max();
     // One armed epoch. set_speed is the cruise speed in cruise mode (else the parameter).
@@ -214,7 +231,30 @@ int main(int argc,char** argv) {
         // the input is 0 unless steering, the same as the stick let go, and the driver's stick
         // always passes alone.
         enum class Lcc:uint8_t {Off,Active,Yield,Search};
-        Lcc lcc_state=Lcc::Off;std::optional<LaneMerge> merge;bool lane_replaced=false;
+        Lcc lcc_state=Lcc::Off;std::optional<LaneMerge> merge;bool lane_replaced=false,was_on_lane=false;
+        // Turn signal lane change: the switch's rising edge requests one to that side (both on,
+        // the hazards, is none); it starts while LCC steers, once the gap on the side lane is
+        // clear, and keeps going until merged (changing: its side).
+        int change_request=0,previous_signal=2,changing=0;std::string change_waiting;
+        // The driver's steering: since when without a pause over 0.3 s (the stick crossing centre).
+        Clock::time_point steering_since{},steering_seen{};
+        // A lane change waits for a gap on the target lane: nobody beside the truck, the vehicle
+        // ahead at least 5 m + 0.5 s + 3 s of closing ahead of the front bumper, the one behind
+        // at least 5 m + 3 s of its closing behind the rear (trailer included). front and rear
+        // are from the lane's reference point at lane distance s.
+        const auto gap_problem=[&](const LanePath& target,double s,double front,double rear,double v)->std::string {
+            for(const auto& a:actors) {
+                const auto p=target.project(a.x,a.y,std::max(0.0,s-200),s+200);
+                if(!(p.d<=(target.width+a.width)/2)) continue;
+                const auto& A=target.points[p.segment];const auto& B=target.points[p.segment+1];
+                if(std::cos(a.yaw-std::atan2(B.y-A.y,B.x-A.x))<=0) continue;
+                const auto ahead=p.s-a.length/2-(s+front),behind=(s-rear)-(p.s+a.length/2);
+                if(ahead>=0) {if(ahead<5+.5*v+3*std::max(0.0,v-a.speed)) return "vehicle ahead at "+std::to_string(int(ahead))+" m";}
+                else if(behind>=0) {if(behind<5+3*std::max(0.0,a.speed-v)) return "vehicle behind at "+std::to_string(int(behind))+" m";}
+                else return "vehicle beside";
+            }
+            return "";
+        };
         // Cruise mode: the game's cruise control is still on at arm. A light brake cancels it
         // (as the driver's brake does); a later press of the button turns it on again, which
         // reads as the driver's switch: off while ACC runs, re-engage after a brake cancel.
@@ -229,8 +269,9 @@ int main(int argc,char** argv) {
                 std::cout<<"The driver took over; control released"<<std::endl;epoch=0;return End::Released;
             }
             // Loader 0.44+: the driver's brake revokes the pedals after a command that held them.
+            // It ends LCC too; the cruise control button engages both again.
             if(pedal_sequence && drive->sequence>=pedal_sequence && !(drive->axes&2) && !(taken&2)) {
-                taken|=2;std::cout<<"ACC cancelled by the driver's brake"<<(configuration.load()->lcc_enabled && !(taken&1)?"; LCC continues":"")<<std::endl;
+                taken|=2;std::cout<<"The driver's brake: ACC and LCC off"<<std::endl;return End::Released;
             }
             const auto settings=configuration.load();
             auto enabled_axes=axes();
@@ -250,21 +291,76 @@ int main(int argc,char** argv) {
                     else if(now>cancel_until) throw std::runtime_error("The game's cruise control did not cancel on a brake pulse; it keeps the speed");
                 }
             }
-            // The driver's steering overrides LCC (the loader passes it alone); LCC resumes 1 s
-            // after the stick is let go. ACC keeps running throughout.
-            if(lcc && std::isfinite(drive->steering_manual) && drive->steering_manual!=0) driver_steering_until=now+1s;
+            // The driver's steering overrides LCC (the loader passes it alone); LCC resumes 0.5 s
+            // after the stick is let go and ACC keeps running. Steering for steering_takeover_s
+            // ends both.
+            if(std::isfinite(drive->steering_manual) && drive->steering_manual!=0) {
+                if(now-steering_seen>300ms) steering_since=now;
+                steering_seen=now;
+                if(lcc) driver_steering_until=now+500ms;
+                if(now-steering_since>=std::chrono::duration<double>(settings->steering_takeover_s)) {
+                    std::cout<<"The driver steered for "<<settings->steering_takeover_s<<" s: ACC and LCC off"<<std::endl;return End::Released;
+                }
+            }
             const bool driver_steering=lcc && now<driver_steering_until;
             if(!acc) speed_integral=0;
             if(now-drive_time>200ms || now-vehicle_time>200ms || vehicle->paused || !std::isfinite(vehicle->speed_mps))
                 throw std::runtime_error("Current game state is unavailable or paused");
-            // Cruise mode: follow the provider's revisions. After a reset (lane change, new road)
-            // or without a lane, read the file again from the truck every 0.5 s; a file that is
-            // not usable yet keeps the old lane (the truck's distance to it decides).
+            // Cruise mode, every 0.25 s: follow the provider's revisions of the lane in use (from
+            // its file). A truck off its lane (the driver changed lanes) takes the lane it is in
+            // from any of the three files at once, without waiting for the provider to reset.
+            // When the lane's file moved on to another lane (the provider reset after a lane
+            // change), the same lane is taken from the file that has it now, keeping the merge
+            // in progress; until then the loaded lane stays.
             if(cruise_engage && lcc && now>=next_lane_read) {
-                next_lane_read=now+500ms;
-                bool reload=!lane;
-                if(lane) try {lane->extend(initial.path_file);} catch(const std::exception&) {reload=true;}
-                if(reload) if(auto fresh=load_lane()) {lane=std::move(fresh);lane_replaced=true;}
+                next_lane_read=now+250ms;
+                bool moved=!lane;
+                if(lane) try {lane->extend(side_file(lane_side));} catch(const std::exception&) {moved=true;}
+                if(!lane || !was_on_lane) {
+                    if(auto [fresh,side]=find_lane();fresh) {lane=std::move(fresh);lane_side=side;lane_replaced=true;}
+                } else if(moved) {
+                    const auto [x,y]=rear_point();
+                    const auto offset=lane->offset(x,y,lane->progress),heading=lane->heading(lane->progress);
+                    for(const int side:{0,-1,1}) {
+                        auto fresh=read_lane(side);
+                        if(!fresh) continue;
+                        const auto p=fresh->track(x,y);
+                        if(std::abs(fresh->offset(x,y,p.s)-offset)>.3 || std::abs(std::remainder(fresh->heading(p.s)-heading,2*std::numbers::pi))>.05) continue;
+                        if(merge) merge->s0+=p.s-lane->progress;
+                        lane=std::move(fresh);lane_side=side;
+                        break;
+                    }
+                }
+            }
+            // Turn signal (the driver's switch, from the relay's powertrain state).
+            const int signal=powertrain && now-powertrain_time<=1s && powertrain->turn_signal_left!=powertrain->turn_signal_right?(powertrain->turn_signal_left?-1:1):0;
+            if(previous_signal==2) previous_signal=signal;
+            if(signal!=previous_signal) {
+                if(change_request && !signal) std::cout<<"Lane change request withdrawn"<<std::endl;
+                change_request=signal;previous_signal=signal;change_waiting.clear();
+            }
+            const char* side_name=change_request<0?"left":"right";
+            if(change_request && !(cruise_engage && lcc)) change_request=0;
+            else if(change_request && lcc_state==Lcc::Active && !changing && lane && lane_side==0 && was_on_lane) {
+                auto target=read_lane(change_request);
+                const auto [x,y]=rear_point();
+                const auto axles=kinematic_axles(axle_wheels,grounded);
+                if(!target) {std::cout<<"Lane change: no lane on the "<<side_name<<std::endl;change_request=0;}
+                else {
+                    const auto to=LateralController::update(*target,x,y,ego_yaw,vehicle->speed_mps,axles.wheelbase(),lateral_settings(*settings));
+                    // The side lane is one lane over: the truck is right of a left lane (offset < 0).
+                    if(!(to.offset*change_request>.5*target->width && to.offset*change_request<1.6*target->width)) {
+                        std::cout<<"Lane change: the "<<side_name<<" lane is not beside the truck (offset "<<to.offset<<" m)"<<std::endl;change_request=0;
+                    } else if(const auto problem=gap_problem(*target,to.s,front_axle+settings->front_overhang_m-axles.rear_x,
+                                                             (now-trailer_time<=200ms?15.0:3.0),std::max(0.0,vehicle->speed_mps));!problem.empty()) {
+                        if(problem!=change_waiting) std::cout<<"Lane change to the "<<side_name<<" waits: "<<problem<<std::endl;
+                        change_waiting=problem;
+                    } else {
+                        merge=LaneMerge::start(to.s,to.offset,to.heading_error,vehicle->speed_mps,settings->lane_change_lateral_acceleration_mps2,settings->lane_change_min_s);
+                        lane=std::move(target);lane_side=change_request;changing=change_request;change_request=0;change_waiting.clear();
+                        std::cout<<"Lane change to the "<<side_name<<" over "<<merge->length<<" m"<<std::endl;
+                    }
+                }
             }
             const auto dt=std::chrono::duration<double>(now-previous).count();
             if(ground_truth) grade.update(ego_x,ego_y,ego_z);
@@ -284,8 +380,13 @@ int main(int argc,char** argv) {
                 const auto [rear_x,rear_y]=rear_point();
                 goal=LateralController::update(*lane,rear_x,rear_y,ego_yaw,vehicle->speed_mps,axles.wheelbase(),lateral_settings(*settings));
                 path_error=goal.distance;path_offset=goal.offset;remaining=goal.remaining;
-                on_lane=path_error<=lane->width/2;
-                settled=on_lane && std::abs(goal.offset)<=lane->width/4 && std::abs(goal.heading_error)<=.1;
+                // On the lane: within half its width of the path LCC steers on (the merge's, during
+                // a merge or lane change).
+                on_lane=std::abs(goal.offset-(merge?merge->at(goal.s).offset:0))<=lane->width/2;
+                // Taken once the merge back stays inside the lane: heading away from the centre,
+                // turning back takes v^2 h^2 / 2 of lateral travel at 1 m/s^2.
+                const auto v=std::max(0.0,vehicle->speed_mps),h=goal.heading_error;
+                settled=std::abs(goal.offset)+(h*goal.offset>0?v*v*h*h/2:0)<=lane->width/2-.4 && std::abs(h)<=.1;
             }
             const auto previous_lcc=lcc_state;
             if(!lcc) lcc_state=Lcc::Off;
@@ -296,6 +397,10 @@ int main(int argc,char** argv) {
             if(lcc_state!=Lcc::Active) merge.reset();
             else if(lane && (previous_lcc!=Lcc::Active || lane_replaced)) merge=LaneMerge::start(goal.s,goal.offset,goal.heading_error,vehicle->speed_mps);
             if(merge && merge->done(goal.s)) merge.reset();
+            if(changing && (!merge || lcc_state!=Lcc::Active)) {
+                std::cout<<"Lane change to the "<<(changing<0?"left":"right")<<(merge?" interrupted":" done")<<std::endl;changing=0;
+            }
+            was_on_lane=lane && on_lane;
             if(lcc_state!=previous_lcc) {
                 std::cout<<"LCC: "<<(lcc_state==Lcc::Active?"steering":lcc_state==Lcc::Yield?"yields to the driver's steering":lcc_state==Lcc::Off?"off":"searching for a lane");
                 if(lcc_state==Lcc::Search) {
@@ -351,7 +456,8 @@ int main(int argc,char** argv) {
                 if(lane_frame) {
                     const auto p=lane->project(actor.x,actor.y,lane->progress);
                     const auto a=lane->points[p.segment],b=lane->points[p.segment+1];
-                    ahead=p.s-lane->progress;lateral=p.d;heading=std::atan2(b.y-a.y,b.x-a.x);
+                    // Beside the lane centre or the truck (off the centre while merging).
+                    ahead=p.s-lane->progress;lateral=std::min(p.d,std::abs(p.offset-goal.offset));heading=std::atan2(b.y-a.y,b.x-a.x);
                 } else {
                     // Human steering owns the current direction. Do not brake
                     // because the original LCC path ends or the driver changes lane.
@@ -429,7 +535,7 @@ int main(int argc,char** argv) {
                 // here): under the cab it only overlapped the truck.
                 const auto ribbon_start=front_offset+1,ribbon_end=bar?*bar:ribbon_start+std::clamp(3*v,40.0,120.0);
                 if(steering && lane && ribbon_end-ribbon_start>=hud::step_m) {
-                    points=hud::lane(*lane,lane->progress+ribbon_start,ribbon_end-ribbon_start);
+                    points=hud::lane(*lane,lane->progress+ribbon_start,ribbon_end-ribbon_start,merge?&*merge:nullptr);
                     if(bar) hud::bar(points);
                 } else if(bar && lane_frame) {
                     const auto s=lane->progress+*bar;const auto p=lane->at(s);
@@ -465,6 +571,7 @@ int main(int argc,char** argv) {
                     state.lateral_offset_m=goal.offset;state.heading_error_rad=goal.heading_error;state.lane_curvature=goal.path_curvature;
                 }
                 state.merge_offset_m=reference.offset;state.merge_heading_rad=reference.heading;
+                state.lane_source=int8_t(lane_side);state.lane_change_request=int8_t(change_request);state.lane_change_active=int8_t(changing);
                 state.lcc_status=lane && lateral_mpc?lcc_mpc.output().status:0;
                 state.wheel_angle_target_rad=wheel_angle;state.wheel_rate_target_rad_s=wheel_rate;
                 state.steering_target=steering_target;state.steering_input=command.steering;state.steering_applied=drive->steering_applied;
@@ -488,7 +595,7 @@ int main(int argc,char** argv) {
                     <<" axes="<<unsigned(drive->axes)<<" accepted_sequence="<<drive->sequence
                     <<" driver_throttle="<<drive->throttle_manual<<" driver_steering="<<drive->steering_manual<<(driver_steering?" (LCC yields)":"");
                 if(cruise_engage) std::cout<<" game_cruise="<<cruise_speed();
-                std::cout<<" lcc="<<(lcc_state==Lcc::Active?"steering":lcc_state==Lcc::Yield?"yield":lcc_state==Lcc::Off?"off":"search")<<" merge_offset="<<reference.offset;
+                std::cout<<" lcc="<<(lcc_state==Lcc::Active?"steering":lcc_state==Lcc::Yield?"yield":lcc_state==Lcc::Off?"off":"search")<<" merge_offset="<<reference.offset<<" lane_source="<<lane_side<<" lane_change="<<changing;
                 if(lane && lateral_mpc) std::cout<<" lcc_status="<<unsigned(lcc_mpc.output().status)<<" trailer="<<(now-trailer_time<=200ms)
                     <<" hitch="<<std::remainder(ego_yaw-trailer_yaw,2*std::numbers::pi);
                 if(mpc) std::cout<<" acc_mode="<<unsigned(acc_mpc.output().mode)<<" a_des="<<acc_mpc.output().a_des_mps2
@@ -550,7 +657,7 @@ int main(int argc,char** argv) {
                 if(!(cruise_speed()>0)) continue;
                 if(driver_input()) {std::cout<<"Driver input did not stop within 10 s; press the cruise control button again"<<std::endl;wait_off=true;continue;}
                 if(vehicle->paused) {wait_off=true;continue;}
-                taken=0;lane=load_lane();
+                taken=0;std::tie(lane,lane_side)=find_lane();
                 End end=End::Released;
                 try {end=session(cruise_speed());} catch(const std::exception& error) {std::cerr<<error.what()<<std::endl;}
                 release();taken=0;

@@ -16,6 +16,11 @@ float64 heading_error_rad
 float64 merge_offset_m
 float64 merge_heading_rad
 float64 lane_curvature
+# Lane in use: 0 the provider's followed lane, -1/1 its left/right side lane. Turn signal
+# lane change: the side requested (waiting for a gap) and the side in progress, 0 none
+int8 lane_source
+int8 lane_change_request
+int8 lane_change_active
 # Lateral controller: MPC status (0 off, 1 MPC, 2 QP fallback, 3 low speed, 4 bad input),
 # planned front wheel angle and rate, steering target and relative input sent, applied steering
 uint8 lcc_status

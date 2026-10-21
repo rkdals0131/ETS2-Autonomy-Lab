@@ -571,7 +571,7 @@ def show_window(controller):
     mode_note = value(style="Note.TLabel", wraplength=520, justify="left")
     row += 1
     notes = {"assist": "시작하면 크루즈 버튼 대기까지 켭니다. 게임에서 LB+RT로 켜고 다시 누르면 끕니다. "
-                       "브레이크는 ACC만 끄고, 조향을 잡는 동안은 LCC가 비켜 줍니다.",
+                       "브레이크나 3초 넘는 조향은 둘 다 끄고, 짧은 조향에는 LCC가 비켜 줍니다. 방향지시등으로 차로를 바꿉니다.",
              "sensors": "설정 파일의 rig·주기로 카메라·라이다를 수집합니다. 주행 보조는 켜지지 않습니다."}
     rule()
 

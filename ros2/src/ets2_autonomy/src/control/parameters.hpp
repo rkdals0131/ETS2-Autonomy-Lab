@@ -37,6 +37,11 @@ struct DrivingParameters {
     double following_time_s=2,standstill_gap_m=5,following_gain=.5;
     // Front axle to front bumper; not measured, Scania S cab estimate.
     double front_overhang_m=1.5;
+    // Turn signal lane change: peak lateral acceleration of its path and its shortest
+    // duration (one 4.5 m lane at 0.9 m/s^2: about 5.6 s at any speed).
+    double lane_change_lateral_acceleration_mps2=.9,lane_change_min_s=4;
+    // The driver's steering for this long ends ACC and LCC (shorter: LCC yields).
+    double steering_takeover_s=3;
     uint8_t axes() const {return (lcc_enabled?1:0)|(acc_enabled?2:0);}
 };
 
@@ -69,6 +74,9 @@ inline constexpr std::array driving_double_parameters{
     DrivingDoubleParameter{"standstill_gap_m",&DrivingParameters::standstill_gap_m},
     DrivingDoubleParameter{"following_gain",&DrivingParameters::following_gain},
     DrivingDoubleParameter{"front_overhang_m",&DrivingParameters::front_overhang_m},
+    DrivingDoubleParameter{"lane_change_lateral_acceleration_mps2",&DrivingParameters::lane_change_lateral_acceleration_mps2,DrivingDoubleParameter::Positive},
+    DrivingDoubleParameter{"lane_change_min_s",&DrivingParameters::lane_change_min_s},
+    DrivingDoubleParameter{"steering_takeover_s",&DrivingParameters::steering_takeover_s,DrivingDoubleParameter::Positive},
 };
 inline DrivingParameters declare_driving_parameters(rclcpp::Node& node) {
     DrivingParameters result;

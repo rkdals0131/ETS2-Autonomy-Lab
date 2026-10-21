@@ -20,6 +20,8 @@ uint32 retarder_step                # 0 off .. truck_config retarder.steps
 bool engine_brake_active
 bool parking_brake
 bool lift_axle_raised
+bool turn_signal_left              # the driver's turn signal switch (SDK truck.lblinker), not the lamp
+bool turn_signal_right
 
 # From the vehicle's physics (ot Tier 1); NaN and an empty array without it.
 bool drivetrain_available
