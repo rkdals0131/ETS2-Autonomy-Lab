@@ -18,6 +18,7 @@ struct VehicleProfile {
     V base;
     std::vector<WheelGeometry> wheels;
     uint64_t generation;
+    json truck_attributes; // the SDK truck configuration it was resolved from
 };
 VehicleProfile resolve_vehicle(json rig,const json& truck,const json& selected);
 json lidar_patterns(const json& rig,const json& profile);

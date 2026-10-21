@@ -19,6 +19,7 @@ public:
     const json& configuration() const {return configuration_;}
 private:
     MotionSensors sensors_;
+    json truck_attributes_;
     json configuration_;
     mutable std::mutex mutex_;
     std::shared_ptr<const StateSample> latest_;

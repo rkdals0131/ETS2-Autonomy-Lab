@@ -20,7 +20,7 @@ VehicleProfile resolve_vehicle(json rig,const json& truck,const json& selected) 
     rig["enabled"]=!rig.at("views").empty();rig["cmd"]="camera_rig";
     VehicleProfile result{rig,{{"truck_id",attributes.at({"id",-1})},{"base_origin_model_m",origin},
         {"base_link_wheels",wheels},{"mount_profile",mounted_sensors?rig.value("vehicle_configuration",json(nullptr)):json(nullptr)},
-        {"wheels",json::array()}},origin,{},truck.at("truck_generation").get<uint64_t>()};
+        {"wheels",json::array()}},origin,{},truck.at("truck_generation").get<uint64_t>(),truck.at("attributes")};
     for(const auto& [index,wheel]:layout.wheels) {
         const auto position=mul(transpose(base_to_model),sub(wheel.position,origin));
         result.wheels.push_back({static_cast<uint32_t>(index),position,wheel.radius,wheel.simulated});

@@ -2,10 +2,11 @@
 #include "game_ipc.hpp"
 #include "windows_support.hpp"
 #include <chrono>
+#include <iostream>
 
 namespace bridge {
 StateSource::StateSource(const VehicleProfile& vehicle,const json& settings,const std::string& core_version):
-    sensors_(vehicle,settings),configuration_(sensors_.configuration()) {
+    sensors_(vehicle,settings),truck_attributes_(vehicle.truck_attributes),configuration_(sensors_.configuration()) {
     configuration_["sensor_session"]=uuid_string();
     configuration_["core_version"]=core_version;
     configuration_["msgs_version"]=msgs_version;
@@ -24,6 +25,21 @@ StateSource::StateSource(const VehicleProfile& vehicle,const json& settings,cons
                     if(last_frame && (time<last_stamp || (telemetry.at("timer_flags").get<uint32_t>()&1)))
                         throw std::runtime_error("SDK clock restarted; restart relay for a new sensor session");
                     if(frame!=last_frame) {
+                        // The game sends the truck configuration again by itself (job market, delivery
+                        // and service screens, 2026-10-21): the same truck keeps the session; another
+                        // truck or other geometry still needs a restart (MotionSensors throws).
+                        const auto generation=telemetry.at("truck_generation").get<uint64_t>();
+                        for(int attempt=0;generation!=sensors_.generation() && attempt<5;++attempt) {
+                            const auto truck=command({{"cmd","truck_config"}});
+                            if(truck.at("truck_generation").get<uint64_t>()==generation) {
+                                if(truck.at("attributes")==truck_attributes_) {
+                                    sensors_.accept_generation(generation);
+                                    std::cerr<<"Truck configuration sent again (generation "<<generation<<"), same truck; session continues"<<std::endl;
+                                }
+                                break;
+                            }
+                            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        }
                         auto sample=std::make_shared<StateSample>();
                         sample->motion=sensors_.update(telemetry);
                         sample->telemetry=std::move(telemetry);

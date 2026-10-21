@@ -26,6 +26,9 @@ public:
     MotionSensors(const VehicleProfile& vehicle,const json& settings);
     json configuration() const;
     MotionSample update(const json& state);
+    uint64_t generation() const {return generation_;}
+    // The game sent the same truck's configuration again: keep the session.
+    void accept_generation(uint64_t generation) {generation_=generation;}
 private:
     std::vector<WheelGeometry> wheels_;
     V base_,mount_,gnss_mount_,reference_,anchor_{},previous_velocity_{},previous_omega_{};
