@@ -80,6 +80,15 @@ inline void register_nodes(BT::BehaviorTreeFactory& f,Context& c) {
         return ok(ttc<limit);
     },{BT::InputPort<double>("ttc_s")});
     // The driver's own signal (one the assistance turned on is its plan, not the driver's intent).
+    // An obstacle no GT vehicle explains on the lane within the distance to stop: 1 s of
+    // reaction plus braking at decel_mps2, plus a margin.
+    f.registerSimpleCondition("ObstacleAhead",[&c,ok](BT::TreeNode& n) {
+        const double decel=n.getInput<double>("decel_mps2").value_or(4),margin=n.getInput<double>("margin_m").value_or(8);
+        const double v=std::max(0.0,c.w.speed),stop=v+v*v/(2*decel)+margin;
+        const bool hit=std::isfinite(c.w.blocked_m) && c.w.blocked_m<=stop;
+        if(hit) {char text[80];std::snprintf(text,sizeof text,"emergency: obstacle on the lane %.0f m ahead",c.w.blocked_m);c.decision=text;}
+        return ok(hit);
+    },{BT::InputPort<double>("decel_mps2"),BT::InputPort<double>("margin_m")});
     f.registerSimpleCondition("DriverSignal",[&c,ok](BT::TreeNode& n) {
         const bool driver=c.w.signal!=0 && c.w.signal_by!=2;
         if(driver) n.setOutput("side",c.w.signal);

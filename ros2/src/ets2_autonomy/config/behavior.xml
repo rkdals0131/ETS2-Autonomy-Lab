@@ -8,7 +8,10 @@
   <BehaviorTree ID="Drive">
     <ReactiveFallback name="Drive">
       <ReactiveSequence name="Emergency">
-        <CollisionImminent ttc_s="2.0"/>
+        <ReactiveFallback name="Danger">
+          <CollisionImminent ttc_s="2.0"/>
+          <ObstacleAhead decel_mps2="4" margin_m="8"/>
+        </ReactiveFallback>
         <EmergencyBrake/>
       </ReactiveSequence>
       <ReactiveSequence name="Assistance off">

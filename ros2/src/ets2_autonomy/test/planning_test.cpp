@@ -141,3 +141,16 @@ TEST(TurnSignal,PressesTowardTheWantedStateAndLeavesTheDriversAlone) {
     // Hazards are not touched.
     TurnSignalControl h;h.update(0,0,2);h.update(2,1,2);EXPECT_EQ(h.left+h.right,0u);
 }
+
+TEST(BehaviorTree,ObstacleAheadWithinStoppingDistance) {
+    planning::Context c;
+    BT::BehaviorTreeFactory factory;
+    planning::register_nodes(factory,c);
+    auto tree=factory.createTreeFromFile(ETS2_BEHAVIOR_TREE);
+    const auto tick=[&](double t) {c.w.t=t;c.begin();tree.tickOnce();c.end();return c.decision;};
+    c.w.acc=c.w.lcc=true;c.w.speed=c.w.set_speed=25;
+    EXPECT_EQ(tick(0),"keep lane");                                   // no LiDAR (NaN)
+    c.w.blocked_m=200;EXPECT_EQ(tick(.1),"keep lane");                // beyond 25 + 78 + 8 m
+    c.w.blocked_m=60;EXPECT_EQ(tick(.2),"emergency: obstacle on the lane 60 m ahead");
+    c.w.speed=5;EXPECT_EQ(tick(.3),"keep lane");                      // slow: 5 + 3 + 8 m
+}

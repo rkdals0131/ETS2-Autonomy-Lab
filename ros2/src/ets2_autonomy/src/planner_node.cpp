@@ -19,6 +19,7 @@
 #include <ets2_msgs/msg/traffic_state.hpp>
 #include <ets2_msgs/msg/vehicle_state.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/int8.hpp>
 #include <nlohmann/json.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -73,7 +74,7 @@ int main(int argc,char** argv) {
         const auto started=Clock::now();
         const auto seconds=[&](Clock::time_point t) {return std::chrono::duration<double>(t-started).count();};
         // GT adapter: messages into the world model, each with its arrival time for staleness.
-        ets2_msgs::msg::AssistState::SharedPtr assist;Clock::time_point assist_time{},pose_time{},traffic_time{};
+        ets2_msgs::msg::AssistState::SharedPtr assist;Clock::time_point assist_time{},pose_time{},traffic_time{},blocked_time{};
         int last_signal=0;
         auto as=node->create_subscription<ets2_msgs::msg::AssistState>("/ets2/drive/assist",rclcpp::QoS(10),
             [&](ets2_msgs::msg::AssistState::SharedPtr m){assist=std::move(m);assist_time=Clock::now();});
@@ -96,6 +97,7 @@ int main(int argc,char** argv) {
                                        i<m->z.size()?m->z[i]:NAN,i<m->height_m.size()?m->height_m[i]:NAN});
             traffic_time=Clock::now();
         });
+        auto bs=node->create_subscription<std_msgs::msg::Float32>("/ets2/perception/blocked_m",rclcpp::QoS(1),[&](std_msgs::msg::Float32::SharedPtr m){c.w.blocked_m=m->data;blocked_time=Clock::now();});
         auto status=node->create_publisher<ets2_msgs::msg::BehaviorStatus>("/ets2/planning/behavior",rclcpp::QoS(1));
         auto turn_signal=node->create_publisher<std_msgs::msg::Int8>("/ets2/planning/turn_signal",rclcpp::QoS(1));
 
@@ -124,6 +126,7 @@ int main(int argc,char** argv) {
             w.change_request=live?assist->lane_change_request:0;w.change_active=live?assist->lane_change_active:0;
             w.signal_by=live?assist->turn_signal_by:(w.signal!=0?1:0);w.signal_cancelled=live && assist->turn_signal_cancelled;
             if(now-traffic_time>500ms) w.objects.clear();
+            if(now-blocked_time>500ms) w.blocked_m=NAN;
             // The provider's lanes, once a second; the truck's place on the followed lane every tick.
             if(!path_file.empty() && now>=next_lanes) {
                 next_lanes=now+1s;

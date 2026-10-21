@@ -36,6 +36,9 @@ struct World {
     std::optional<LanePath> lane;std::optional<LanePath> left,right;
     double path_s=0;
     std::vector<RouteEvent> route;
+    // LiDAR (perception/occupancy.hpp): distance along the lane to the first obstacle no GT
+    // vehicle explains; inf clear, NaN without LiDAR.
+    double blocked_m=NAN;
     const std::optional<LanePath>& side(int s) const {return s<0?left:right;}
 };
 
