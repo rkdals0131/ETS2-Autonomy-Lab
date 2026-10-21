@@ -35,7 +35,7 @@ Control: drive_speed (50 Hz) ACC·LCC MPC
 | Assistance off | ACC·LCC 둘 다 꺼짐 | Standby |
 | Driver intent | 운전자 깜빡이 | ChangeLane(그쪽, driver) |
 | Route exit | 1.5 km 안의 `route_lane_mismatch` | ChangeLane(출구로 가는 쪽, route) |
-| Overtake | 설정 속도보다 10 km/h 넘게 느린 앞차(100 m 안)가 8 s 이어짐, 왼쪽 차로 간격 비었음 | ChangeLane(왼쪽, overtake) |
+| Overtake | 설정 속도보다 10 km/h 넘게 느린 앞차(100 m 안)가 8 s 이어짐, 왼쪽 차로 간격 비었음 | 정책 `auto`: ChangeLane(왼쪽, overtake). `confirm`(기본): ProposeOvertake("signal left to confirm"), 운전자가 왼쪽 깜빡이를 켜면 Driver intent 가지가 받음 |
 | (나머지) | — | KeepLane |
 
 ## 차선 변경 상태기계
@@ -112,6 +112,6 @@ Control: drive_speed (50 Hz) ACC·LCC MPC
 ## 다음
 
 1. **게임에서 깜빡이 채널 확인:** loader 0.48.0 설치와 게임 재시작이 필요합니다. 이어서 지휘 모드로 경로 출구 차선 변경과 추월을 시험합니다.
-2. **추월 정책:** `auto`, 그리고 `confirm`(어시스트가 제안하면 운전자가 같은 쪽 깜빡이로 승인) 두 가지입니다.
+2. **추월 정책:** planner 파라미터 `overtake_policy`(`confirm` 기본, `auto`)로 넣었습니다(✔ 단위 테스트). 게임에서는 지휘 모드와 함께 시험합니다.
 3. **WorldModel 메시지:** 세계 모델을 토픽으로 내서 인지 노드가 채울 수 있게 합니다.
 4. **AEB와 최소위험 정지:** 라이다와 GT를 합친 OGM으로 경로 위 장애물을 봅니다(5단계).

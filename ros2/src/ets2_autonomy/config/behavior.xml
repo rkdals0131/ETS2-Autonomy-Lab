@@ -29,7 +29,13 @@
       <ReactiveSequence name="Overtake">
         <SlowLead/>
         <LaneFree side="-1"/>
-        <ChangeLane name="Change lane (overtake)" side="-1" reason="overtake"/>
+        <ReactiveFallback name="Overtake policy">
+          <ReactiveSequence name="Automatic">
+            <OvertakePolicy is="auto"/>
+            <ChangeLane name="Change lane (overtake)" side="-1" reason="overtake"/>
+          </ReactiveSequence>
+          <ProposeOvertake side="-1"/>
+        </ReactiveFallback>
       </ReactiveSequence>
       <KeepLane/>
     </ReactiveFallback>

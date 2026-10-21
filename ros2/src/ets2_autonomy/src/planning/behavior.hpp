@@ -17,6 +17,9 @@ struct Context {
     LaneChangeFsm fsm;
     SlowLead slow;
     double signal_since=0;     // when the driver's current signal went on
+    // Overtaking: "auto" changes lane by itself, "confirm" proposes and waits for the driver's
+    // signal on that side (which the driver intent branch then follows).
+    std::string overtake_policy="confirm";
     // Written by the tree in a tick; the reason of the lane change under way.
     int want_side=0;std::string want_reason,decision,active_reason;
 
@@ -104,6 +107,12 @@ inline void register_nodes(BT::BehaviorTreeFactory& f,Context& c) {
         const int side=n.getInput<int>("side").value_or(-1);
         const auto& lane=c.w.side(side);
         return ok(lane && gap_problem(c.w,*lane).empty());
+    },{BT::InputPort<int>("side")});
+    f.registerSimpleCondition("OvertakePolicy",[&c,ok](BT::TreeNode& n) {return ok(c.overtake_policy==n.getInput<std::string>("is").value_or(""));},
+        {BT::InputPort<std::string>("is")});
+    f.registerSimpleAction("ProposeOvertake",[&c](BT::TreeNode& n) {
+        c.decision=std::string("overtake possible: signal ")+side_name(n.getInput<int>("side").value_or(-1))+" to confirm";
+        return NodeStatus::SUCCESS;
     },{BT::InputPort<int>("side")});
     // Leaves that only say what the planner would do (shadow): the executor is drive_speed.
     f.registerSimpleAction("EmergencyBrake",[](BT::TreeNode&) {return NodeStatus::SUCCESS;});

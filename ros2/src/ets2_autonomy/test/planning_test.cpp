@@ -100,8 +100,13 @@ TEST(BehaviorTree,ShadowDecisions) {
     // A closing lead 1.5 s away pre-empts everything.
     c.w.lead=true;c.w.lead_gap=15;c.w.lead_speed=15;
     EXPECT_EQ(tick(7),"emergency: lead 1.5 s away");
-    // A slow lead for 8 s with the left lane free: overtake (shadow: would start).
+    // A slow lead for 8 s with the left lane free: proposed (confirm, the default), or with
+    // the auto policy an overtake (shadow: would start).
     c.w.lead_gap=60;c.w.lead_speed=20;
+    for(double t=7.1;t<16.3;t+=.1) tick(t);
+    EXPECT_EQ(c.decision,"overtake possible: signal left to confirm");
+    EXPECT_EQ(c.fsm.state(),LaneChangeFsm::Idle);
+    c.overtake_policy="auto";c.slow=planning::SlowLead{};
     for(double t=8;t<16.3;t+=.1) tick(t);
     EXPECT_EQ(c.fsm.side(),-1);
     for(double t=16.3;t<20;t+=.1) tick(t);

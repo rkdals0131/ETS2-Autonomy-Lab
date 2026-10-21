@@ -71,6 +71,8 @@ int main(int argc,char** argv) {
         const auto path_file=node->declare_parameter<std::string>("path_file","");
         const bool command=node->declare_parameter("command",false);
         planning::Context c;
+        c.overtake_policy=node->declare_parameter<std::string>("overtake_policy","confirm");
+        if(c.overtake_policy!="auto" && c.overtake_policy!="confirm") throw std::runtime_error("overtake_policy must be auto or confirm");
         const auto started=Clock::now();
         const auto seconds=[&](Clock::time_point t) {return std::chrono::duration<double>(t-started).count();};
         // GT adapter: messages into the world model, each with its arrival time for staleness.
