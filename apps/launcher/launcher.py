@@ -1,4 +1,4 @@
-"""Windows control window for one owned relay, Foxglove server, GT drive and recorder.
+"""Windows control window for one owned relay, Foxglove server, cruise-button assistance and recorder.
 
 Run inside the pixi environment (`pixi run launcher`): every child inherits the
 activated ROS 2 environment and the shared DDS profile.
@@ -6,8 +6,8 @@ activated ROS 2 environment and the shared DDS profile.
 from collections import deque
 import ctypes as C
 from ctypes import wintypes as W
+from datetime import datetime
 import json
-import math
 import os
 from pathlib import Path
 import queue
@@ -23,6 +23,7 @@ APP_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_ROOT.parents[1]
 BRIDGE_ROOT = PROJECT_ROOT / "bridge"
 RELAY = PROJECT_ROOT / "ros2" / "install" / "lib" / "ets2_relay" / "ets2_relay.exe"
+LOG_ROOT = BRIDGE_ROOT / "recordings" / "logs"
 FOXGLOVE_PORT = 8765
 sys.path.insert(0, str(PROJECT_ROOT / "ot" / "py"))
 from otpy.client import Client, LoaderClient
@@ -101,6 +102,41 @@ def foxglove_listening():
         return probe.connect_ex(("127.0.0.1", FOXGLOVE_PORT)) == 0
 
 
+
+
+class SessionLog:
+    """Every child line, one file per source in one directory per bridge start. The relay's
+    1 Hz status JSON is kept once per 5 s; all other lines are kept."""
+    def __init__(self, root=LOG_ROOT):
+        self.directory = root / datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.Lock()
+        self.files, self.last_status = {}, 0.0
+
+    def write(self, source, line):
+        now = time.time()
+        with self.lock:
+            if self.files is None:
+                return
+            if source == "relay" and line.startswith("{") and '"sent_bundles"' in line:
+                if now - self.last_status < 5:
+                    return
+                self.last_status = now
+            try:  # A full disk must not stop the reader that drains the child's pipe.
+                file = self.files.get(source)
+                if file is None:
+                    file = self.files[source] = (self.directory / f"{source}.log").open("a", encoding="utf-8", buffering=1)
+                file.write(time.strftime("%H:%M:%S", time.localtime(now)) + f".{int(now % 1 * 1000):03d} {line}\n")
+            except OSError:
+                pass
+
+    def close(self):
+        with self.lock:
+            for file in (self.files or {}).values():
+                file.close()
+            self.files = None
+
+
 class Controller:
     """All state transitions run on one worker; snapshots report observed state."""
     def __init__(self, config=BRIDGE_ROOT / "config" / "bridge.local.json"):
@@ -117,16 +153,16 @@ class Controller:
         self.commands, self.lines = queue.Queue(), queue.Queue()
         self.lock = threading.Lock()
         self.logs = deque(maxlen=80)
-        self.state = {"phase": "stopped", "message": "시작을 누르면 게임 릴레이와 Foxglove 서버를 띄웁니다.",
-                      "game": "확인 중", "config": str(self.config), "relay": {}, "foxglove": False,
+        self.state = {"phase": "stopped", "message": "중지됨", "game": "확인 중", "relay": {}, "foxglove": False,
+                      "mode": None, "assist": "off", "assist_note": "", "log_dir": "",
                       "recording": {"phase": "idle"}, "recording_error": ""}
-        self.relay = self.foxglove = self.drive = self.provider = self.follow = self.job = None
+        self.relay = self.foxglove = self.drive = self.follow = self.lcc_change = self.job = None
         self.relay_stop = self.drive_stop_event = None
-        self.recording = None
-        self.mode_change = None
-        self.desired = False
-        self.input_only = False
-        self.drive_request = None
+        self.recording = self.session_log = None
+        self.readers = []
+        self.desired = self.assist = self.assist_started = False
+        self.lcc = self.lcc_applied = True
+        self.lcc_confirmed = False
         self.last_relay = 0.0
         self.layout = None
         self.last_layout = self.last_listen = 0.0
@@ -146,24 +182,33 @@ class Controller:
         with self.lock:
             self.state.update(values)
 
-    def log(self, line):
+    def log(self, line, persist=True):
         with self.lock:
             self.logs.append(line)
+        if persist and self.session_log:
+            self.session_log.write("launcher", line)
 
     def spawn(self, command, source, extra_flags=0):
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                                    bufsize=1, creationflags=subprocess.CREATE_NO_WINDOW | extra_flags)
         self.job.add(process)
+        session = self.session_log
         def read():
             with process.stdout:
                 for line in process.stdout:
-                    self.lines.put((source, process.pid, line.rstrip()))
-        threading.Thread(target=read, daemon=True).start()
+                    line = line.rstrip()
+                    self.lines.put((source, process.pid, line))
+                    if session:
+                        session.write(source, line)
+            self.lines.put((source, process.pid, None))  # End of output, after its last line.
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        self.readers.append(reader)
         return process
 
-    def _start(self, duration, camera_hz=None, lidar_hz=None, preview_hz=None, input_only=False, cpu_placement=None,
-               mirrors_off=None):
+    def _start(self, mode="assist", lcc=True):
+        """assist: input and state only, then the cruise-button standby; sensors: the configured rig."""
         if self.desired or self.relay:
             return
         if not shutil.which("ros2"):
@@ -173,43 +218,17 @@ class Controller:
         if not self.config.is_file():
             raise RuntimeError("bridge/configure.py를 먼저 실행해 로컬 설정을 만들어 주세요.")
         settings = json.loads(self.config.read_text(encoding="utf-8"))
-        changed = any(value is not None for value in (duration, camera_hz, lidar_hz, preview_hz))
-        if duration is not None:
-            duration = float(duration)
-            if not 1 <= duration <= 86400:
-                raise ValueError("실행 시간은 1~86400초로 입력해 주세요.")
-            settings["duration_s"] = duration
-        camera_hz = float(camera_hz if camera_hz is not None else settings.get("camera_hz", 30))
-        lidar_hz = float(lidar_hz if lidar_hz is not None else settings.get("lidar_hz", 10))
-        preview_hz = float(preview_hz if preview_hz is not None else settings.get("preview_hz", 10))
-        if not math.isfinite(camera_hz) or not 0 < lidar_hz <= camera_hz <= 60:
-            raise ValueError("주기는 0 < 라이다 ≤ 카메라 ≤ 60 Hz로 입력해 주세요.")
-        if not math.isfinite(preview_hz) or not 0 < preview_hz <= camera_hz:
-            raise ValueError("미리보기 주기는 0보다 크고 카메라 주기 이하여야 합니다.")
-        settings.update(camera_hz=camera_hz, lidar_hz=lidar_hz, preview_hz=preview_hz)
-        if cpu_placement is not None and bool(cpu_placement) != settings.get("cpu_layout", True):
-            settings["cpu_layout"] = bool(cpu_placement)
-            changed = True
-        if mirrors_off is not None and (not mirrors_off) != settings.get("native_mirrors", True):
-            settings["native_mirrors"] = not mirrors_off
-            changed = True
-        if changed:
-            temporary = self.config.with_name(self.config.name + ".tmp")
-            try:
-                temporary.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-                os.replace(temporary, self.config)
-            finally:
-                temporary.unlink(missing_ok=True)
-        duration = float(settings.get("duration_s", 60))
-        if not math.isfinite(duration) or duration <= 0:
-            raise ValueError("duration_s must be positive")
         if Client(timeout=0.5).tier()["tier"] != 0:
             raise RuntimeError("다른 수집 또는 리그가 실행 중입니다. 기존 작업을 먼저 중지해 주세요.")
         if foxglove_listening():
             raise RuntimeError(f"127.0.0.1:{FOXGLOVE_PORT}을 이미 다른 프로세스가 쓰고 있습니다. 기존 Foxglove 서버를 먼저 종료해 주세요.")
         self.desired = True
-        self.input_only = bool(input_only)
+        self.assist, self.assist_started = mode == "assist", False
+        self.lcc = self.lcc_applied = bool(lcc)
         self.started = time.monotonic()
+        self.session_log = SessionLog()
+        self.update(mode="assist" if self.assist else "sensors", lcc=self.lcc, assist="off", assist_note="",
+                    log_dir=str(self.session_log.directory))
         placement = settings.get("cpu_layout", True)
         plan = None
         if placement:
@@ -219,19 +238,17 @@ class Controller:
                 self.log(f"CPU 배치 건너뜀: {error}")
         self.job = Job(plan.helpers if plan else 0)
         self.recording = BagRecording(self.config, self.job)
-        self.update(phase="starting", message="Foxglove 서버와 게임 릴레이를 시작합니다.", relay={}, foxglove=False,
-                    duration_s=duration)
+        self.update(phase="starting", message="Foxglove 서버와 게임 릴레이를 시작합니다.", relay={}, foxglove=False)
         self.foxglove = self.spawn(["ros2", "run", "foxglove_bridge", "foxglove_bridge", "--ros-args",
                                     "--params-file", str(BRIDGE_ROOT / "config" / "foxglove.yaml"),
                                     "-p", "address:=127.0.0.1", "-p", f"port:={FOXGLOVE_PORT}"], "foxglove")
         self.relay_stop = StopEvent("relay")
         command = [str(RELAY), str(self.config), self.relay_stop.name]
-        if self.input_only:
+        if self.assist:
             command.append("--input-only")
         self.relay = self.spawn(command, "relay")
         self.last_relay = time.monotonic()
-        self.update(foxglove_pid=self.foxglove.pid, relay_pid=self.relay.pid,
-                    phase="connecting", message="게임 릴레이의 첫 상태 보고를 기다립니다.")
+        self.update(phase="connecting", message="게임 릴레이의 첫 상태 보고를 기다립니다.")
         if plan:
             try:
                 self.layout = cpu_layout.Layout(Client(timeout=1).request("ping")["pid"],
@@ -255,55 +272,15 @@ class Controller:
             self.drive_stop_event.close()
         self.drive = self.drive_stop_event = None
 
-    def _drive(self, action, speed_kmh=30, acc=True, lcc=True):
-        if action == "drive_stop":
-            if self.provider and self.provider.poll() is None:
-                self.provider.terminate()
-                self.provider.wait(timeout=3)
-            self.provider = self.drive_request = None
-            self._release_drive()
-            self._stop_follow()
-            return
-        if self.snapshot()["phase"] != "running" or not self.input_only:
-            raise RuntimeError("입력·상태만으로 브리지를 시작한 뒤 GT 주행을 눌러 주세요.")
-        speed = float(speed_kmh) / 3.6
-        if not math.isfinite(speed) or speed < 0:
-            raise ValueError("목표 속도는 0 이상의 km/h 값입니다.")
-        if not acc and not lcc:
-            self._drive("drive_stop")
-            return
-        if self.provider:
-            self.drive_request.update(speed_mps=speed, acc=bool(acc), lcc=bool(lcc))
-            return
-        if self.drive and self.drive.poll() is None:
-            self._set_drive_mode(speed, bool(acc), bool(lcc))
-            return
-        dotnet = PROJECT_ROOT / "research" / "tools" / "dotnet10" / "dotnet.exe"
-        provider = BRIDGE_ROOT / "build" / "map_lane_provider" / "Release" / "net10.0" / "map_lane_provider.dll"
-        if not dotnet.is_file() or not provider.is_file():
-            raise RuntimeError("지도 provider 빌드가 필요합니다: bridge/map_lane_provider/README.md")
-        output = BRIDGE_ROOT / "recordings" / "gt-path" / "current-lane.json"
-        output.parent.mkdir(parents=True, exist_ok=True)
-        game = Path(LoaderClient(timeout=2).status()["module_path"]).parents[4]
-        self.drive_request = {"path": str(output), "speed_mps": speed, "acc": bool(acc), "lcc": bool(lcc)}
-        self.provider = self.spawn([str(dotnet), str(provider), "--game", str(game), "--out", str(output), "--distance-m", "1000"], "lane")
-        self.update(message="현재 도로의 실제 차로 기준선을 준비합니다.")
-
     def _stop_follow(self):
         if self.follow and self.follow.poll() is None:
             self.follow.terminate()
             self.follow.wait(timeout=3)
         self.follow = None
 
-    def _drive_cruise(self, acc=True, lcc=True):
+    def _drive_cruise(self):
         """Resident assistance: the map provider follows the truck and drive_speed waits for the
         game's cruise control button (LB+RT), which engages at the cruise speed and disengages."""
-        if self.snapshot()["phase"] != "running" or not self.input_only:
-            raise RuntimeError("입력·상태만으로 브리지를 시작한 뒤 크루즈 버튼 대기를 눌러 주세요.")
-        if (self.drive and self.drive.poll() is None) or self.provider:
-            raise RuntimeError("주행 보조가 이미 실행 중입니다. 입력 해제 후 다시 눌러 주세요.")
-        if not acc:
-            raise ValueError("크루즈 버튼 대기는 ACC가 켜져 있어야 합니다.")
         dotnet = PROJECT_ROOT / "research" / "tools" / "dotnet10" / "dotnet.exe"
         provider = BRIDGE_ROOT / "build" / "map_lane_provider" / "Release" / "net10.0" / "map_lane_provider.dll"
         if not dotnet.is_file() or not provider.is_file():
@@ -313,32 +290,28 @@ class Controller:
         game = Path(LoaderClient(timeout=2).status()["module_path"]).parents[4]
         self.follow = self.spawn([str(dotnet), str(provider), "--game", str(game), "--follow", "--out", str(output), "--distance-m", "1000"], "follow")
         self.drive_stop_event = StopEvent("drive")
+        self.lcc_applied = self.lcc
         self.drive = self.spawn(["ros2", "run", "ets2_autonomy", "drive_speed", "--stop-event", self.drive_stop_event.name,
                                  "--ros-args", "-p", "arm:=true", "-p", "engage:=cruise", "-p", "path_file:=" + str(output),
-                                 "-p", "acc_enabled:=true", "-p", "lcc_enabled:=" + str(bool(lcc)).lower()], "drive")
-        self.update(message="크루즈 버튼 대기: 게임에서 LB+RT로 켜고 다시 누르면 끕니다. 브레이크는 ACC만 끕니다.")
+                                 "-p", "acc_enabled:=true", "-p", "lcc_enabled:=" + str(self.lcc).lower()], "drive")
+        self.update(assist="standby")
 
-    def _start_drive(self, request):
-        self.drive_stop_event = StopEvent("drive")
-        self.drive = self.spawn(["ros2", "run", "ets2_autonomy", "drive_speed", "--stop-event", self.drive_stop_event.name,
-                                 "--ros-args", "-p", "arm:=true", "-p", "path_file:=" + request["path"],
-                                 "-p", "acc_enabled:=" + str(request["acc"]).lower(),
-                                 "-p", "lcc_enabled:=" + str(request["lcc"]).lower(),
-                                 "-p", "target_speed_mps:=" + str(float(request["speed_mps"]))], "drive")
-        self.update(message="GT 주행을 시작합니다. 게임 창으로 돌아가세요.")
+    def _apply_lcc(self):
+        """LCC is a runtime parameter of the standby (ACC stays on: the cruise button needs it).
+        One change at a time; the latest choice follows when the previous call ends."""
+        if not self.drive or self.drive.poll() is not None or self.lcc == self.lcc_applied:
+            return
+        if self.lcc_change:
+            return
+        self.lcc_applied, self.lcc_confirmed = self.lcc, False
+        self.lcc_change = self.spawn(["ros2", "param", "set", "/ets2_drive_speed", "lcc_enabled", str(self.lcc).lower()], "lcc")
 
-    def _set_drive_mode(self, speed, acc, lcc):
-        """One atomic parameter change keeps the owner and epoch (no re-arm)."""
-        if self.mode_change and self.mode_change.poll() is None:
-            raise RuntimeError("이전 모드 변경 응답을 기다리고 있습니다.")
-        def value(kind, field, data):
-            return "{type: %d, %s: %s}" % (kind, field, data)
-        request = "{parameters: [%s]}" % ", ".join([
-            "{name: target_speed_mps, value: %s}" % value(3, "double_value", repr(float(speed))),
-            "{name: acc_enabled, value: %s}" % value(1, "bool_value", str(acc).lower()),
-            "{name: lcc_enabled, value: %s}" % value(1, "bool_value", str(lcc).lower())])
-        self.mode_change = self.spawn(["ros2", "service", "call", "/ets2_drive_speed/set_parameters_atomically",
-                                       "rcl_interfaces/srv/SetParametersAtomically", request], "mode")
+    def _lcc_result(self):
+        """Without "Set parameter successful" the node keeps its previous choice; the window follows."""
+        if self.lcc_change.wait() or not self.lcc_confirmed:
+            self.lcc = self.lcc_applied = not self.lcc_applied
+            self.update(lcc=self.lcc, assist_note="LCC 변경 실패, 이전 선택을 유지합니다. lcc.log를 확인해 주세요.")
+        self.lcc_change = None
 
     def _record(self, action, profile="state"):
         if action == "record_start":
@@ -355,8 +328,7 @@ class Controller:
 
     def _stop(self, phase="stopped", message="중지됨"):
         self.desired = False
-        self.drive_request = None
-        self.update(phase="stopping", message="수집 해제와 프로세스 종료를 확인합니다.")
+        self.update(phase="stopping", message="기록·주행 보조·릴레이를 정상 종료합니다.")
         errors = []
         try:
             if self.recording:
@@ -381,7 +353,7 @@ class Controller:
         finally:
             if self.job:
                 self.job.close()  # Foxglove, provider and anything left in the job end here.
-            for process in (self.relay, self.foxglove, self.provider, self.follow, self.mode_change):
+            for process in (self.relay, self.foxglove, self.follow, self.lcc_change):
                 if process:
                     try:
                         process.wait(timeout=3)
@@ -389,17 +361,29 @@ class Controller:
                         errors.append(f"PID {process.pid} 종료 확인 실패")
             if self.relay_stop:
                 self.relay_stop.close()
-            self.relay = self.foxglove = self.provider = self.follow = self.mode_change = self.job = self.relay_stop = None
-        self.update(phase="error" if errors else phase, foxglove=False,
-                    message="; ".join(errors) if errors else message, relay_pid=None, foxglove_pid=None)
+            self.relay = self.foxglove = self.follow = self.lcc_change = self.job = self.relay_stop = None
+        for reader in self.readers:
+            reader.join(timeout=2)  # The last lines of each child reach its log file.
+        self.readers = []
+        if errors:
+            self.log("; ".join(errors))
+        if self.session_log:
+            self.session_log.close()
+            self.session_log = None
+        self.update(phase="error" if errors else phase, foxglove=False, assist="off",
+                    message="; ".join(errors) if errors else message)
 
     def _observe(self):
         now = time.monotonic()
         while not self.lines.empty():
             source, pid, line = self.lines.get()
-            process = {"relay": self.relay, "foxglove": self.foxglove, "lane": self.provider, "follow": self.follow,
-                       "drive": self.drive, "mode": self.mode_change}.get(source)
+            process = {"relay": self.relay, "foxglove": self.foxglove, "follow": self.follow,
+                       "drive": self.drive, "lcc": self.lcc_change}.get(source)
             if not process or process.pid != pid:
+                continue
+            if line is None:
+                if source == "lcc":
+                    self._lcc_result()
                 continue
             if source == "relay":
                 try:
@@ -410,21 +394,24 @@ class Controller:
                     self.last_relay = now
                     self.update(relay=data)
                     continue
-            if source == "mode" and "successful=False" in line:
-                self.update(message="GT 모드 변경 거절: " + line)
-            self.log(source + ": " + line)
-        if self.provider and self.provider.poll() is not None:
-            code = self.provider.returncode
-            self.provider = None
-            request, self.drive_request = self.drive_request, None
-            if code:
-                raise RuntimeError("현재 도로의 GT 차로 생성 실패: 로그를 확인해 주세요.")
-            if request:
-                self._start_drive(request)
+            # The window shows events; drive's 1 Hz status and the provider's progress stay in the files.
+            if source == "drive" and line.startswith("speed=") or source == "follow" and '"error":"' not in line:
+                continue
+            if source == "drive":
+                self.update(assist_note="drive: " + line)
+            if source == "lcc" and line.startswith("Set parameter successful"):
+                self.lcc_confirmed = True
+            self.log(source + ": " + line, persist=False)
+        if self.follow and self.follow.poll() is not None:
+            self.log(f"follow: 지도 provider 종료 (code={self.follow.returncode}), LCC 차로가 더 늘지 않습니다. follow.log를 확인해 주세요.")
+            self.follow = None
         if self.drive and self.drive.poll() is not None:
-            self.log(f"drive: GT 주행 종료 (code={self.drive.returncode})")
+            code = self.drive.returncode
+            self.log(f"drive: 크루즈 버튼 대기 종료 (code={code}). 다시 쓰려면 중지 후 시작해 주세요.")
             self._release_drive()
             self._stop_follow()
+            self.update(assist=f"exited:{code}")
+        self._apply_lcc()
         if self.recording:
             self.update(recording=self.recording.poll())
         if not self.desired:
@@ -433,10 +420,11 @@ class Controller:
             raise RuntimeError(f"Foxglove 서버가 종료됐습니다 (code={self.foxglove.returncode}). 로그를 확인해 주세요.")
         if self.relay and self.relay.poll() is not None:
             code = self.relay.returncode
-            self._stop("stopped" if code == 0 else "error",
-                       "실행이 종료됐습니다. 시작을 누르면 새 세션을 엽니다." if code == 0 else
-                       ("현재 차량과 센서 보정이 다릅니다. 차량에 맞는 rig를 선택하거나 ‘입력·상태만’을 선택하고 시작하세요." if code == 2 else
-                        "릴레이 종료: F11·게임 연결·아래 로그를 확인해 주세요. 자동 재시작은 멈췄습니다."))
+            message = ("실행이 종료됐습니다. 시작을 누르면 새 세션을 엽니다." if code == 0 else
+                       "현재 차량과 센서 보정이 다릅니다. 설정의 rig를 차량에 맞추거나 주행 보조 모드로 시작해 주세요." if code == 2 else
+                       "릴레이 종료: F11·게임 연결·relay.log를 확인해 주세요. 자동 재시작은 하지 않습니다.")
+            self.log(f"relay: 종료 (code={code}) {message}")
+            self._stop("stopped" if code == 0 else "error", message)
             return
         if self.layout and now - self.last_layout > 5:
             self.last_layout = now
@@ -450,11 +438,14 @@ class Controller:
         relay = self.snapshot()["relay"]
         if now - self.last_relay < 3 and relay:
             label = "게임 일시정지" if relay.get("paused") else (
-                "센서 구독 대기" if relay.get("demand_topics", 0) <= 2 and relay.get("sent_bundles", 0) == 0 else "연결됨")
-            self.update(phase="running", foxglove=foxglove, message=label + ("" if foxglove else " · Foxglove 서버 시작 중"))
+                "센서 구독 대기" if not self.assist and relay.get("demand_topics", 0) <= 2 and relay.get("sent_bundles", 0) == 0 else "연결됨")
+            self.update(phase="running", foxglove=foxglove, message=label)
+            if self.assist and not self.assist_started:
+                self.assist_started = True  # Once per start: an exited standby is not respawned.
+                self._drive_cruise()
         else:
             if now - self.started > 35:
-                raise TimeoutError("게임 릴레이의 상태 보고가 없습니다. 게임과 로그를 확인해 주세요.")
+                raise TimeoutError("게임 릴레이의 상태 보고가 없습니다. 게임과 relay.log를 확인해 주세요.")
             self.update(phase="connecting", foxglove=foxglove, message="게임 릴레이의 상태 보고를 기다립니다.")
 
     def _loop(self):
@@ -467,17 +458,11 @@ class Controller:
                         break
                     if action == "stop":
                         self._stop()
-                    elif action == "restart":
-                        self._stop()
-                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False), values.get("cpu_layout"),
-                                    values.get("mirrors_off"))
                     elif action == "start":
-                        self._start(values.get("duration"), values.get("camera_hz"), values.get("lidar_hz"), values.get("preview_hz"), values.get("input_only", False), values.get("cpu_layout"),
-                                    values.get("mirrors_off"))
-                    elif action == "drive_cruise":
-                        self._drive_cruise(values.get("acc", True), values.get("lcc", True))
-                    elif action in ("drive_start", "drive_stop"):
-                        self._drive(action, values.get("speed_kmh", 30), values.get("acc", True), values.get("lcc", True))
+                        self._start(values.get("mode", "assist"), values.get("lcc", True))
+                    elif action == "lcc":
+                        self.lcc = bool(values.get("enabled", True))
+                        self.update(lcc=self.lcc)
                     elif action in ("record_start", "record_stop"):
                         self._record(action, values.get("profile", "state"))
                 except queue.Empty:
@@ -516,124 +501,151 @@ def observed_drive(relay, age):
     return (drive.get("axes", 0) if drive.get("armed") else 0), drive.get("reason", "")
 
 
+def settings_summary(config):
+    """The rarely changed settings, as the next start will read them."""
+    try:
+        settings = json.loads(Path(config).read_text(encoding="utf-8"))
+        duration = float(settings.get("duration_s", 60))
+        limit = f"{duration / 3600:g}시간" if duration >= 3600 else f"{duration / 60:g}분" if duration >= 60 else f"{duration:g}초"
+        return (f"센서 수집 rig {Path(str(settings.get('rig', ''))).stem or '없음'}\n"
+                f"카메라 {float(settings.get('camera_hz', 30)):g} Hz · 라이다 {float(settings.get('lidar_hz', 10)):g} Hz"
+                f" · 미리보기 {float(settings.get('preview_hz', 10)):g} Hz"
+                f" · 게임 미러 렌더 {'켬' if settings.get('native_mirrors', True) else '끔'}\n"
+                f"CPU 배치 {'켬' if settings.get('cpu_layout', True) else '끔'} · 실행 제한 {limit}")
+    except (OSError, ValueError, TypeError, AttributeError) as error:
+        return f"설정 파일을 읽지 못했습니다: {error}"
+
+
 def show_window(controller):
     import tkinter as tk
-    from tkinter import ttk
+    from tkinter import font, ttk
     window = tk.Tk()
-    window.title("유로파일럿 · 센서 브리지")
-    window.geometry("820x740")
-    window.minsize(720, 680)
+    window.title("유로파일럿 런처")
+    window.geometry("780x700")
+    window.minsize(660, 560)
+    for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
+        font.nametofont(name).configure(family="Malgun Gothic", size=10)
     style = ttk.Style(window)
-    style.configure("Title.TLabel", font=("Malgun Gothic", 18, "bold"))
-    frame = ttk.Frame(window, padding=22)
+    style.configure("Key.TLabel", foreground="#555555")
+    style.configure("Note.TLabel", foreground="#666666")
+    style.configure("Error.TLabel", foreground="#b3261e")
+    style.configure("Strong.TLabel", font=("Malgun Gothic", 10, "bold"))
+    style.configure("Primary.TButton", font=("Malgun Gothic", 10, "bold"), padding=(18, 3))
+    frame = ttk.Frame(window, padding=(16, 12, 16, 10))
     frame.pack(fill="both", expand=True)
-    ttk.Label(frame, text="유로파일럿 센서 브리지", style="Title.TLabel").pack(anchor="w")
-    summary = ttk.Label(frame, text="상태 확인 중", font=("Malgun Gothic", 11))
-    summary.pack(anchor="w", pady=(8, 18))
-    actions = ttk.Frame(frame)
-    actions.pack(fill="x")
-    duration = tk.StringVar(value="110")
-    camera_hz, lidar_hz = tk.StringVar(value="30"), tk.StringVar(value="10")
-    preview_hz = tk.StringVar(value="10")
-    input_only = tk.BooleanVar(value=False)
-    cpu_placement = tk.BooleanVar(value=True)
-    mirrors_off = tk.BooleanVar(value=False)
-    try:
-        settings = json.loads(controller.config.read_text(encoding="utf-8"))
-        duration.set(str(settings["duration_s"]))
-        camera_hz.set(str(settings.get("camera_hz", 30)))
-        lidar_hz.set(str(settings.get("lidar_hz", 10)))
-        preview_hz.set(str(settings.get("preview_hz", 10)))
-        cpu_placement.set(bool(settings.get("cpu_layout", True)))
-        mirrors_off.set(not settings.get("native_mirrors", True))
-    except (OSError, ValueError, KeyError):
-        pass
-    def request(action):
-        controller.request(action, duration=duration.get(), camera_hz=camera_hz.get(), lidar_hz=lidar_hz.get(), preview_hz=preview_hz.get(), input_only=input_only.get(), cpu_layout=cpu_placement.get(),
-                           mirrors_off=mirrors_off.get())
-    start = ttk.Button(actions, text="시작", command=lambda: request("start"))
-    start.pack(side="left")
-    stop = ttk.Button(actions, text="중지", command=lambda: request("stop"))
-    stop.pack(side="left", padx=6)
-    restart = ttk.Button(actions, text="재시작", command=lambda: request("restart"))
-    restart.pack(side="left")
-    ttk.Label(actions, text="실행 시간(초)").pack(side="left", padx=(22, 5))
-    duration_entry = ttk.Entry(actions, textvariable=duration, width=9)
-    duration_entry.pack(side="left")
-    rates = ttk.Frame(frame)
-    rates.pack(fill="x", pady=(10, 0))
-    rate_entries = []
-    for label, variable in (("카메라 Hz", camera_hz), ("라이다 Hz", lidar_hz), ("미리보기 Hz", preview_hz)):
-        ttk.Label(rates, text=label).pack(side="left", padx=(0, 5))
-        entry = ttk.Entry(rates, textvariable=variable, width=7)
-        entry.pack(side="left", padx=(0, 18))
-        rate_entries.append(entry)
-    ttk.Checkbutton(frame, text="입력·상태만 (다음 시작에 적용, 센서 설정 유지)", variable=input_only).pack(anchor="w", pady=(8, 0))
-    ttk.Checkbutton(frame, text="CPU 배치: 게임 메인 스레드에 코어 하나, 릴레이·Foxglove 뷰어는 다른 L3 묶음 (다음 시작에 적용)",
-                    variable=cpu_placement).pack(anchor="w")
-    ttk.Checkbutton(frame, text="게임 미러 렌더 끄기: 센서 실행 중 화면의 미러가 마지막 장면에서 멈춤, 메인 스레드 절약 (다음 시작에 적용)",
-                    variable=mirrors_off).pack(anchor="w")
-    driving_box = ttk.LabelFrame(frame, text="GT 주행 보조", padding=8)
-    driving_box.pack(fill="x", pady=(8, 0))
-    driving_controls = ttk.Frame(driving_box)
-    driving_controls.pack(fill="x")
-    ttk.Label(driving_controls, text="목표 km/h").pack(side="left")
-    drive_speed = tk.StringVar(value="30")
-    ttk.Entry(driving_controls, textvariable=drive_speed, width=7).pack(side="left", padx=8)
-    acc_enabled, lcc_enabled = tk.BooleanVar(value=True), tk.BooleanVar(value=True)
-    ttk.Checkbutton(driving_controls, text="ACC 속도", variable=acc_enabled).pack(side="left", padx=5)
-    ttk.Checkbutton(driving_controls, text="LCC 차로", variable=lcc_enabled).pack(side="left", padx=5)
-    drive_start = ttk.Button(driving_controls, text="선택 적용 / 켜기", command=lambda: controller.request("drive_start", speed_kmh=drive_speed.get(), acc=acc_enabled.get(), lcc=lcc_enabled.get()))
-    drive_start.pack(side="left")
-    drive_cruise = ttk.Button(driving_controls, text="크루즈 버튼 대기 (LB+RT)", command=lambda: controller.request("drive_cruise", acc=acc_enabled.get(), lcc=lcc_enabled.get()))
-    drive_cruise.pack(side="left", padx=(8, 0))
-    drive_stop = ttk.Button(driving_controls, text="입력 해제", command=lambda: controller.request("drive_stop"))
-    drive_stop.pack(side="left", padx=8)
-    drive_status = ttk.Label(driving_box, text="입력·상태만 시작 → GT 주행 → 게임 전경", wraplength=730)
-    drive_status.pack(anchor="w", pady=(5, 0))
-    ttk.Label(driving_box, text="가속 페달은 잠시 덮어쓰기, 조향은 잡는 동안 운전자 우선, 브레이크는 ACC만 해제합니다(loader 0.44). 크루즈 버튼 대기: 게임 크루즈(LB+RT)를 켜면 그 속도로 잡고 다시 누르면 끕니다.", wraplength=730).pack(anchor="w")
-    recording_box = ttk.LabelFrame(frame, text="주행 기록", padding=8)
-    recording_box.pack(fill="x", pady=(12, 0))
-    recording_actions = ttk.Frame(recording_box)
-    recording_actions.pack(fill="x")
-    profiles = {"차량 상태 (소용량)": "state", "영상·라이다 포함": "sensors"}
-    record_profile = tk.StringVar(value="차량 상태 (소용량)")
-    profile_entry = ttk.Combobox(recording_actions, textvariable=record_profile, values=list(profiles),
-                                 state="readonly", width=23)
-    profile_entry.pack(side="left", padx=(0, 8))
-    record_start = ttk.Button(recording_actions, text="기록 시작",
-                              command=lambda: controller.request("record_start", profile=profiles[record_profile.get()]))
-    record_start.pack(side="left")
-    record_stop = ttk.Button(recording_actions, text="기록 종료", command=lambda: controller.request("record_stop"))
-    record_stop.pack(side="left", padx=6)
-    recording_text = ttk.Label(recording_box, text="기록 안 함", wraplength=730)
-    recording_text.pack(anchor="w", pady=(6, 0))
-    recording_path = ""
-    def copy_recording_path():
-        window.clipboard_clear()
-        window.clipboard_append(recording_path)
-    ttk.Button(recording_actions, text="경로 복사", command=copy_recording_path).pack(side="left")
-    ttk.Label(frame, text="F11로 중지하면 자동으로 다시 켜지지 않습니다. 창을 닫으면 이 창에서 시작한 프로세스가 종료됩니다.",
-              wraplength=750).pack(anchor="w", pady=(12, 14))
+    frame.columnconfigure(1, weight=1)
+    row = 0
+    def key(text):
+        ttk.Label(frame, text=text, style="Key.TLabel").grid(row=row, column=0, sticky="nw", padx=(0, 14), pady=2)
+    def value(**options):
+        label = ttk.Label(frame, **options)
+        label.grid(row=row, column=1, sticky="w", pady=2)
+        return label
+    def rule():
+        nonlocal row
+        ttk.Separator(frame).grid(row=row, column=0, columnspan=3, sticky="ew", pady=8)
+        row += 1
+
+    # Mode and the one start/stop button.
+    mode = tk.StringVar(value="assist")
+    lcc = tk.BooleanVar(value=True)
+    key("모드")
+    modes = ttk.Frame(frame)
+    modes.grid(row=row, column=1, sticky="w")
+    radios = [ttk.Radiobutton(modes, text=text, value=name, variable=mode)
+              for text, name in (("주행 보조", "assist"), ("센서 수집", "sensors"))]
+    for radio in radios:
+        radio.pack(side="left", padx=(0, 16))
+    def toggle():
+        if controller.snapshot()["phase"] in ("stopped", "error"):
+            controller.request("start", mode=mode.get(), lcc=lcc.get())
+        else:
+            controller.request("stop")
+    start = ttk.Button(frame, text="시작", style="Primary.TButton", command=toggle)
+    start.grid(row=row, column=2, rowspan=2, sticky="ne")
+    row += 1
+    lcc_check = ttk.Checkbutton(frame, text="LCC(차로 유지)도 함께 · 실행 중 바꾸면 바로 적용", variable=lcc,
+                                command=lambda: controller.request("lcc", enabled=lcc.get()))
+    lcc_check.grid(row=row, column=1, sticky="w", pady=(2, 0))
+    row += 1
+    mode_note = value(style="Note.TLabel", wraplength=520, justify="left")
+    row += 1
+    notes = {"assist": "시작하면 크루즈 버튼 대기까지 켭니다. 게임에서 LB+RT로 켜고 다시 누르면 끕니다. "
+                       "브레이크는 ACC만 끄고, 조향을 잡는 동안은 LCC가 비켜 줍니다.",
+             "sensors": "설정 파일의 rig·주기로 카메라·라이다를 수집합니다. 주행 보조는 켜지지 않습니다."}
+    rule()
+
+    # Live status.
     rows = {}
-    grid = ttk.Frame(frame)
-    grid.pack(fill="x")
-    for index, key in enumerate(("게임 SDK", "Windows 릴레이", "Foxglove 서버", "발행", "수집 상태", "Foxglove 주소")):
-        ttk.Label(grid, text=key, width=22).grid(row=index, column=0, sticky="w", pady=4)
-        rows[key] = ttk.Label(grid, text="—")
-        rows[key].grid(row=index, column=1, sticky="w")
-    endpoint = f"ws://127.0.0.1:{FOXGLOVE_PORT}"
-    def copy_address():
-        window.clipboard_clear()
-        window.clipboard_append(endpoint)
-    ttk.Button(frame, text="Foxglove 주소 복사", command=copy_address).pack(anchor="w", pady=8)
-    ttk.Label(frame, text="설정: " + str(controller.config), wraplength=750).pack(anchor="w")
-    ttk.Button(frame, text="설정 파일 열기", command=lambda: os.startfile(controller.config)).pack(anchor="w", pady=6)
-    log = tk.Text(frame, height=8, wrap="word", font=("Consolas", 9), state="disabled")
-    log.pack(fill="both", expand=True, pady=(8, 0))
+    for name in ("게임", "브리지", "주행 보조", "", "Foxglove"):
+        key(name)
+        rows[name] = value(wraplength=540, justify="left")
+        row += 1
+    rows[""].configure(style="Note.TLabel")
+    note_labels = frame.grid_slaves(row=rows[""].grid_info()["row"])
+    rule()
+
+    # Recording and the paths sent after a drive.
+    key("기록")
+    record_actions = ttk.Frame(frame)
+    record_actions.grid(row=row, column=1, columnspan=2, sticky="w")
+    record_state = ttk.Button(record_actions, text="차량 상태 기록",
+                              command=lambda: controller.request("record_start", profile="state"))
+    record_sensors = ttk.Button(record_actions, text="영상·라이다 포함 기록",
+                                command=lambda: controller.request("record_start", profile="sensors"))
+    record_stop = ttk.Button(record_actions, text="기록 종료", command=lambda: controller.request("record_stop"))
+    for button in (record_state, record_sensors, record_stop):
+        button.pack(side="left", padx=(0, 6))
+    row += 1
+    recording_text = value(wraplength=540, justify="left")
+    row += 1
+    paths = {}
+    def copy(variable, button):
+        if variable.get():
+            window.clipboard_clear()
+            window.clipboard_append(variable.get())
+            button.config(text="복사됨")
+            window.after(1200, lambda: button.config(text="복사"))
+    for name in ("bag 경로", "실행 로그"):
+        key(name)
+        variable = tk.StringVar()
+        entry = ttk.Entry(frame, textvariable=variable, state="readonly", font=("Consolas", 9))
+        entry.grid(row=row, column=1, sticky="ew", pady=2)
+        # The run folder name is at the end of the path.
+        variable.trace_add("write", lambda *_, e=entry: window.after(50, lambda: e.xview_moveto(1)))
+        entry.bind("<Configure>", lambda event: event.widget.xview_moveto(1))
+        button = ttk.Button(frame, text="복사", width=6)
+        button.config(command=lambda v=variable, b=button: copy(v, b))
+        button.grid(row=row, column=2, sticky="e", padx=(8, 0), pady=2)
+        paths[name] = variable
+        row += 1
+    rule()
+
+    # Rare settings live in the file; the window only shows what the next start reads.
+    key("설정")
+    settings_text = value(justify="left", wraplength=520)
+    ttk.Button(frame, text="설정 파일 열기", command=lambda: os.startfile(controller.config)).grid(
+        row=row, column=2, sticky="ne", padx=(8, 0))
+    row += 1
+    rule()
+
+    log_frame = ttk.Frame(frame)
+    log_frame.grid(row=row, column=0, columnspan=3, sticky="nsew")
+    frame.rowconfigure(row, weight=1)
+    log = tk.Text(log_frame, height=8, wrap="word", font=("Consolas", 9), state="disabled",
+                  relief="solid", borderwidth=1, highlightthickness=0, padx=6, pady=4)
+    scroll = ttk.Scrollbar(log_frame, command=log.yview)
+    log.config(yscrollcommand=scroll.set)
+    scroll.pack(side="right", fill="y")
+    log.pack(side="left", fill="both", expand=True)
+    row += 1
+    ttk.Label(frame, text="창을 닫으면 이 창에서 시작한 프로세스가 모두 종료됩니다.", style="Note.TLabel").grid(
+        row=row, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
     closing = False
     last_logs = None
     shown = {}
+    settings_seen = last_lcc = None
     def put(widget, **options):
         """Reconfigure only on change: config calls re-lay out wrapped labels (35% of a core at 4 Hz)."""
         if shown.get(str(widget)) != options:
@@ -645,7 +657,7 @@ def show_window(controller):
         controller.request("close")
     window.protocol("WM_DELETE_WINDOW", close)
     def refresh():
-        nonlocal last_logs, recording_path
+        nonlocal last_logs, settings_seen, last_lcc
         if controller.closed.is_set():
             window.destroy()
             return
@@ -655,50 +667,79 @@ def show_window(controller):
             window.focus_force()
         state = controller.snapshot()
         phase = state["phase"]
-        active = phase in ("starting", "connecting", "running", "stopping")
-        put(start, state="disabled" if active or closing else "normal")
-        put(stop, state="normal" if active and phase != "stopping" and not closing else "disabled")
-        put(restart, state="normal" if phase in ("running", "connecting") and not closing else "disabled")
-        put(duration_entry, state="disabled" if active else "normal")
-        for entry in rate_entries:
-            put(entry, state="disabled" if active else "normal")
-        put(summary, text=state["message"])
+        idle = phase in ("stopped", "error")
+        if not idle and state.get("mode") and mode.get() != state["mode"]:
+            mode.set(state["mode"])
+        session = mode.get()
+        if state.get("lcc") != last_lcc:  # A refused LCC change puts the box back.
+            last_lcc = state.get("lcc")
+            if last_lcc is not None and lcc.get() != last_lcc:
+                lcc.set(last_lcc)
+        put(start, text="시작" if idle else "중지", state="disabled" if closing or phase == "stopping" else "normal")
+        for radio in radios:
+            put(radio, state="normal" if idle and not closing else "disabled")
+        put(lcc_check, state="normal" if session == "assist" and not closing else "disabled")
+        put(mode_note, text=notes[session or "assist"])
         relay = state["relay"]
-        put(drive_start, state="normal" if phase == "running" and not closing else "disabled")
-        put(drive_cruise, state="normal" if phase == "running" and not closing else "disabled")
-        put(drive_stop, state="normal" if phase == "running" and not closing else "disabled")
+        put(rows["게임"], text=state["game"])
+        bridge = state["message"]
+        if phase == "running" and session == "assist":
+            commands = relay.get("drive_commands") or {}
+            bridge += f" · 입력·상태만 · 명령 {commands.get('forwarded_commands', 0):,}개 전달, 지연 폐기 {commands.get('stale_commands', 0)}"
+        elif phase == "running":
+            bridge += (f" · 수집 {'활성' if relay.get('capture_active') else '대기'} · {relay.get('sent_bundles', 0):,} 묶음"
+                       f" · 큐 누락 {relay.get('queue_dropped', 0)} · 50 ms 넘은 발행 {(relay.get('slow_publishes') or {}).get('count', 0)}")
+        put(rows["브리지"], text=bridge, style="Error.TLabel" if phase == "error" else "TLabel")
+        assist = state["assist"]
         mask, reason = observed_drive(relay, time.monotonic() - controller.last_relay)
-        put(drive_status, text=f"실제 상태: ACC {'켜짐' if mask & 2 else '꺼짐'} · LCC {'켜짐' if mask & 1 else '꺼짐'} · {reason}")
+        if session != "assist":
+            text = "센서 수집 모드에서는 켜지 않습니다."
+        elif assist == "standby":
+            text = (f"ACC {'켜짐' if mask & 2 else '꺼짐'} · LCC {'켜짐' if mask & 1 else '꺼짐'}" if mask else
+                    "크루즈 버튼 대기 중 · 게임에서 LB+RT" + (f" · 마지막 해제 {reason}" if reason else ""))
+        elif assist.startswith("exited"):
+            text = f"대기 종료됨 (code={assist.split(':')[1]}) · 중지 후 다시 시작해 주세요."
+        else:
+            text = "브리지가 연결되면 크루즈 버튼 대기를 켭니다." if not idle else "꺼짐"
+        put(rows["주행 보조"], text=text, style="Error.TLabel" if assist.startswith("exited") else
+            "Strong.TLabel" if session == "assist" and assist == "standby" else "TLabel")
+        note = state["assist_note"] if session == "assist" else ""
+        put(rows[""], text=note)
+        for label in note_labels:  # No empty line under the assist state.
+            if bool(note) != bool(label.winfo_manager()):
+                label.grid() if note else label.grid_remove()
+        put(rows["Foxglove"], text=f"ws://127.0.0.1:{FOXGLOVE_PORT} · " + ("접속 대기" if state.get("foxglove") else
+                                    "시작 중" if not idle else "꺼짐"))
         recording = state["recording"]
         record_phase = recording.get("phase", "idle")
         writing = record_phase in ("starting", "recording", "stopping")
-        put(record_start, state="normal" if phase == "running" and not writing and not closing else "disabled")
+        can_start = phase == "running" and not writing and not closing
+        put(record_state, state="normal" if can_start else "disabled")
+        put(record_sensors, state="normal" if can_start and session == "sensors" else "disabled")
         put(record_stop, state="normal" if writing and record_phase != "stopping" and not closing else "disabled")
-        put(profile_entry, state="disabled" if writing else "readonly")
         labels = {"idle": "기록 안 함", "starting": "기록 준비", "recording": "기록 중", "stopping": "파일 마무리 중",
                   "saved": "저장 완료", "error": "기록 오류"}
-        recording_path = recording.get("path", "")
         record_label = labels.get(record_phase, record_phase)
-        if recording_path:
+        if recording.get("path"):
+            record_label += {"state": " · 차량 상태", "sensors": " · 영상·라이다 포함"}.get(recording.get("profile"), "")
             record_label += f" · {recording.get('bytes', 0) / 1024**2:.1f} MiB"
             if record_phase in ("saved", "error"):
                 record_label += f" · {recording.get('message_count', 0):,}개 메시지"
-            record_label += "\n" + recording_path
         error = state.get("recording_error") or recording.get("error")
         if error:
-            record_label += "\n" + error
-        put(recording_text, text=record_label)
-        put(rows["게임 SDK"], text=state["game"])
-        put(rows["Windows 릴레이"], text=f"PID {state['relay_pid']}" if state.get("relay_pid") else "중지됨")
-        put(rows["Foxglove 서버"], text=(f"PID {state['foxglove_pid']} · " + ("대기 중" if state.get("foxglove") else "시작 중"))
-                                     if state.get("foxglove_pid") else "중지됨")
-        commands = relay.get("drive_commands") or {}
-        put(rows["발행"], text=f"{relay.get('sent_bundles', 0)} 묶음 · 큐 누락 {relay.get('queue_dropped', 0)}"
-                               f" · 50 ms 넘은 발행 {(relay.get('slow_publishes') or {}).get('count', 0)}"
-                               f" · 명령 {commands.get('forwarded_commands', 0)} (지연 폐기 {commands.get('stale_commands', 0)})")
-        put(rows["수집 상태"], text=("활성" if relay.get("capture_active") else "대기") if phase == "running" else
-                                ("연결 확인 중" if active else "중지됨"))
-        put(rows["Foxglove 주소"], text=endpoint if state.get("foxglove") else "—")
+            record_label += "\n" + (error if len(error) < 300 else error[:300] + " … recorder.log 참고")
+        put(recording_text, text=record_label, style="Error.TLabel" if error else "TLabel")
+        if paths["bag 경로"].get() != recording.get("path", ""):
+            paths["bag 경로"].set(recording.get("path", ""))
+        if paths["실행 로그"].get() != state["log_dir"]:
+            paths["실행 로그"].set(state["log_dir"])
+        try:
+            stamp = controller.config.stat().st_mtime
+        except OSError:
+            stamp = None
+        if stamp != settings_seen:
+            settings_seen = stamp
+            put(settings_text, text=settings_summary(controller.config))
         text = "\n".join(state["logs"])
         if text != last_logs:
             log.config(state="normal")

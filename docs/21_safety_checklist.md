@@ -7,7 +7,7 @@
 - W00 완료: `ot.cmd version`의 `drive.profile_supported`가 **true**. ✔ 2026-10-12 0.30.0에서는 false("Unsupported control operator", 프로필의 `no_cstm_mod`·`joy.b5`를 파서가 못 읽음)였고 0.31.0 loader에서 true([20 W00](20_windows_native_port_plan.md#w00-프로필-파서입력-보완-s-안전-선행)).
 - W01 완료: 설치본 백업, `exe_sha256` 대조(✔ Steam은 현재 `AutoUpdateBehavior 0`).
 - 교통 없는 직선 고속도로, `uset g_traffic 0`. 트레일러 없음.
-- 런처 **입력·상태만**으로 시작하고 "차량 상태" 프로필 기록을 켠 상태에서 각 시험을 수행한다(✔ `apps/launcher/bag_recording.py:STATE_TOPICS`에 `/ets2/drive/state`, `/ets2/drive/command` 포함).
+- 런처 **주행 보조** 모드(입력·상태만, 2026-10-21 전 런처의 **입력·상태만** 체크)로 시작하고 "차량 상태" 프로필 기록을 켠 상태에서 각 시험을 수행한다(✔ `apps/launcher/bag_recording.py:STATE_TOPICS`에 `/ets2/drive/state`, `/ets2/drive/command` 포함).
 - arm과 명령 발행은 `ros2 run ets2_autonomy drive_hold --ros-args -p axes:=3 -p steering:=0.0 -p throttle:=0.0 -p brake:=0.0`로 만든다(✔ W00 구현: arm 뒤 50 Hz로 `sent_steady_ns`를 채워 발행, Ctrl+C 또는 `--stop-event`로 disarm, DriveState reason 변화를 시뮬레이션 시각과 함께 출력, 종료 코드 0 disarm·1 오류·2 게임이 해제). 출력 줄을 각 행의 결과 칸에 붙인다. ✔ `ros2 topic pub`은 `sent_steady_ns`를 매번 새로 채우지 못해 릴레이 노드의 나이 검사에 버려지므로 쓰지 않는다. 런처 GT 주행(30 km/h, 경로 JSON 필요)도 가능하다. 명령 발행 없이 arm만 하면 200 ms 뒤 `expired`가 된다(#6).
 - ✔ 현재 프로필은 `c_throt_dz 0`, `c_brake_dz 0`이라(fixture는 0.03/0.04) 트리거 노이즈가 수동 개입으로 판정될 수 있다. #0을 실제 데드존으로 먼저 확인한다.
 - ✔ 키보드 WASD·방향키는 게임 창이 아니어도 수동 개입으로 잡힌다(`input_device.cpp:InputDevice::sample`의 `GetAsyncKeyState`). armed 중에는 다른 창에서도 타이핑하지 않는다.
