@@ -250,7 +250,7 @@ class Controller:
         self.update(phase="starting", message="Foxglove 서버와 게임 릴레이를 시작합니다.", relay={}, foxglove=False)
         self.foxglove = self.spawn(["ros2", "run", "foxglove_bridge", "foxglove_bridge", "--ros-args",
                                     "--params-file", str(BRIDGE_ROOT / "config" / "foxglove.yaml"),
-                                    "-p", "address:=127.0.0.1", "-p", f"port:={FOXGLOVE_PORT}"], "foxglove")
+                                    "-p", "address:=" + str(settings.get("foxglove_address", "127.0.0.1")), "-p", f"port:={FOXGLOVE_PORT}"], "foxglove")
         self._spawn_relay()
         self.update(phase="connecting", message="게임 릴레이의 첫 상태 보고를 기다립니다.")
         if plan:

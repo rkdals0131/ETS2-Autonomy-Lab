@@ -72,7 +72,7 @@ Windows에서 출력을 캡처하는 스크립트는 `--no-daemon`을 씁니다.
 
 ## Foxglove
 
-Windows Foxglove에서 `ws://127.0.0.1:8765`에 연결합니다. 레이아웃은 `config/foxglove-assist.json`(주행 보조: 3D HUD 장면, ACC·LCC·앞차·차로 변경 표시등, 속도·종방향·횡방향·조향 그래프, 모드 전환, AssistState 원본)과 `config/foxglove-sensors.json`(센서 수집: 카메라 4개, 라이다 3D, 속도·IMU 그래프, 진단)을 Foxglove의 Layouts → Import로 불러옵니다. 서버 허용 목록(`config/foxglove.yaml`)에 `/ets2/hud/markers`, `/ets2/drive/*`, `/ets2/vehicle/powertrain`을 더했습니다(2026-10-21 저녁 전에는 HUD·보조 상태가 Foxglove에 오지 않았음). 런처는 서버가 떠 있는지 TCP 표의 LISTEN 소켓으로 봅니다(연결 시도는 서버에 "handshake failed" ERROR를 남겼음).
+Windows Foxglove에서 `ws://127.0.0.1:8765`에 연결합니다. 다른 PC(같은 로컬망)에서 보려면 `config/bridge.local.json`에 `"foxglove_address": "0.0.0.0"`(기본 `127.0.0.1`)을 두고, 이 PC에서 관리자 PowerShell로 TCP 8765 인바운드를 엽니다: `New-NetFirewallRule -DisplayName "Foxglove bridge 8765" -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Allow -Profile Private`. 그 뒤 다른 PC에서 `ws://<이 PC IP>:8765`로 연결합니다(서버는 읽기 전용: 클라이언트 발행 기능 없음). 레이아웃은 `config/foxglove-assist.json`(주행 보조: 3D HUD 장면, ACC·LCC·앞차·차로 변경 표시등, 속도·종방향·횡방향·조향 그래프, 모드 전환, AssistState 원본)과 `config/foxglove-sensors.json`(센서 수집: 카메라 4개, 라이다 3D, 속도·IMU 그래프, 진단)을 Foxglove의 Layouts → Import로 불러옵니다. 서버 허용 목록(`config/foxglove.yaml`)에 `/ets2/hud/markers`, `/ets2/drive/*`, `/ets2/vehicle/powertrain`을 더했습니다(2026-10-21 저녁 전에는 HUD·보조 상태가 Foxglove에 오지 않았음). 런처는 서버가 떠 있는지 TCP 표의 LISTEN 소켓으로 봅니다(연결 시도는 서버에 "handshake failed" ERROR를 남겼음).
 
 - 영상: `/ets2/camera/{C_FN,C_FW,C_RL,C_RR}/preview/image/compressed`
 - 표시용 점군: `/ets2/lidar/{L_F,L_PL,L_PR}/preview/points`
