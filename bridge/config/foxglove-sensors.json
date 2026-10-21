@@ -113,6 +113,15 @@
             "scene/curve": {
               "visible": false
             },
+            "scene/markings": {
+              "visible": false
+            },
+            "scene/junctions": {
+              "visible": false
+            },
+            "scene/signals": {
+              "visible": false
+            },
             "debug/mpc": {
               "visible": false
             },

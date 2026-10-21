@@ -150,7 +150,12 @@ int main(int argc,char** argv) {
     // HUD inputs: LCC's path while it steers (empty otherwise, and at release) at 20 Hz; the
     // ACC mark rides on AssistState. hud_node turns them into the decal and Foxglove markers.
     auto plan_path=node->create_publisher<nav_msgs::msg::Path>("/ets2/drive/plan",rclcpp::QoS(1).best_effort());
-    const auto plan_clear=[&]() {nav_msgs::msg::Path path;path.header.frame_id="world";path.header.stamp=pose_stamp;plan_path->publish(path);};
+    // The lateral MPC's own plan for the rear point over 1.5 s (debug, 20 Hz; empty unless it
+    // steers on the MPC): what it intends, against what the truck then does.
+    auto mpc_plan=node->create_publisher<nav_msgs::msg::Path>("/ets2/drive/mpc_plan",rclcpp::QoS(1).best_effort());
+    const auto plan_clear=[&]() {
+        nav_msgs::msg::Path path;path.header.frame_id="world";path.header.stamp=pose_stamp;plan_path->publish(path);mpc_plan->publish(path);
+    };
     // Controller internals for recordings (50 Hz while armed) and the lane in use (1 Hz).
     auto assist_state=node->create_publisher<ets2_msgs::msg::AssistState>("/ets2/drive/assist",rclcpp::QoS(10));
     auto lane_path=node->create_publisher<nav_msgs::msg::Path>("/ets2/drive/lane",rclcpp::QoS(1));
@@ -269,6 +274,7 @@ int main(int argc,char** argv) {
         // reads as the driver's switch: off while ACC runs, re-engage after a brake cancel.
         bool cancel_pending=cruise_engage,toggle_off=false,cruise_seen_off=false;auto cancel_until=started+3s;
         std::optional<ets2_msgs::msg::DriveCommand> last_command;std::optional<Clock::time_point> stale_since;
+        hud::Points mpc_points;
         resume_speed=set_speed;
         // Fixed 50 Hz schedule: sleep_until the next 20 ms deadline keeps the mean
         // period at 20 ms even with Windows' coarse sleep granularity; after an
@@ -465,6 +471,16 @@ int main(int argc,char** argv) {
                     const auto& out=lcc_mpc.update(in);
                     // Status 4 (inputs out of range): the baseline steers this frame.
                     if(in.enable && out.status!=LccMpc::BadInput) {wheel_angle=out.wheel_angle_rad;wheel_rate=out.wheel_rate_rad_s;}
+                    // Its plan in the world: sample i is i*dt ahead at the current speed, moved left
+                    // of the lane by the reference (the merge) plus the planned error.
+                    mpc_points.clear();
+                    if(in.enable && out.status==LccMpc::Mpc)
+                        for(int i=0;i<LccMpc::predicted_points;++i) {
+                            const auto s=goal.s+std::max(0.0,vehicle->speed_mps)*i*out.predicted_dt_s;
+                            const auto c=lane->at(s);const auto h=lane->heading(s);
+                            const auto r=(merge?merge->at(s).offset:0)+out.predicted_offset_m[i];
+                            mpc_points.push_back({c.x-std::sin(h)*r,c.y+std::cos(h)*r});
+                        }
                 }
                 if(steering) {
                     steering_target=std::clamp(wheel_angle/settings->steering_angle_per_unit_rad,-1.0,1.0);
@@ -580,6 +596,11 @@ int main(int argc,char** argv) {
                         geometry_msgs::msg::PoseStamped pose;pose.pose.position.x=x;pose.pose.position.y=y;pose.pose.orientation.w=1;path.poses.push_back(pose);
                     }
                 plan_path->publish(path);
+                nav_msgs::msg::Path plan;plan.header=path.header;
+                if(steering) for(const auto& [x,y]:mpc_points) {
+                    geometry_msgs::msg::PoseStamped pose;pose.pose.position.x=x;pose.pose.position.y=y;pose.pose.orientation.w=1;plan.poses.push_back(pose);
+                }
+                mpc_plan->publish(plan);
             }
             {
                 ets2_msgs::msg::AssistState state;

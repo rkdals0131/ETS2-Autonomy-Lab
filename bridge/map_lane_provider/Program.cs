@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Globalization;
 using TruckLib;
 using TruckLib.HashFs;
@@ -40,6 +41,8 @@ try
     bool follow = options.ContainsKey("--follow");
     // Rolling mode: extend once less than extend-below is left ahead, drop points keep-behind past the truck.
     double extendBelow = Number("--extend-below-m", Math.Min(600, distance)), keepBehind = Number("--keep-behind-m", 300, 0), period = Number("--period-s", .5);
+    // Follow: the map around the truck for Foxglove (<out>.scene.json); 0 turns it off.
+    double sceneRadius = Number("--scene-radius-m", 40, 0);
     string? snapshotSource = options.GetValueOrDefault("--snapshot");
     string output = options.GetValueOrDefault("--out", Path.Combine(Environment.CurrentDirectory, "bridge", "recordings", "gt-path", "current-lane.json"));
     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
@@ -91,6 +94,7 @@ try
     // <out>.right.json; no file without one) for the driver's lane change by turn signal
     // and for re-acquiring the lane the driver changed to before this lane resets.
     var sides = new[] {new Neighbour(-1, SidePath(output, "left")), new Neighbour(1, SidePath(output, "right"))};
+    var scene = sceneRadius > 0 ? new Scene(SidePath(output, "scene"), sceneRadius) : null;
     for (var placement = first; ; )
     {
         long started = Stopwatch.GetTimestamp();
@@ -121,11 +125,18 @@ try
             foreach (var side in sides) side.Update(world, rolling, projection.s, placement.position.Y, x, y, updated, reset, distance, keepBehind, ref pathId);
         }
         catch (Exception ex) {error = ex.Message;}
+        // The scene apart from the lane: it is drawn also off the mapped lanes (yard, parking),
+        // and a scene failure never stops the lane files.
+        (bool written, double ms, int items)? sceneUpdate = null;
+        if (scene is not null)
+            try {sceneUpdate = scene.Update(world, placement.position);scene.LastError = null;}
+            catch (Exception ex) {if (ex.Message != scene.LastError) Console.Error.WriteLine($"scene: {ex.Message}");scene.LastError = ex.Message;}
         // Replay mode reports every cycle so the driver can step in lockstep.
         if (updated || snapshotSource == "-" || (error is not null && error != lastError))
             Console.WriteLine(JsonSerializer.Serialize(new {revision, path_id = rolling?.PathId, updated, reset, start_s = rolling?.StartS, end_s = rolling?.EndS, truck_s = rolling is null ? (double?)null : projection.s,
                 ahead_m = rolling is null ? (double?)null : rolling.EndS - projection.s, offset_m = rolling is null ? (double?)null : projection.distance, point_count = rolling?.Points.Count,
-                end_reason = rolling?.EndReason, prefabs = rolling?.Walker.PrefabCount, left_path_id = sides[0].Lane?.PathId, right_path_id = sides[1].Lane?.PathId, sectors = world.Sectors, elapsed_ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds, error}));
+                end_reason = rolling?.EndReason, prefabs = rolling?.Walker.PrefabCount, left_path_id = sides[0].Lane?.PathId, right_path_id = sides[1].Lane?.PathId, sectors = world.Sectors, elapsed_ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                scene_written = sceneUpdate?.written, scene_ms = sceneUpdate?.ms, scene_items = sceneUpdate?.items, error}));
         lastError = error;
         if (snapshotSource != "-") Thread.Sleep(TimeSpan.FromSeconds(Math.Max(0, period - Stopwatch.GetElapsedTime(started).TotalSeconds)));
         while (true)
@@ -185,6 +196,7 @@ sealed class World : IDisposable
     readonly Dictionary<string, LaneGeometry> geometries = new();
     readonly Dictionary<string, string> unsupported = new();
     readonly Dictionary<string, PrefabDescriptor?> descriptors = new();
+    Dictionary<string, bool>? lightProfiles;
     readonly HashSet<SectorCoordinate> loaded = new();
     public Map Map {get; private set;} = new();
     public int Sectors => loaded.Count;
@@ -340,6 +352,27 @@ sealed class World : IDisposable
         var widths = centers.Select((c, i) => Math.Clamp(centers.Where((o, j) => j != i && drivable[j]).Select(o => Math.Abs(o - c)).DefaultIfEmpty(LaneSpacing).Min(), 3f, LaneSpacing)).ToArray();
         return new(centers, lanes.Select(l => l.forward).ToArray(), widths, drivable, lanes.Select(l => l.type).ToArray());
     }
+    // Semaphore profile name -> it has a traffic light slot (traffic_light*). Profiles of only
+    // barriers and models (toll and yard gates, gas stations, level crossings) are false.
+    public bool? TrafficLightProfile(string profile)
+    {
+        if (lightProfiles is null)
+        {
+            lightProfiles = new();
+            // A text scan (the SII parser takes about 2 s for these files): unit name and its type[] values.
+            var watch = Stopwatch.StartNew();
+            foreach (var file in fs.GetFiles("/def/world/").Where(f => Path.GetFileName(f).StartsWith("semaphore_profile") && f.EndsWith(".sii")).Order(StringComparer.Ordinal))
+            try
+            {
+                var text = Regex.Replace(fs.ReadAllText(file), @"(#|//)[^\n]*", "");
+                foreach (Match unit in Regex.Matches(text, @"tr_semaphore_profile\s*:\s*tr_sem_prof\.([\w.]+)\s*\{(.*?)\n\s*\}", RegexOptions.Singleline))
+                    lightProfiles[unit.Groups[1].Value] = Regex.IsMatch(unit.Groups[2].Value, @"\btype(\[\d*\])?\s*:\s*""?traffic_light");
+            }
+            catch (Exception ex) {Console.Error.WriteLine($"{file}: {ex.Message}");}
+            Console.Error.WriteLine($"semaphore profiles: {lightProfiles.Count}, {lightProfiles.Count(x => x.Value)} with traffic lights, in {watch.ElapsedMilliseconds} ms");
+        }
+        return lightProfiles.TryGetValue(profile, out var light) ? light : null;
+    }
     public PrefabDescriptor? Descriptor(Prefab prefab)
     {
         string key = "prefab." + prefab.Model;
@@ -482,15 +515,17 @@ sealed class PrefabView
         origin = d.Nodes[prefab.Origin];
         rotation = Quaternion.Normalize(prefab.Nodes[0].Rotation * Quaternion.Conjugate(MathEx.GetNodeRotation(origin.Direction)));
     }
-    public static PrefabView? Of(World world, Prefab prefab)
+    // curves: only prefabs with navigation curves (the walker); false also takes the others (scene).
+    public static PrefabView? Of(World world, Prefab prefab, bool curves = true)
     {
         var d = world.Descriptor(prefab);
-        return d is null || d.Nodes.Count != prefab.Nodes.Count || d.NavCurves.Count == 0 ? null : new(prefab, d);
+        return d is null || d.Nodes.Count != prefab.Nodes.Count || d.Nodes.Count == 0 || curves && d.NavCurves.Count == 0 ? null : new(prefab, d);
     }
     public int N => Prefab.Nodes.Count;
     public int Ppd(int mapIndex) => (mapIndex + Prefab.Origin) % N;
     public int MapIndex(int k) => ((k - Prefab.Origin) % N + N) % N;
     public Vector3 ToWorld(Vector3 local) => Vector3.Transform(local - origin.Position, rotation) + Prefab.Nodes[0].Position;
+    public Vector3 Rotate(Vector3 local) => Vector3.Transform(local, rotation);
     public Vector3 Point(int c, float t) => ToWorld(Lane.Curve(D.NavCurves[c], t));
     public Vector2 Direction(int c, float t) => Vector2.Normalize(Lane.Flat(Vector3.Transform(Lane.Curve(D.NavCurves[c], t, true), rotation)));
     // Smallest heading change from heading to an exit reachable from curve c.
@@ -831,6 +866,195 @@ sealed class Neighbour(int side, string file)
     }
 }
 
+// The map around the truck for Foxglove (<out>.scene.json, follow mode): within the radius
+// (ground plane) the lane boundaries of every road piece in both directions from the lane
+// model, the navigation curves of prefabs (junctions) and their traffic lights. Geometry is
+// cached per map item; the file is replaced when the truck moved more than 2 m or the items
+// in range changed (a map reopen, a look or prefab read for the first time).
+sealed class Scene(string file, double radius)
+{
+    const float Step = 2;          // m between samples along a line
+    const float MergeGap = .75f;   // m: edges of adjacent lanes closer than this are one boundary
+    sealed record Line(string Kind, Vector3[] Points, float[] S);
+    // Position on the ground (SCS), the highest light above it and the heading of the
+    // traffic it controls (the light faces the other way).
+    sealed record Signal(Vector3 Position, float Height, double? Heading, string Type);
+    // Lines and signals of one map item; Centre/Reach (ROS plane) bound all of them.
+    sealed record Shape(Vector2 Centre, float Reach, List<Line> Lines, List<Signal> Signals);
+    readonly Dictionary<ulong, Shape> shapes = new();
+    // Loose bounds of every road and prefab of the open map, rebuilt when the map reopens.
+    readonly List<(ulong Uid, Vector2 Centre, float Reach)> index = new();
+    Map? indexed;
+    Vector2 last = new(float.NaN);
+    long signature;
+    int revision;
+    public string? LastError;
+    public (bool written, double ms, int items) Update(World world, Vector3 position)
+    {
+        long started = Stopwatch.GetTimestamp();
+        world.Require([position], (float)radius + 100);
+        double indexMs = 0, shapeMs = 0;int built = 0;
+        if (!ReferenceEquals(world.Map, indexed)) {Index(world.Map);indexMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;}
+        var here = Lane.Flat(position);
+        var near = new List<(ulong uid, Shape shape)>();
+        foreach (var (uid, centre, reach) in index)
+        {
+            if (Vector2.Distance(centre, here) > radius + reach) continue;
+            if (!shapes.TryGetValue(uid, out var shape))
+            {
+                long t0 = Stopwatch.GetTimestamp();++built;
+                try {shape = world.Map.MapItems[uid] switch {Road r => RoadShape(world, r), Prefab p => PrefabShape(world, p), _ => null};}
+                catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException or NullReferenceException or IOException) {shape = null;}
+                shapes[uid] = shape ??= new(centre, 0, [], []);
+                shapeMs += Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+            }
+            if ((shape.Lines.Count > 0 || shape.Signals.Count > 0) && Vector2.Distance(shape.Centre, here) <= radius + shape.Reach) near.Add((uid, shape));
+        }
+        long sig = near.Count;
+        foreach (var (uid, _) in near.OrderBy(n => n.uid)) sig = unchecked(sig * 1000003 + (long)uid);
+        if (!float.IsNaN(last.X) && Vector2.Distance(last, here) <= 2 && sig == signature) return (false, Stopwatch.GetElapsedTime(started).TotalMilliseconds, near.Count);
+        double r2 = radius * radius;
+        bool In(Vector3 p) {double dx = p.X - here.X, dy = -p.Z - here.Y;return dx * dx + dy * dy <= r2;}
+        static double R(double v) => Math.Round(v, 2);
+        static double[] Xyz(Vector3 p) => [R(p.X), R(-p.Z), R(p.Y)];
+        var lines = new List<object>();
+        foreach (var (_, shape) in near)
+        foreach (var line in shape.Lines)
+            for (int i = 0; i < line.Points.Length; )
+            {
+                // Runs of consecutive samples inside the radius.
+                if (!In(line.Points[i])) {++i;continue;}
+                int j = i;
+                while (j + 1 < line.Points.Length && In(line.Points[j + 1])) ++j;
+                if (j > i) lines.Add(new {kind = line.Kind, s0 = R(line.S[i]), points = line.Points[i..(j + 1)].Select(Xyz)});
+                i = j + 1;
+            }
+        var signals = near.SelectMany(n => n.shape.Signals).Where(s => In(s.Position))
+            .Select(s => new {type = s.Type, position = Xyz(s.Position), height_m = R(s.Height), heading = s.Heading is double h ? R(h) : (double?)null});
+        RollingLane.Replace(file, JsonSerializer.Serialize(new {frame_id = "world", revision = ++revision, center = Xyz(position), radius_m = radius, lines, signals}));
+        last = here;signature = sig;
+        double ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        if (ms > 30) Console.Error.WriteLine($"scene: {ms:F0} ms (index {indexMs:F0} ms of {index.Count} items, {built} new items {shapeMs:F0} ms)");
+        return (true, ms, near.Count);
+    }
+    void Index(Map map)
+    {
+        index.Clear();
+        foreach (var item in map.MapItems.Values)
+            try
+            {
+                if (item is Road road)
+                {
+                    var a = Lane.Flat(road.Node.Position);var b = Lane.Flat(road.ForwardNode.Position);
+                    // The curve stays within half its length of the chord's middle; lanes reach 30 m aside.
+                    index.Add((road.Uid, (a + b) / 2, road.Length / 2 + 30));
+                }
+                else if (item is Prefab prefab && prefab.Nodes.Count > 0)
+                {
+                    var centre = prefab.Nodes.Aggregate(Vector2.Zero, (s, n) => s + Lane.Flat(n.Position)) / prefab.Nodes.Count;
+                    index.Add((prefab.Uid, centre, prefab.Nodes.Max(n => Vector2.Distance(Lane.Flat(n.Position), centre)) + 100));
+                }
+            }
+            catch (Exception ex) when (ex is NullReferenceException or InvalidOperationException) {} // node in a sector not loaded
+        var live = index.Select(e => e.Uid).ToHashSet();
+        foreach (var uid in shapes.Keys.Where(k => !live.Contains(k)).ToList()) shapes.Remove(uid);
+        indexed = map;
+    }
+    static Shape Bound(List<Line> lines, List<Signal> signals)
+    {
+        var all = lines.SelectMany(l => l.Points).Concat(signals.Select(s => s.Position)).Select(Lane.Flat).ToList();
+        if (all.Count == 0) return new(Vector2.Zero, 0, lines, signals);
+        var centre = all.Aggregate(Vector2.Zero, (s, p) => s + p) / all.Count;
+        return new(centre, all.Max(p => Vector2.Distance(p, centre)), lines, signals);
+    }
+    static float[] Lengths(Vector3[] points)
+    {
+        var s = new float[points.Length];
+        for (int i = 1; i < points.Length; ++i) s[i] = s[i - 1] + Vector2.Distance(Lane.Flat(points[i - 1]), Lane.Flat(points[i]));
+        return s;
+    }
+    // Lateral boundaries (road frame, right +) of the drivable lanes: edges at centre ± width/2;
+    // facing edges of neighbouring lanes within MergeGap are one boundary, "lane" between lanes
+    // of one direction, "centre" between the directions; the others are road edges ("edge":
+    // the outer edges and both sides of a median).
+    public static List<(float X, string Kind)> Boundaries(LaneGeometry g)
+    {
+        var lanes = Enumerable.Range(0, g.Centers.Length).Where(i => g.Drivable[i]).OrderBy(i => g.Centers[i]).ToList();
+        var result = new List<(float, string)>();
+        for (int k = 0; k < lanes.Count; ++k)
+        {
+            int i = lanes[k];
+            float left = g.Centers[i] - g.Widths[i] / 2;
+            if (k == 0) result.Add((left, "edge"));
+            else
+            {
+                int j = lanes[k - 1];
+                float right = g.Centers[j] + g.Widths[j] / 2;
+                if (Math.Abs(left - right) <= MergeGap) result.Add(((left + right) / 2, g.Forward[i] == g.Forward[j] ? "lane" : "centre"));
+                else {result.Add((right, "edge"));result.Add((left, "edge"));}
+            }
+            if (k == lanes.Count - 1) result.Add((g.Centers[i] + g.Widths[i] / 2, "edge"));
+        }
+        return result;
+    }
+    static Shape? RoadShape(World world, Road road)
+    {
+        LaneGeometry g;
+        try {g = world.Geometry(road);} catch (InvalidOperationException) {return null;} // sidewalk, rail
+        var bounds = Boundaries(g);
+        int n = Math.Max(1, (int)Math.Ceiling(road.Length / Step));
+        var points = bounds.Select(_ => new Vector3[n + 1]).ToArray();
+        for (int i = 0; i <= n; ++i)
+        {
+            var curve = road.InterpolateCurve((float)i / n);
+            var right = Vector3.Transform(Vector3.UnitX, curve.Rotation);
+            for (int b = 0; b < bounds.Count; ++b) points[b][i] = curve.Position + right * bounds[b].X;
+        }
+        return Bound(bounds.Select((b, k) => new Line(b.Kind, points[k], Lengths(points[k]))).ToList(), []);
+    }
+    static Shape? PrefabShape(World world, Prefab prefab)
+    {
+        var view = PrefabView.Of(world, prefab, curves: false);
+        if (view is null) return null;
+        var lines = new List<Line>();
+        for (int c = 0; c < view.D.NavCurves.Count; ++c)
+        {
+            if (!view.Valid(c)) continue;
+            int n = Math.Max(1, (int)Math.Ceiling(view.D.NavCurves[c].Length / Step));
+            var points = Enumerable.Range(0, n + 1).Select(i => view.Point(c, (float)i / n)).ToArray();
+            lines.Add(new("junction", points, Lengths(points)));
+        }
+        // Traffic lights (the game reports no state). A semaphore locator is a light model or the
+        // light logic: explicit traffic light types count, virtual ones (logic only) and barriers
+        // do not; model-only and profile ones count when their profile has a traffic light slot
+        // (not gates, gas stations, level crossings). Locators within 1 m on the ground plane are
+        // one light (pole base and its heads); the ground is the nearest navigation curve point.
+        // Heading: the locator's -Z axis, the direction of the traffic it controls.
+        var signals = new List<Signal>();
+        var ground = lines.SelectMany(l => l.Points).ToList();
+        if (ground.Count == 0) ground = prefab.Nodes.Select(n => n.Position).ToList();
+        foreach (var s in view.D.Semaphores)
+        {
+            bool light = s.Type switch
+            {
+                SemaphoreType.TrafficLight or SemaphoreType.TrafficLightMinor or SemaphoreType.TrafficLightMajor or SemaphoreType.TrafficLightBlockable => true,
+                SemaphoreType.UseProfile or SemaphoreType.ModelOnly => world.TrafficLightProfile(s.Profile.ToString()) == true,
+                _ => false,
+            };
+            if (!light) continue;
+            var p = view.ToWorld(s.Position);
+            var f = view.Rotate(Vector3.Transform(-Vector3.UnitZ, s.Rotation));
+            double? heading = Math.Abs(f.X) + Math.Abs(f.Z) > 1e-3 ? Math.Atan2(-f.Z, f.X) : null;
+            float floor = ground.MinBy(g => Vector2.DistanceSquared(Lane.Flat(g), Lane.Flat(p))).Y;
+            int same = signals.FindIndex(o => Vector2.Distance(Lane.Flat(o.Position), Lane.Flat(p)) < 1);
+            var signal = new Signal(new(p.X, Math.Min(floor, p.Y), p.Z), Math.Max(0, p.Y - floor), heading, "traffic_light");
+            if (same < 0) signals.Add(signal);
+            else signals[same] = signals[same] with {Height = Math.Max(signals[same].Height, signal.Height), Heading = signals[same].Heading ?? heading};
+        }
+        return Bound(lines, signals);
+    }
+}
+
 // The published lane polyline (ROS world, arc length s from the path start) and the
 // walker that extends it. Points are only appended at the end and dropped at the start.
 sealed class RollingLane
@@ -919,15 +1143,19 @@ sealed class RollingLane
         }
         return best;
     }
-    // Atomic replace. A reader holding the file open makes the replace fail on Windows; retry briefly.
     public void Write(string output, int revision)
     {
         if (Points.Count < 2) throw new InvalidOperationException("No forward lane segment remains");
+        Replace(output, JsonSerializer.Serialize(new {frame_id = "world", lane_width_m = Width, points = Points.Select(p => new[] {p.X, p.Y}),
+            end_reason = EndReason, revision, path_id = PathId, start_s = StartS, events = Events.Select(e => new {type = e.Type, s = e.S})}));
+    }
+    // Atomic replace. A reader holding the file open makes the replace fail on Windows; retry briefly.
+    public static void Replace(string output, string text)
+    {
         string staging = output + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            File.WriteAllText(staging, JsonSerializer.Serialize(new {frame_id = "world", lane_width_m = Width, points = Points.Select(p => new[] {p.X, p.Y}),
-                end_reason = EndReason, revision, path_id = PathId, start_s = StartS, events = Events.Select(e => new {type = e.Type, s = e.S})}));
+            File.WriteAllText(staging, text);
             for (int attempt = 0; ; ++attempt)
             {
                 try {File.Move(staging, output, overwrite: true);break;}

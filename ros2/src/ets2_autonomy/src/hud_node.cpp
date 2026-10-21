@@ -14,6 +14,13 @@
 //   curve: lane stretches whose curve speed (lateral acceleration limit) is below the set
 //     speed, amber, with the lowest limit written there.
 //   status: text above the truck (the layout hides it: the indicators say the same).
+// - debug/mpc: the lateral MPC's plan for the rear point over 1.5 s (/ets2/drive/mpc_plan),
+//   to compare what it intends with what the truck then does (layout default: off).
+//   markings / junctions / signals: the map around the truck from the provider's scene file
+//     (path_file's .scene, about 40 m, read twice a second), grey background: lane dividers
+//     dashed, the divider between the directions a double line, road edges solid; prefab
+//     navigation curves faint; traffic lights as a pole and a head with a tick towards the
+//     traffic they face (positions only: the game reports no light state).
 // Foxglove's 3D panel toggles each namespace. A separate process, so presentation never
 // touches the 50 Hz control loop. Assistance state older than 0.3 s (standby, released,
 // paused) clears the road marks; the scene stays while GT arrives.
@@ -25,7 +32,10 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
+#include <nlohmann/json.hpp>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 
@@ -46,6 +56,51 @@ int main(int argc,char** argv) {
         const auto path_file=node->declare_parameter<std::string>("path_file","");
         std::array<hud::Points,2> sides; // left, right
         auto next_sides=Clock::now();
+        // The provider's map around the truck (Foxglove only), as LINE_LIST point pairs, read twice a second.
+        struct Light {double x,y,z,height;std::optional<double> heading;};
+        struct Scene {std::vector<geometry_msgs::msg::Point> lane,centre,edge,junction;std::vector<Light> lights;double x=0,y=0,radius=0;bool valid=false;} scene;
+        auto next_scene=Clock::now();
+        const auto read_scene=[](const std::string& file) {
+            Scene out;
+            std::ifstream input(file);
+            const auto data=nlohmann::json::parse(input);
+            if(data.at("frame_id")!="world") throw std::runtime_error("Scene must use ROS world coordinates");
+            out.x=data.at("center").at(0).get<double>();out.y=data.at("center").at(1).get<double>();out.radius=data.at("radius_m").get<double>();
+            const auto point=[](double x,double y,double z) {geometry_msgs::msg::Point p;p.x=x;p.y=y;p.z=z+.05;return p;};
+            for(const auto& line:data.at("lines")) {
+                std::vector<std::array<double,3>> q;
+                for(const auto& p:line.at("points")) q.push_back({p.at(0).get<double>(),p.at(1).get<double>(),p.at(2).get<double>()});
+                if(q.size()<2) continue;
+                const std::string kind=line.at("kind");
+                if(kind=="lane") {
+                    // 3 m dashes and gaps from the line's arc length on the road (s0), so they stay put as the file rolls.
+                    double s=line.value("s0",0.0);
+                    for(size_t i=0;i+1<q.size();++i) {
+                        const auto& a=q[i];const auto& b=q[i+1];
+                        const double l=std::hypot(b[0]-a[0],b[1]-a[1]);
+                        for(double u=0;u<l;) {
+                            const double phase=std::fmod(s+u,6.0),step=std::max(1e-3,std::min(l-u,phase<3?3-phase:6-phase));
+                            if(phase<3) for(const double v:{u,u+step}) out.lane.push_back(point(a[0]+(b[0]-a[0])*v/l,a[1]+(b[1]-a[1])*v/l,a[2]+(b[2]-a[2])*v/l));
+                            u+=step;
+                        }
+                        s+=l;
+                    }
+                    continue;
+                }
+                // The divider between the directions is a double line 0.25 m apart.
+                for(const double offset:kind=="centre"?std::vector<double>{-.125,.125}:std::vector<double>{0})
+                    for(size_t i=0;i+1<q.size();++i) for(const auto k:{i,i+1}) {
+                        const double dx=q[i+1][0]-q[i][0],dy=q[i+1][1]-q[i][1],l=std::max(1e-6,std::hypot(dx,dy));
+                        (kind=="edge"?out.edge:kind=="centre"?out.centre:out.junction).push_back(point(q[k][0]-offset*dy/l,q[k][1]+offset*dx/l,q[k][2]));
+                    }
+            }
+            for(const auto& light:data.at("signals")) {
+                const auto& p=light.at("position");
+                out.lights.push_back({p.at(0).get<double>(),p.at(1).get<double>(),p.at(2).get<double>(),light.value("height_m",0.0),light.contains("heading") && light["heading"].is_number()?std::optional<double>(light["heading"].get<double>()):std::nullopt});
+            }
+            out.valid=true;
+            return out;
+        };
         // Truck outline, from the last armed AssistState (the off messages carry none).
         double truck_front=5.3,truck_rear=-2.5;
         double trailer_yaw=0;Clock::time_point trailer_time{};
@@ -54,6 +109,8 @@ int main(int argc,char** argv) {
             [&](ets2_msgs::msg::AssistState::SharedPtr m){assist=std::move(m);assist_time=Clock::now();});
         const auto points=[](const nav_msgs::msg::Path& m) {hud::Points p;for(const auto& q:m.poses) p.push_back({q.pose.position.x,q.pose.position.y});return p;};
         auto ps=node->create_subscription<nav_msgs::msg::Path>("/ets2/drive/plan",rclcpp::QoS(1).best_effort(),[&](nav_msgs::msg::Path::SharedPtr m){plan=points(*m);});
+        hud::Points mpc;
+        auto ms=node->create_subscription<nav_msgs::msg::Path>("/ets2/drive/mpc_plan",rclcpp::QoS(1).best_effort(),[&](nav_msgs::msg::Path::SharedPtr m){mpc=points(*m);});
         auto ls=node->create_subscription<nav_msgs::msg::Path>("/ets2/drive/lane",rclcpp::QoS(1),[&](nav_msgs::msg::Path::SharedPtr m){lane=points(*m);});
         auto ts=node->create_subscription<ets2_msgs::msg::TrafficState>("/ets2/ground_truth/traffic",rclcpp::QoS(1),
             [&](ets2_msgs::msg::TrafficState::SharedPtr m){traffic=std::move(m);traffic_time=Clock::now();});
@@ -164,6 +221,45 @@ int main(int argc,char** argv) {
                 const bool waiting=!assist->lane_change_active && assist->lane_change_request==side && assist->lane_source==0;
                 line("scene/lanes",sides[k],waiting?.12:.05,0,waiting?amber:std::array<float,4>{.6f,.65f,.7f,.25f},ez);
             }
+            // The map around the truck: lane markings, junction curves, traffic lights (grey: background).
+            if(!path_file.empty() && now>=next_scene) {
+                next_scene=now+500ms;
+                const auto dot=path_file.rfind('.');
+                const auto file=path_file.substr(0,dot)+".scene"+(dot==std::string::npos?"":path_file.substr(dot));
+                try {scene=std::filesystem::exists(file)?read_scene(file):Scene{};}
+                catch(const std::exception&) {} // a file being replaced: keep the last scene
+            }
+            // Not when the provider stopped following the truck (stale file).
+            if(scene.valid && std::hypot(scene.x-ex,scene.y-ey)<=scene.radius+30) {
+                const auto lines=[&](const std::string& ns,const std::vector<geometry_msgs::msg::Point>& pts,double width,std::array<float,4> c) {
+                    if(pts.size()<2) return;
+                    auto m=marker(ns,Marker::LINE_LIST);m.scale.x=width;colour(m,c[0],c[1],c[2],c[3]);m.points=pts;
+                    array.markers.push_back(std::move(m));
+                };
+                lines("scene/markings",scene.lane,.12,{.75f,.78f,.8f,.45f});
+                lines("scene/markings",scene.centre,.1,{.85f,.87f,.9f,.6f});
+                lines("scene/markings",scene.edge,.15,{.85f,.87f,.9f,.7f});
+                lines("scene/junctions",scene.junction,.06,{.6f,.65f,.7f,.2f});
+                if(!scene.lights.empty()) {
+                    // Pole (light on the ground or on a pole head) or an overhead head alone; the tick
+                    // points from the head towards the traffic it faces.
+                    auto poles=marker("scene/signals",Marker::LINE_LIST);poles.scale.x=.15;colour(poles,.7f,.72f,.75f,.8f);
+                    auto heads=marker("scene/signals",Marker::CUBE_LIST);heads.scale.x=heads.scale.y=.45;heads.scale.z=1;colour(heads,.7f,.72f,.75f,.9f);
+                    for(const auto& l:scene.lights) {
+                        const bool overhead=l.height>=4.5;
+                        const double top=l.z+(overhead?l.height:std::max(l.height,3.2));
+                        geometry_msgs::msg::Point p;p.x=l.x;p.y=l.y;
+                        if(!overhead) {p.z=l.z;poles.points.push_back(p);p.z=top-.5;poles.points.push_back(p);}
+                        p.z=top;heads.points.push_back(p);
+                        if(l.heading) {
+                            poles.points.push_back(p);
+                            p.x-=std::cos(*l.heading);p.y-=std::sin(*l.heading);poles.points.push_back(p);
+                        }
+                    }
+                    if(!poles.points.empty()) array.markers.push_back(std::move(poles));
+                    array.markers.push_back(std::move(heads));
+                }
+            }
             // Traffic: the lead green, the vehicle holding a lane change back amber, others grey.
             if(traffic && now-traffic_time<=500ms) for(size_t i=0;i<traffic->id.size();++i) {
                 const double x=traffic->x[i],y=traffic->y[i];
@@ -200,6 +296,13 @@ int main(int argc,char** argv) {
                     array.markers.push_back(std::move(m));
                 }
             } catch(const std::exception&) {}
+            // The MPC's plan, with a dot every 0.1 s.
+            if(assisted && mpc.size()>=2) {
+                line("debug/mpc",mpc,.1,0,{.4f,.75f,1,.9f},ez+.1);
+                auto dots=marker("debug/mpc",Marker::SPHERE_LIST);dots.scale.x=dots.scale.y=dots.scale.z=.3;colour(dots,.4f,.75f,1,.9f);
+                for(const auto& [x,y]:mpc) {geometry_msgs::msg::Point q;q.x=x;q.y=y;q.z=ez+.1;dots.points.push_back(q);}
+                array.markers.push_back(std::move(dots));
+            }
             // Status above the truck.
             if(assisted && (assist->acc_active || assist->lcc_state)) {
                 const auto& a=*assist;

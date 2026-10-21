@@ -7,7 +7,7 @@ foxglove_bridge:
       - '^/ets2/ground_truth/.*$'
       - '^/ets2/vehicle/(state|actuation|powertrain)$'
       - '^/ets2/hud/markers$'
-      - '^/ets2/drive/(assist|lane|plan|state|command)$'
+      - '^/ets2/drive/(assist|lane|plan|mpc_plan|state|command)$'
       - '^/ets2/(imu|wheels|gnss|sensors)/.*$'
       - '^/ets2/frame_info$'
       - '^/ets2/frame_info/exposure$'

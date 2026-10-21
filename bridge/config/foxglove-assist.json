@@ -92,6 +92,15 @@
             "scene/curve": {
               "visible": true
             },
+            "scene/markings": {
+              "visible": true
+            },
+            "scene/junctions": {
+              "visible": true
+            },
+            "scene/signals": {
+              "visible": true
+            },
             "debug/mpc": {
               "visible": false
             },
