@@ -7,6 +7,7 @@
 #include <ets2_msgs/msg/drive_command.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 #include <mutex>
 
 using namespace std::chrono_literals;
@@ -30,9 +31,9 @@ uint64_t steady_ns(std::chrono::nanoseconds offset=0ns) {
 
 TEST(RosEndpoint,PublishesDemandsAndForwardsDrive) {
     FakeCore core;
-    std::mutex paths_mutex;std::vector<bridge::OverlayPath> paths;
+    std::mutex paths_mutex;std::vector<bridge::OverlayMarks> paths;
     bridge::RosEndpoint endpoint(0,nullptr,[&](json request){return core(std::move(request));},
-        [&](const bridge::OverlayPath& path){std::lock_guard lock(paths_mutex);paths.push_back(path);});
+        [&](const bridge::OverlayMarks& marks){std::lock_guard lock(paths_mutex);paths.push_back(marks);});
     auto node=std::make_shared<rclcpp::Node>("ros_endpoint_test");
 
     // A subscription becomes sensor demand within the 200 ms poll.
@@ -119,14 +120,35 @@ TEST(RosEndpoint,PublishesDemandsAndForwardsDrive) {
     {
         std::lock_guard lock(paths_mutex);
         EXPECT_EQ(paths.front().frame,"base_link");EXPECT_EQ(paths.front().stamp_us,12345678u);
-        ASSERT_EQ(paths.front().points.size(),2u);EXPECT_EQ(paths.front().points[1][0],80);
-        EXPECT_FLOAT_EQ(paths.front().width_m,3.5f);EXPECT_EQ(paths.front().ttl_ms,300u);
+        ASSERT_EQ(paths.front().strokes.size(),1u);
+        ASSERT_EQ(paths.front().strokes[0].points.size(),2u);EXPECT_EQ(paths.front().strokes[0].points[1][0],80);
+        EXPECT_FLOAT_EQ(paths.front().strokes[0].width_m,3.5f);EXPECT_EQ(paths.front().ttl_ms,300u);
     }
     // An empty path is a clear request: it reaches the sink (any frame) instead of being rejected.
     const auto rejected=endpoint.diagnostics().at("rejected_overlay_paths").get<uint64_t>();
     path.header.frame_id="world";path.poses.clear();
-    ASSERT_TRUE(spin_until(node,[&]{overlay->publish(path);std::lock_guard lock(paths_mutex);return paths.back().points.empty();}));
+    ASSERT_TRUE(spin_until(node,[&]{overlay->publish(path);std::lock_guard lock(paths_mutex);return paths.back().strokes.empty();}));
     EXPECT_EQ(endpoint.diagnostics().at("rejected_overlay_paths").get<uint64_t>(),rejected);
+    // HUD marks: each LINE_STRIP marker is a stroke (scale.x road width, scale.y screen width
+    // in pixels, the half of which is the stroke's minimum); other types are ignored.
+    auto marks=node->create_publisher<visualization_msgs::msg::MarkerArray>("/ets2/overlay/marks",rclcpp::QoS(1).best_effort());
+    visualization_msgs::msg::MarkerArray array;
+    for(int i=0;i<3;++i) {
+        visualization_msgs::msg::Marker m;m.header.frame_id="world";m.header.stamp.sec=20;
+        m.type=i==2?visualization_msgs::msg::Marker::SPHERE:visualization_msgs::msg::Marker::LINE_STRIP;m.action=visualization_msgs::msg::Marker::ADD;
+        m.scale.x=i?.4:.2;m.scale.y=i?8:4;m.color.r=1;m.color.g=i?.6f:1;m.color.b=1;m.color.a=.7f;m.pose.orientation.w=1;m.pose.position.x=i?10:0;
+        m.points.resize(2);m.points[1].y=i?3:0;m.points[1].x=i?0:50;
+        array.markers.push_back(m);
+    }
+    ASSERT_TRUE(spin_until(node,[&]{marks->publish(array);std::lock_guard lock(paths_mutex);return paths.back().strokes.size()==2;}));
+    {
+        std::lock_guard lock(paths_mutex);const auto& m=paths.back();
+        EXPECT_EQ(m.frame,"world");EXPECT_EQ(m.stamp_us,20000000u);
+        EXPECT_FLOAT_EQ(m.strokes[1].width_m,.4f);EXPECT_FLOAT_EQ(m.strokes[1].min_px,4);EXPECT_FLOAT_EQ(m.strokes[1].rgba[1],.6f);
+        EXPECT_EQ(m.strokes[1].points[0][0],10);EXPECT_EQ(m.strokes[1].points[1][1],3); // marker pose applied
+    }
+    array.markers.resize(1);array.markers[0].action=visualization_msgs::msg::Marker::DELETEALL;
+    ASSERT_TRUE(spin_until(node,[&]{marks->publish(array);std::lock_guard lock(paths_mutex);return paths.back().strokes.empty();}));
 }
 
 int main(int argc,char** argv) {

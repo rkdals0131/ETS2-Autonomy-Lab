@@ -27,18 +27,20 @@ private:
 // base_link from an SDK state sample (engine.vehicle.pose_physics, Tier 1).
 std::optional<BasePose> engine_base_pose(const json& state,const V& base);
 inline constexpr uint64_t overlay_max_age_us=500000;
-// ROS path -> OT_Overlay content in SCS world (X = x, Z = -y, Y = z). base_link
-// points use the pose at the path stamp; a path older than 500 ms than the
-// newest pose, or with no pose, is written invalid. Long paths are cut at
-// 200 m and thinned to the block's 256 points.
-ot::OverlayContent overlay_content(const OverlayPath& path,const PoseHistory& history,std::string* reason=nullptr);
+// ROS marks -> OT_Overlay content in SCS world (X = x, Z = -y, Y = z). base_link
+// points use the pose at the stamp; marks older than 500 ms than the newest pose,
+// or with no pose, are written invalid. Each stroke is cut at 200 m; strokes beyond
+// the block's 8 are dropped and all are thinned together to its 256 points (at
+// least two each).
+ot::OverlayContent overlay_content(const OverlayMarks& marks,const PoseHistory& history,std::string* reason=nullptr);
 // Writer side of Local\OT_Overlay; the core creates the mapping on overlay enable.
 class OverlayWriter {
 public:
     explicit OverlayWriter(std::wstring name=L"Local\\OT_Overlay"):name_(std::move(name)) {}
     ~OverlayWriter();
     OverlayWriter(const OverlayWriter&)=delete;
-    // False while the core has not created the mapping yet.
+    // False while the core has not created the mapping yet, or when its ABI differs (a core
+    // older or newer than this relay): the HUD is then off, the relay keeps running.
     bool write(const ot::OverlayContent& content);
     void clear();
     json status();
@@ -48,6 +50,6 @@ private:
     std::mutex mutex_;
     HANDLE file_=nullptr;
     ot::OverlayBlock* block_=nullptr;
-    uint64_t written_=0,unmapped_=0,invalid_=0;
+    uint64_t written_=0,unmapped_=0,invalid_=0,abi_mismatch_=0;
 };
 }

@@ -11,18 +11,25 @@ void check(HRESULT hr,const char* operation) {
 }
 struct Constants {
     std::array<float,16> inverse_projection,eye_to_world;
-    std::array<float,4> camera,depth,mask_u,mask_v,road,color,target,bounds;
+    std::array<float,4> camera,depth,mask_u,mask_v,road,unused,target,bounds;
 };
 static_assert(sizeof(Constants)==256);
 // The path itself for the pixel shader's exact distance (b1): the mask's 25 cm texels made a
 // 0.6 m ribbon visibly stepped. Points relative to the mask origin, with their arc length.
 struct PathConstants {
-    std::array<float,4> info; // point count, half width (m), fade start, fade end (m of arc)
-    std::array<std::array<float,4>,overlay_max_points> points;
+    std::array<float,4> info; // point count, stroke count, fade start, fade end (m of arc)
+    std::array<std::array<float,4>,overlay_max_strokes> shape,color; // first, count, half width, minimum half px; rgba
+    std::array<std::array<float,4>,overlay_max_points> points;       // x, z, arc from the stroke start
 };
 static_assert(sizeof(PathConstants)%16==0);
 // overlay_decal.hlsl: the most a foreshortened mark widens on the road (its minimum pixel thickness).
 constexpr double max_half_m=4;
+// Widest half width a stroke can be drawn with (the shader widens strokes with a pixel minimum).
+double widest_half(const OverlayContent& c) {
+    double result=0;
+    for(uint32_t i=0;i<c.stroke_count;++i) result=std::max(result,c.strokes[i].min_px>0?std::max<double>(c.strokes[i].width_m/2,max_half_m):c.strokes[i].width_m/2);
+    return result;
+}
 // Depth formats the main DSV may use: typeless storage and the depth-plane view.
 bool depth_formats(DXGI_FORMAT format,DXGI_FORMAT& typeless,DXGI_FORMAT& view) {
     if(format==DXGI_FORMAT_D32_FLOAT_S8X24_UINT || format==DXGI_FORMAT_R32G8X24_TYPELESS) {typeless=DXGI_FORMAT_R32G8X24_TYPELESS;view=DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;}
@@ -63,13 +70,14 @@ void OverlayDecal::run() noexcept {
             const auto options=options_.load();
             const auto result=overlay_read(block_,seen,*content,generation);
             if(result==-1) {++torn_;continue;}
-            if(result==-2) {++rejected_;seen=generation;content->valid=false;content->point_count=0;}
+            if(result==-2) {++rejected_;seen=generation;content->valid=false;content->point_count=content->stroke_count=0;}
             if(result==0 && options==rastered) continue;
             if(result==0 && current) *content=current->content;
             const auto begin=qpc_now();
             auto frame=std::make_shared<Frame>();
             frame->serial=++serial_;frame->generation=result==0?seen:generation;frame->content=*content;
-            frame->mask=overlay::rasterize(content->points,content->point_count,content->width_m,options->fade_start,options->fade_end);
+            // The mask (origin, axis, extent) over the whole point pool; the shader draws each stroke.
+            frame->mask=overlay::rasterize(content->points,content->point_count,std::max(2*widest_half(*content),.1),options->fade_start,options->fade_end);
             frame->raster_qpc=qpc_now();
             raster_ticks_+=frame->raster_qpc-begin;++rasters_;
             if(result!=0) seen=generation;
@@ -173,7 +181,7 @@ void OverlayDecal::draw(ID3D11DeviceContext* context,ID3D11RenderTargetView* tar
         const auto frame=frame_.load();
         if(!frame) {++skips_[no_path];return;}
         const auto& path=frame->content;
-        if(!path.valid || frame->mask.points_used<2) {++skips_[invalid];return;}
+        if(!path.valid || !path.stroke_count || path.point_count<2) {++skips_[invalid];return;}
         if(path.ttl_ms && sdk_time_us>path.stamp_us && sdk_time_us-path.stamp_us>path.ttl_ms*1000) {++skips_[expired];return;}
         if(!camera.available) {++skips_[Skip::camera];return;}
         if(!target) {++skips_[Skip::target];return;}
@@ -192,18 +200,23 @@ void OverlayDecal::draw(ID3D11DeviceContext* context,ID3D11RenderTargetView* tar
         if(desc.SampleDesc.Count!=1) {++skips_[unsupported];return;}
         prepare_depth(context,depth,depth_desc);
         const double width=desc.Width,height=desc.Height;
-        const auto bounds=overlay::path_bounds(*view,path.points,frame->mask.points_used,path.ground_y,
-            std::max(double(path.width_m)/2,max_half_m)+overlay::edge_m,options->z_tolerance,options->slope);
+        const auto bounds=overlay::path_bounds(*view,path.points,path.point_count,path.ground_y,
+            widest_half(path)+overlay::edge_m,options->z_tolerance,options->slope);
         if(!bounds) {++skips_[offscreen];return;}
         if(uploaded_serial_!=frame->serial) {
             context->UpdateSubresource(mask_.Get(),0,nullptr,frame->mask.texels.data(),overlay::mask_width*2,0);
             auto p=std::make_unique<PathConstants>();
-            const auto used=std::min<uint32_t>(frame->mask.points_used,overlay_max_points);
-            p->info={float(used),float(path.width_m/2),float(options->fade_start),float(options->fade_end)};
-            double s=0;
-            for(uint32_t i=0;i<used;++i) {
-                if(i) s+=std::hypot(path.points[i][0]-path.points[i-1][0],path.points[i][1]-path.points[i-1][1]);
-                p->points[i]={float(path.points[i][0]-frame->mask.origin[0]),float(path.points[i][1]-frame->mask.origin[1]),float(s),0};
+            const auto used=std::min<uint32_t>(path.point_count,overlay_max_points);
+            p->info={float(used),float(path.stroke_count),float(options->fade_start),float(options->fade_end)};
+            for(uint32_t k=0;k<path.stroke_count;++k) {
+                const auto& stroke=path.strokes[k];
+                p->shape[k]={float(stroke.first),float(stroke.count),stroke.width_m/2,stroke.min_px};
+                p->color[k]={stroke.rgba[0],stroke.rgba[1],stroke.rgba[2],stroke.rgba[3]};
+                double s=0;
+                for(uint32_t i=stroke.first;i<stroke.first+stroke.count && i<used;++i) {
+                    if(i>stroke.first) s+=std::hypot(path.points[i][0]-path.points[i-1][0],path.points[i][1]-path.points[i-1][1]);
+                    p->points[i]={float(path.points[i][0]-frame->mask.origin[0]),float(path.points[i][1]-frame->mask.origin[1]),float(s),0};
+                }
             }
             context->UpdateSubresource(path_constants_.Get(),0,nullptr,p.get(),0,0);
             uploaded_serial_=frame->serial;
@@ -220,7 +233,6 @@ void OverlayDecal::draw(ID3D11DeviceContext* context,ID3D11RenderTargetView* tar
         const auto a=frame->mask.affine();
         k.mask_u={float(a[0]),float(a[1]),float(a[2]),0};k.mask_v={float(a[3]),float(a[4]),float(a[5]),0};
         k.road={float(options->z_tolerance),float(options->slope),float(options->normal_min),0};
-        k.color={path.rgba[0],path.rgba[1],path.rgba[2],path.rgba[3]};
         k.target={float(width),float(height),float(1/width),float(1/height)};
         k.bounds={float((*bounds)[0]),float((*bounds)[1]),float((*bounds)[2]),float((*bounds)[3])};
         context->UpdateSubresource(constants_.Get(),0,nullptr,&k,0,0);
@@ -340,7 +352,8 @@ json OverlayDecal::status() {
         const auto& p=frame->content;
         result["path"]={{"generation",frame->generation},{"valid",p.valid},{"point_count",p.point_count},{"points_used",frame->mask.points_used},
             {"length_m",frame->mask.length},{"clipped",frame->mask.clipped},{"stamp_us",p.stamp_us},{"ttl_ms",p.ttl_ms},
-            {"width_m",p.width_m},{"rgba",p.rgba},{"ground_y",std::isfinite(p.ground_y)?json(p.ground_y):json(nullptr)},
+            {"strokes",[&]{json strokes=json::array();for(uint32_t i=0;i<p.stroke_count;++i) strokes.push_back({{"first",p.strokes[i].first},{"count",p.strokes[i].count},
+                {"width_m",p.strokes[i].width_m},{"min_px",p.strokes[i].min_px},{"rgba",p.strokes[i].rgba}});return strokes;}()},{"ground_y",std::isfinite(p.ground_y)?json(p.ground_y):json(nullptr)},
             {"mask_origin_xz",frame->mask.origin},{"mask_axis_xz",frame->mask.axis}};
     }
     AcquireSRWLockShared(&state_lock_);

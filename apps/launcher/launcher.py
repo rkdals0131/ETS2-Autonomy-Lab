@@ -97,9 +97,17 @@ class StopEvent:
 
 
 def foxglove_listening():
-    with socket.socket() as probe:
-        probe.settimeout(0.2)
-        return probe.connect_ex(("127.0.0.1", FOXGLOVE_PORT)) == 0
+    """A LISTEN socket on the Foxglove port, from the TCP table: a connect probe made the
+    server log "handshake failed" every second (2026-10-21)."""
+    iphlpapi = C.WinDLL("iphlpapi")
+    size = W.DWORD(0)
+    iphlpapi.GetExtendedTcpTable(None, C.byref(size), False, 2, 3, 0)  # AF_INET, TCP_TABLE_OWNER_PID_LISTENER
+    buffer = C.create_string_buffer(size.value)
+    if iphlpapi.GetExtendedTcpTable(buffer, C.byref(size), False, 2, 3, 0) != 0:
+        return False
+    count = C.cast(buffer, C.POINTER(W.DWORD))[0]
+    rows = C.cast(C.addressof(buffer) + 4, C.POINTER(W.DWORD * 6))  # state, local addr, local port, remote addr, remote port, pid
+    return any(socket.ntohs(rows[i][2] & 0xFFFF) == FOXGLOVE_PORT for i in range(count))
 
 
 
@@ -156,7 +164,7 @@ class Controller:
         self.state = {"phase": "stopped", "message": "중지됨", "game": "확인 중", "relay": {}, "foxglove": False,
                       "mode": None, "assist": "off", "assist_note": "", "log_dir": "",
                       "recording": {"phase": "idle"}, "recording_error": ""}
-        self.relay = self.foxglove = self.drive = self.follow = self.lcc_change = self.job = None
+        self.relay = self.foxglove = self.drive = self.follow = self.lcc_change = self.job = self.hud = None
         self.relay_stop = self.drive_stop_event = None
         self.relay_restart = False  # the game session changed: start a new relay once the game is ready
         self.recording = self.session_log = None
@@ -301,6 +309,8 @@ class Controller:
         self.drive = self.spawn(["ros2", "run", "ets2_autonomy", "drive_speed", "--stop-event", self.drive_stop_event.name,
                                  "--ros-args", "-p", "arm:=true", "-p", "engage:=cruise", "-p", "path_file:=" + str(output),
                                  "-p", "acc_enabled:=true", "-p", "lcc_enabled:=" + str(self.lcc).lower()], "drive")
+        # HUD marks from the assistance state, apart from the control loop (ends with the job).
+        self.hud = self.spawn(["ros2", "run", "ets2_autonomy", "hud"], "hud")
         self.update(assist="standby")
 
     def _apply_lcc(self):
@@ -361,7 +371,7 @@ class Controller:
         finally:
             if self.job:
                 self.job.close()  # Foxglove, provider and anything left in the job end here.
-            for process in (self.relay, self.foxglove, self.follow, self.lcc_change):
+            for process in (self.relay, self.foxglove, self.follow, self.lcc_change, self.hud):
                 if process:
                     try:
                         process.wait(timeout=3)
@@ -369,7 +379,7 @@ class Controller:
                         errors.append(f"PID {process.pid} 종료 확인 실패")
             if self.relay_stop:
                 self.relay_stop.close()
-            self.relay = self.foxglove = self.follow = self.lcc_change = self.job = self.relay_stop = None
+            self.relay = self.foxglove = self.follow = self.lcc_change = self.job = self.relay_stop = self.hud = None
         for reader in self.readers:
             reader.join(timeout=2)  # The last lines of each child reach its log file.
         self.readers = []
@@ -386,7 +396,7 @@ class Controller:
         while not self.lines.empty():
             source, pid, line = self.lines.get()
             process = {"relay": self.relay, "foxglove": self.foxglove, "follow": self.follow,
-                       "drive": self.drive, "lcc": self.lcc_change}.get(source)
+                       "drive": self.drive, "lcc": self.lcc_change, "hud": self.hud}.get(source)
             if not process or process.pid != pid:
                 continue
             if line is None:
@@ -410,6 +420,9 @@ class Controller:
             if source == "lcc" and line.startswith("Set parameter successful"):
                 self.lcc_confirmed = True
             self.log(source + ": " + line, persist=False)
+        if self.hud and self.hud.poll() is not None:
+            self.log(f"hud: HUD 노드 종료 (code={self.hud.returncode}), 게임 화면 표시가 멈춥니다. hud.log를 확인해 주세요.")
+            self.hud = None
         if self.follow and self.follow.poll() is not None:
             self.log(f"follow: 지도 provider 종료 (code={self.follow.returncode}), LCC 차로가 더 늘지 않습니다. follow.log를 확인해 주세요.")
             self.follow = None

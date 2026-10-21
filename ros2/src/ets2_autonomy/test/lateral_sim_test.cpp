@@ -10,6 +10,7 @@
 #include "control/kinematic_axles.hpp"
 #include "control/lcc_mpc.hpp"
 #include "control/hud_path.hpp"
+#include "control/hud_marks.hpp"
 #include "control/lane_merge.hpp"
 #include "control/curve_speed.hpp"
 #include <gtest/gtest.h>
@@ -459,6 +460,42 @@ TEST(Hud,ArcLaneAndLeadBar) {
     LanePath lane(PathBuilder{}.add(30,0).points,3.5);
     const auto ribbon=hud::lane(lane,10,100);
     EXPECT_NEAR(ribbon.front()[0],10,1e-9);EXPECT_NEAR(ribbon.back()[0],lane.points.back().s,1e-9);
+}
+
+TEST(Hud,MarksForEachState) {
+    hud::Composer composer;
+    hud::Inputs in;in.ego_yaw=0;in.lane_width=3.5;
+    EXPECT_TRUE(composer.update(in,.033).empty());                          // off: nothing
+    in.lcc_steering=true;in.plan={{6,0},{30,0},{60,0}};
+    auto marks=composer.update(in,.033);
+    ASSERT_EQ(marks.size(),1u);EXPECT_DOUBLE_EQ(marks[0].width_m,.2);       // LCC: the thin ribbon
+    // ACC without a lead: two brackets at the gap, apart in the middle.
+    in.acc=true;in.mark=1;in.mark_x=40;in.mark_heading=0;
+    marks=composer.update(in,.033);
+    ASSERT_EQ(marks.size(),3u);
+    const auto& right=marks[1].points;const auto& left=marks[2].points;          // ROS y: left positive
+    EXPECT_NEAR(right.front()[1],-1.5,1e-9);EXPECT_NEAR(left.back()[1],1.5,1e-9);    // lane edges less 0.25 m
+    EXPECT_GT(left.front()[1]-right.back()[1],1.5);                                  // an opening in the middle
+    // A lead: the brackets slide to it and close into one bar within a quarter second.
+    in.mark=2;in.mark_x=30;
+    marks=composer.update(in,.1);
+    EXPECT_EQ(marks.size(),3u);EXPECT_GT(composer.join(),0);EXPECT_LT(composer.join(),1);
+    for(int i=0;i<10;++i) marks=composer.update(in,.033);
+    ASSERT_EQ(marks.size(),2u);EXPECT_NEAR(marks[1].points[0][0],30,1e-3);EXPECT_NEAR(marks[1].points[0][1],-1.5,1e-9);
+    // Braking: amber, then red; the driver's throttle fades the marks.
+    in.accel_target=-1.5;EXPECT_FLOAT_EQ(composer.update(in,.033)[1].rgba[2],hud::amber[2]);
+    in.accel_target=-3;EXPECT_FLOAT_EQ(composer.update(in,.033)[1].rgba[1],hud::red[1]);
+    in.accel_target=0;in.driver_throttle=true;EXPECT_LT(composer.update(in,.033)[1].rgba[3],.4f);
+    in.driver_throttle=false;
+    // A lane change to the left waiting for a gap: dashes one lane width left, 8-26 m along the plan.
+    in.change_request=-1;
+    marks=composer.update(in,.033);
+    ASSERT_EQ(marks.size(),5u);
+    for(size_t i=2;i<5;++i) {EXPECT_NEAR(marks[i].points.front()[1],3.5,1e-9);EXPECT_NEAR(marks[i].points.back()[0]-marks[i].points.front()[0],2.5,.6);}
+    EXPECT_NEAR(marks[2].points.front()[0],14,1e-9);   // 8 m along a plan that starts at x = 6
+    // ACC off: its marks go and the animation restarts.
+    in.acc=false;in.change_request=0;
+    EXPECT_EQ(composer.update(in,.033).size(),1u);EXPECT_EQ(composer.join(),0);
 }
 
 TEST(KinematicAxles,TagAxleMovesTheRearPoint) {

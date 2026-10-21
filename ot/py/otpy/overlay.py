@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .client import _close, _map, _open_mapping, _unmap
 
-_BLOCK_BYTES = 4224  # sizeof(ot::OverlayBlock), ABI 1
+_BLOCK_BYTES = 4416  # sizeof(ot::OverlayBlock), ABI 2 (strokes)
 _MAX_POINTS = 256
 
 
@@ -38,7 +38,7 @@ class OverlayBlock:
             self._view = _map(self._handle, 0xF001F, 0, 0, _BLOCK_BYTES)
             if not self._view:
                 raise C.WinError(C.get_last_error())
-            if C.string_at(self._view, 8) != b"OTOVL01\0":
+            if C.string_at(self._view, 8) != b"OTOVL02\0":
                 raise ValueError("Unsupported Local\\OT_Overlay ABI")
         except BaseException:
             self.close()

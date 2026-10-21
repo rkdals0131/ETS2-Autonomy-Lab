@@ -39,3 +39,12 @@ float64 lead_gap_m
 float64 lead_speed_mps
 float64 mass_kg
 float64 grade
+# HUD inputs (hud_node): the ACC mark, 0 none, 1 the gap ACC keeps without a lead, 2 the
+# lead's rear bumper; its ROS world position and the lane heading there. The lane width, and
+# the driver's throttle overriding ACC (ACC waits). LCC's path is /ets2/drive/plan.
+uint8 acc_mark
+float64 acc_mark_x
+float64 acc_mark_y
+float64 acc_mark_heading
+float64 lane_width_m
+bool driver_throttle

@@ -83,9 +83,11 @@ int main(int argc,char** argv) {
         // SDK pose history; the core draws it (docs/24).
         PoseHistory poses;OverlayWriter overlay_writer;
         std::mutex overlay_mutex;std::string overlay_reason;
-        RosEndpoint ros(argc,argv,owned,[&](const OverlayPath& path) {
+        RosEndpoint ros(argc,argv,owned,[&](const OverlayMarks& marks) {
+            // The ROS executor thread: nothing may escape (it would end the relay).
             std::string reason;
-            overlay_writer.write(overlay_content(path,poses,&reason));
+            try {overlay_writer.write(overlay_content(marks,poses,&reason));}
+            catch(const std::exception& e) {reason=std::string("overlay write failed: ")+e.what();}
             std::lock_guard lock(overlay_mutex);overlay_reason=std::move(reason);
         });
         const auto run=[&](double remaining) {

@@ -19,8 +19,9 @@ std::unique_ptr<bridge::PoseHistory> history(std::initializer_list<std::pair<uin
     for(const auto& [stamp,sample]:samples) h->push(stamp,*bridge::engine_base_pose(sample,base));
     return h;
 }
-bridge::OverlayPath path(std::string frame,uint64_t stamp,std::vector<V> points) {
-    bridge::OverlayPath p;p.frame=std::move(frame);p.stamp_us=stamp;p.points=std::move(points);return p;
+// One stroke, like a /ets2/overlay/path message.
+bridge::OverlayMarks path(std::string frame,uint64_t stamp,std::vector<V> points) {
+    bridge::OverlayMarks p;p.frame=std::move(frame);p.stamp_us=stamp;p.strokes.push_back({std::move(points)});return p;
 }
 }
 
@@ -94,10 +95,34 @@ TEST(OverlayWriter,WorldPathsAndLimits) {
     EXPECT_EQ(cut.point_count,201u);
 }
 
+TEST(OverlayWriter,StrokesShareThePointPool) {
+    const auto h=history({{1000000,state({0,0,0},0)}});
+    // A long lane ribbon and a two-point bar: both kept, the bar whole, together 256 points.
+    bridge::OverlayMarks marks;marks.frame="world";
+    std::vector<V> ribbon;for(int i=0;i<1000;++i) ribbon.push_back({i*.1,0,0});
+    marks.strokes.push_back({ribbon,.2f,1,{1,1,1,.6f}});
+    marks.strokes.push_back({{{50,-1.6,0},{50,1.6,0}},.4f,2,{1,.6f,.1f,.8f}});
+    const auto c=bridge::overlay_content(marks,*h);
+    ASSERT_TRUE(c.valid);ASSERT_EQ(c.stroke_count,2u);
+    EXPECT_LE(c.point_count,ot::overlay_max_points);EXPECT_GE(c.point_count,250u);
+    EXPECT_EQ(c.strokes[0].first,0u);EXPECT_EQ(c.strokes[1].first,c.strokes[0].count);EXPECT_EQ(c.strokes[1].count,2u);
+    EXPECT_EQ(c.strokes[0].first+c.strokes[0].count+c.strokes[1].count,c.point_count);
+    EXPECT_FLOAT_EQ(c.strokes[1].width_m,.4f);EXPECT_FLOAT_EQ(c.strokes[1].min_px,2);EXPECT_FLOAT_EQ(c.strokes[1].rgba[1],.6f);
+    EXPECT_DOUBLE_EQ(c.points[c.strokes[1].first][1],1.6); // ROS y -> SCS -Z
+    // No strokes clears; a stroke without width is invalid; strokes past 8 are dropped.
+    std::string reason;
+    EXPECT_FALSE(bridge::overlay_content(bridge::OverlayMarks{"world"},*h,&reason).valid);EXPECT_NE(reason.find("empty"),std::string::npos);
+    marks.strokes[1].width_m=0;EXPECT_FALSE(bridge::overlay_content(marks,*h).valid);
+    bridge::OverlayMarks many;many.frame="world";
+    for(int i=0;i<10;++i) many.strokes.push_back({{{0,double(i),0},{1,double(i),0}}});
+    EXPECT_EQ(bridge::overlay_content(many,*h).stroke_count,ot::overlay_max_strokes);
+}
+
 TEST(OverlayWriter,WritesTheSharedBlock) {
     const std::wstring name=L"Local\\OT_Overlay_test_"+std::to_wstring(GetCurrentProcessId());
     bridge::OverlayWriter writer(name);
-    auto c=std::make_unique<ot::OverlayContent>();c->valid=true;c->point_count=2;c->width_m=3.5f;c->stamp_us=42;
+    auto c=std::make_unique<ot::OverlayContent>();c->valid=true;c->point_count=2;c->stamp_us=42;
+    c->stroke_count=1;c->strokes[0]={0,2,3.5f,0,{1,1,1,.5f}};
     c->points[1][0]=1;c->points[1][1]=-1;
     EXPECT_FALSE(writer.write(*c)); // the core has not created it yet
     bridge::Handle file(CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,sizeof(ot::OverlayBlock),name.c_str()));

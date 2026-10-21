@@ -6,6 +6,8 @@
 #include <ets2_msgs/msg/overlay_style.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
+#include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <condition_variable>
@@ -26,8 +28,9 @@ struct RosEndpoint::Impl {
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr capture_service;
     rclcpp::Service<ets2_msgs::srv::DriveControl>::SharedPtr drive_service;
     rclcpp::Subscription<ets2_msgs::msg::DriveCommand>::SharedPtr drive_commands;
-    // HUD path (docs/24): forwarded to the relay's pose transform and shared memory.
-    PathSink overlay_sink;
+    // HUD marks (docs/24): forwarded to the relay's pose transform and shared memory.
+    MarksSink overlay_sink;
+    rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr overlay_marks;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr overlay_paths;
     rclcpp::Subscription<ets2_msgs::msg::OverlayStyle>::SharedPtr overlay_styles;
     std::optional<ets2_msgs::msg::OverlayStyle> overlay_style; // executor thread only
@@ -51,7 +54,7 @@ struct RosEndpoint::Impl {
     std::jthread spin,forward;
 };
 
-RosEndpoint::RosEndpoint(int argc,char** argv,Control control,PathSink overlay):impl_(std::make_unique<Impl>()) {
+RosEndpoint::RosEndpoint(int argc,char** argv,Control control,MarksSink overlay):impl_(std::make_unique<Impl>()) {
     auto& m=*impl_;m.control=std::move(control);m.overlay_sink=std::move(overlay);
     // The relay's console handler and stop event own shutdown.
     rclcpp::init(argc,argv,rclcpp::InitOptions(),rclcpp::SignalHandlerOptions::None);
@@ -115,35 +118,68 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control,PathSink overlay):
     // Optional style (width, colour) for the following paths, e.g. by assistance state.
     m.overlay_styles=m.node->create_subscription<ets2_msgs::msg::OverlayStyle>("/ets2/overlay/style",rclcpp::QoS(1).best_effort(),
         [&m](const ets2_msgs::msg::OverlayStyle::SharedPtr message) {m.overlay_style=*message;m.overlay_style_time=std::chrono::steady_clock::now();});
+    const auto stamp_us=[](const builtin_interfaces::msg::Time& stamp) {return stamp.sec<0?uint64_t{0}:uint64_t(stamp.sec)*1000000+stamp.nanosec/1000;};
+    const auto ttl_ms=[&m] {return static_cast<uint64_t>(std::max<int64_t>(0,m.node->get_parameter("overlay_ttl_ms").as_int()));};
+    const auto deliver=[&m](const OverlayMarks& marks) {
+        // No strokes clears the decal now (the writer marks the content invalid).
+        bool valid=marks.strokes.empty() || marks.frame=="base_link" || marks.frame=="world";
+        for(const auto& s:marks.strokes) valid=valid && s.points.size()>=2 && std::isfinite(s.width_m) && s.width_m>0 && s.width_m<=16 &&
+            std::isfinite(s.min_px) && s.min_px>=0 && s.min_px<=64 && std::all_of(s.rgba.begin(),s.rgba.end(),[](float c){return std::isfinite(c) && c>=0 && c<=1;});
+        if(!valid) {
+            ++m.overlay_rejected;
+            RCLCPP_WARN_THROTTLE(m.node->get_logger(),*m.node->get_clock(),2000,"Rejected overlay marks: frame '%s', %zu strokes",marks.frame.c_str(),marks.strokes.size());
+            return;
+        }
+        ++m.overlay_received;
+        if(m.overlay_sink) m.overlay_sink(marks);
+    };
+    // HUD marks: LINE_STRIP markers in one frame. scale.x is the width on the road (m),
+    // scale.y the minimum width on screen (pixels at 1080 lines; 0 none), color the paint
+    // (a: strength), a nonzero lifetime the TTL. Other marker types are ignored. DELETEALL drops
+    // the strokes before it (rviz semantics); an array that ends without strokes clears.
+    m.overlay_marks=m.node->create_subscription<visualization_msgs::msg::MarkerArray>("/ets2/overlay/marks",rclcpp::QoS(1).best_effort(),
+        [stamp_us,ttl_ms,deliver](const visualization_msgs::msg::MarkerArray::SharedPtr message) {
+            OverlayMarks marks;marks.ttl_ms=ttl_ms();
+            bool frame_set=false;
+            for(const auto& marker:message->markers) {
+                if(marker.action==visualization_msgs::msg::Marker::DELETEALL) {marks.strokes.clear();continue;}
+                if(marker.action!=visualization_msgs::msg::Marker::ADD || marker.type!=visualization_msgs::msg::Marker::LINE_STRIP) continue;
+                if(!frame_set) {
+                    marks.frame=marker.header.frame_id;marks.stamp_us=stamp_us(marker.header.stamp);frame_set=true;
+                    const auto& life=marker.lifetime;
+                    if(life.sec>0 || life.nanosec>0) marks.ttl_ms=uint64_t(std::max(0,life.sec))*1000+life.nanosec/1000000;
+                } else if(marker.header.frame_id!=marks.frame) marks.frame="mixed";
+                OverlayStrokeInput stroke;
+                stroke.width_m=static_cast<float>(marker.scale.x);stroke.min_px=static_cast<float>(marker.scale.y/2);
+                stroke.rgba={marker.color.r,marker.color.g,marker.color.b,marker.color.a};
+                const auto& o=marker.pose.orientation;const auto& t=marker.pose.position;
+                const auto rotation=from_quat({o.w,o.x,o.y,o.z});
+                for(const auto& p:marker.points) stroke.points.push_back(add(V{t.x,t.y,t.z},mul(rotation,V{p.x,p.y,p.z})));
+                marks.strokes.push_back(std::move(stroke));
+            }
+            deliver(marks);
+        });
     m.overlay_paths=m.node->create_subscription<nav_msgs::msg::Path>("/ets2/overlay/path",rclcpp::QoS(1).best_effort(),
-        [&m](const nav_msgs::msg::Path::SharedPtr message) {
-            OverlayPath path;path.frame=message->header.frame_id;
-            const auto& stamp=message->header.stamp;
-            path.stamp_us=stamp.sec<0?0:uint64_t(stamp.sec)*1000000+stamp.nanosec/1000;
-            path.width_m=static_cast<float>(m.node->get_parameter("overlay_width_m").as_double());
-            path.rgba[3]=static_cast<float>(m.node->get_parameter("overlay_alpha").as_double());
-            path.ttl_ms=static_cast<uint64_t>(std::max<int64_t>(0,m.node->get_parameter("overlay_ttl_ms").as_int()));
-            if(m.overlay_style && std::chrono::steady_clock::now()-m.overlay_style_time<=std::chrono::seconds(1)) {
-                const auto& style=*m.overlay_style;
-                path.width_m=style.width_m;path.rgba={style.color.r,style.color.g,style.color.b,style.color.a};
+        [&m,stamp_us,ttl_ms,deliver](const nav_msgs::msg::Path::SharedPtr message) {
+            OverlayMarks marks;marks.frame=message->header.frame_id;marks.stamp_us=stamp_us(message->header.stamp);marks.ttl_ms=ttl_ms();
+            if(!message->poses.empty()) {
+                OverlayStrokeInput stroke;
+                stroke.width_m=static_cast<float>(m.node->get_parameter("overlay_width_m").as_double());
+                stroke.rgba[3]=static_cast<float>(m.node->get_parameter("overlay_alpha").as_double());
+                if(m.overlay_style && std::chrono::steady_clock::now()-m.overlay_style_time<=std::chrono::seconds(1)) {
+                    const auto& style=*m.overlay_style;
+                    stroke.width_m=style.width_m;stroke.rgba={style.color.r,style.color.g,style.color.b,style.color.a};
+                }
+                for(const auto& pose:message->poses) stroke.points.push_back({pose.pose.position.x,pose.pose.position.y,pose.pose.position.z});
+                marks.strokes.push_back(std::move(stroke));
             }
-            for(const auto& pose:message->poses) path.points.push_back({pose.pose.position.x,pose.pose.position.y,pose.pose.position.z});
-            // An empty path clears the decal now (the writer marks the content invalid).
-            if(path.points.empty()) {++m.overlay_received;if(m.overlay_sink) m.overlay_sink(path);return;}
-            if((path.frame!="base_link" && path.frame!="world") || path.points.size()<2 || !std::isfinite(path.width_m) || path.width_m<=0 ||
-               path.width_m>16 || !std::isfinite(path.rgba[3]) || path.rgba[3]<0 || path.rgba[3]>1) {
-                ++m.overlay_rejected;
-                RCLCPP_WARN_THROTTLE(m.node->get_logger(),*m.node->get_clock(),2000,"Rejected overlay path: frame '%s', %zu points",path.frame.c_str(),path.points.size());
-                return;
-            }
-            ++m.overlay_received;
-            if(m.overlay_sink) m.overlay_sink(path);
+            deliver(marks);
         });
     m.demand_timer=m.node->create_wall_timer(200ms,[&m] {
         auto demand=std::make_shared<Demand>();
         for(const auto& [name,entry]:m.publishers) if(entry->publisher->get_subscription_count()>0) demand->insert(name);
         m.demand.store(std::move(demand));
-        m.overlay=m.node->get_parameter("overlay_enabled").as_bool() || m.overlay_paths->get_publisher_count()>0;
+        m.overlay=m.node->get_parameter("overlay_enabled").as_bool() || m.overlay_paths->get_publisher_count()>0 || m.overlay_marks->get_publisher_count()>0;
     });
     m.forward=std::jthread([&m] {
         for(;;) {
@@ -179,7 +215,7 @@ RosEndpoint::~RosEndpoint() {
     m.executor->cancel();
     if(m.spin.joinable()) m.spin.join();
     m.executor->remove_node(m.node);m.executor.reset();
-    m.demand_timer.reset();m.overlay_paths.reset();m.overlay_styles.reset();m.drive_commands.reset();m.drive_service.reset();m.capture_service.reset();
+    m.demand_timer.reset();m.overlay_marks.reset();m.overlay_paths.reset();m.overlay_styles.reset();m.drive_commands.reset();m.drive_service.reset();m.capture_service.reset();
     m.publishers.clear();m.node.reset();
     rclcpp::shutdown();
 }

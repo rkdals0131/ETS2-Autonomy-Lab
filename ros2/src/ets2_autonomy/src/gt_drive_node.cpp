@@ -18,7 +18,6 @@
 #include <ets2_msgs/msg/assist_state.hpp>
 #include <ets2_msgs/msg/actuation_state.hpp>
 #include <ets2_msgs/msg/powertrain_state.hpp>
-#include <ets2_msgs/msg/overlay_style.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <ets2_msgs/msg/wheel_state.hpp>
 #include <ets2_msgs/srv/drive_control.hpp>
@@ -84,7 +83,7 @@ int main(int argc,char** argv) {
     double ego_x=0,ego_y=0,ego_z=0,ego_yaw=0,front_axle=0;bool pose_received=false,traffic_received=false,wheels_received=false,liftable=false;
     std::map<uint32_t,AxleWheel> axle_wheels;std::map<uint32_t,bool> grounded;
     Clock::time_point pose_time{},traffic_time{};
-    builtin_interfaces::msg::Time pose_stamp; // simulation time: the HUD path's TTL runs on it
+    builtin_interfaces::msg::Time pose_stamp; // simulation time: the HUD marks' TTL runs on it
     struct Actor {uint64_t id;double x,y,yaw,speed,length,width;};std::vector<Actor> actors;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr ps;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr config;
@@ -140,11 +139,10 @@ int main(int argc,char** argv) {
     }
     auto publisher=node->create_publisher<ets2_msgs::msg::DriveCommand>("/ets2/drive/command",rclcpp::QoS(1).best_effort());
     auto service=node->create_client<ets2_msgs::srv::DriveControl>("/ets2/drive/control");
-    // HUD decal: the relay draws while this publisher exists; nothing is sent in standby, and
-    // an empty path clears the decal at once (off, or nothing to mark).
-    auto hud_path=node->create_publisher<nav_msgs::msg::Path>("/ets2/overlay/path",rclcpp::QoS(1).best_effort());
-    auto hud_style=node->create_publisher<ets2_msgs::msg::OverlayStyle>("/ets2/overlay/style",rclcpp::QoS(1).best_effort());
-    const auto hud_clear=[&]() {nav_msgs::msg::Path path;path.header.frame_id="world";path.header.stamp=pose_stamp;hud_path->publish(path);};
+    // HUD inputs: LCC's path while it steers (empty otherwise, and at release) at 20 Hz; the
+    // ACC mark rides on AssistState. hud_node turns them into the decal and Foxglove markers.
+    auto plan_path=node->create_publisher<nav_msgs::msg::Path>("/ets2/drive/plan",rclcpp::QoS(1).best_effort());
+    const auto plan_clear=[&]() {nav_msgs::msg::Path path;path.header.frame_id="world";path.header.stamp=pose_stamp;plan_path->publish(path);};
     // Controller internals for recordings (50 Hz while armed) and the lane in use (1 Hz).
     auto assist_state=node->create_publisher<ets2_msgs::msg::AssistState>("/ets2/drive/assist",rclcpp::QoS(10));
     auto lane_path=node->create_publisher<nav_msgs::msg::Path>("/ets2/drive/lane",rclcpp::QoS(1));
@@ -521,46 +519,36 @@ int main(int argc,char** argv) {
             if(cancel_pending && acc && cruise_speed()>0) {command.throttle=0;command.brake=std::max(command.brake,.05f);}
             if(enabled_axes&2) pedal_sequence=command.sequence;
             publisher->publish(command);
-            // HUD at 20 Hz: LCC's ribbon while it steers; ACC's bar under the lead, or without one
-            // dimmed at the gap it would keep (front bumper + 5 m + time gap). Nothing else.
+            // HUD inputs. The ACC mark: the lead's rear bumper (150 m at most), or without a lead
+            // the gap ACC keeps (front bumper + 5 m + time gap); along the lane when the truck is
+            // on it, else on the arc of its yaw rate.
+            const auto v=std::max(0.0,vehicle->speed_mps);
+            const bool lead_marked=acc && lead.valid && lead.id!=lane_end_id && std::isfinite(lead_ahead) && lead_ahead<=150;
+            std::optional<double> mark;
+            if(lead_marked) mark=std::max(2.0,lead_ahead);
+            else if(acc) mark=front_offset+5+settings->following_time_s*v;
+            std::array<double,3> mark_pose{};
+            if(mark && lane_frame) {
+                const auto s=lane->progress+*mark;const auto p=lane->at(s);
+                mark_pose={p.x,p.y,lane->heading(s)};
+            } else if(mark && ground_truth) {
+                const auto yaw_rate=vehicle->angular_velocity_base_radps[2];
+                const auto arc=hud::arc(ego_x,ego_y,ego_yaw,v>1 && std::isfinite(yaw_rate)?yaw_rate/v:0,*mark);
+                const auto [px,py]=arc[arc.size()-2];const auto [x,y]=arc.back();
+                mark_pose={x,y,std::atan2(y-py,x-px)};
+            }
+            // LCC's path at 20 Hz: from 1 m past the front bumper (front_offset is from the rear
+            // point here; under the cab it only overlapped the truck) to the ACC mark, or 3 s ahead
+            // (40-120 m); through the merge during a (re)engagement or lane change.
             if(ground_truth && now>=next_hud) {
                 next_hud=now+50ms;
-                const auto v=std::max(0.0,vehicle->speed_mps);
-                const bool lead_marked=acc && lead.valid && lead.id!=lane_end_id && std::isfinite(lead_ahead) && lead_ahead<=150;
-                std::optional<double> bar;
-                if(lead_marked) bar=std::max(2.0,lead_ahead);
-                else if(acc) bar=front_offset+5+settings->following_time_s*v;
-                hud::Points points;
-                // The ribbon starts 1 m past the front bumper (front_offset is from the rear point
-                // here): under the cab it only overlapped the truck.
-                const auto ribbon_start=front_offset+1,ribbon_end=bar?*bar:ribbon_start+std::clamp(3*v,40.0,120.0);
-                if(steering && lane && ribbon_end-ribbon_start>=hud::step_m) {
-                    points=hud::lane(*lane,lane->progress+ribbon_start,ribbon_end-ribbon_start,merge?&*merge:nullptr);
-                    if(bar) hud::bar(points);
-                } else if(bar && lane_frame) {
-                    const auto s=lane->progress+*bar;const auto p=lane->at(s);
-                    points=hud::cross(p.x,p.y,lane->heading(s));
-                } else if(bar) {
-                    const auto yaw_rate=vehicle->angular_velocity_base_radps[2];
-                    const auto arc=hud::arc(ego_x,ego_y,ego_yaw,v>1 && std::isfinite(yaw_rate)?yaw_rate/v:0,*bar);
-                    const auto [px,py]=arc[arc.size()-2];const auto [x,y]=arc.back();
-                    points=hud::cross(x,y,std::atan2(y-py,x-px));
-                }
-                if(points.size()<2) hud_clear();
-                else {
-                    ets2_msgs::msg::OverlayStyle style;style.header.stamp=pose_stamp;style.width_m=.5f;
-                    const auto set=[&](float r,float g,float b,float a) {style.color.r=r;style.color.g=g;style.color.b=b;style.color.a=a;};
-                    // The relay paints the colour into the lit scene (a tint of what is below), so
-                    // a is the tint strength, not an opacity over the image.
-                    if(!acc) set(.85f,.85f,.9f,.55f);                                                          // LCC alone: neutral
-                    else if(drive->throttle_manual>0) set(.9f,.9f,.9f,.45f);                                   // driver's throttle: ACC waits
-                    else if(mpc && (acc_mpc.output().mode==AccMpc::Emergency || acc_mpc.output().a_des_mps2<-2)) set(1,.3f,.2f,.85f); // hard braking: red
-                    else if(lead_marked) set(.35f,.95f,.45f,.75f);                                             // following a lead: green
-                    else set(.35f,.8f,1,.4f);                                                                  // no lead: the gap, dim cyan
-                    nav_msgs::msg::Path path;path.header.frame_id="world";path.header.stamp=pose_stamp;
-                    for(const auto& [x,y]:points) {geometry_msgs::msg::PoseStamped pose;pose.pose.position.x=x;pose.pose.position.y=y;pose.pose.orientation.w=1;path.poses.push_back(pose);}
-                    hud_style->publish(style);hud_path->publish(path);
-                }
+                nav_msgs::msg::Path path;path.header.frame_id="world";path.header.stamp=pose_stamp;
+                const auto ribbon_start=front_offset+1,ribbon_end=mark?*mark:ribbon_start+std::clamp(3*v,40.0,120.0);
+                if(steering && lane && ribbon_end-ribbon_start>=hud::step_m)
+                    for(const auto& [x,y]:hud::lane(*lane,lane->progress+ribbon_start,ribbon_end-ribbon_start,merge?&*merge:nullptr)) {
+                        geometry_msgs::msg::PoseStamped pose;pose.pose.position.x=x;pose.pose.position.y=y;pose.pose.orientation.w=1;path.poses.push_back(pose);
+                    }
+                plan_path->publish(path);
             }
             {
                 ets2_msgs::msg::AssistState state;
@@ -578,6 +566,9 @@ int main(int argc,char** argv) {
                 state.set_speed_mps=cruise_engage?set_speed:settings->target_speed_mps;state.target_speed_mps=mpc?cruise_target:speed_target;
                 if(mpc) {state.acc_mode=acc_mpc.output().mode;state.accel_target_mps2=acc_mpc.output().a_des_mps2;state.mass_kg=acc_mpc.output().mass_kg;}
                 state.lead_valid=lead.valid;state.lead_gap_m=lead.gap_m;state.lead_speed_mps=lead.speed_mps;state.grade=grade.grade;
+                state.acc_mark=mark && ground_truth?(lead_marked?2:1):0;
+                state.acc_mark_x=mark_pose[0];state.acc_mark_y=mark_pose[1];state.acc_mark_heading=mark_pose[2];
+                state.lane_width_m=lane?lane->width:0;state.driver_throttle=acc && drive->throttle_manual>0;
                 assist_state->publish(state);
             }
             // The lane in use, 50 m behind to 400 m ahead, once a second.
@@ -612,7 +603,7 @@ int main(int argc,char** argv) {
     };
     const auto release=[&]() {
         if(epoch) try {control(false);} catch(const std::exception& error) {std::cerr<<"Release: "<<error.what()<<std::endl;}
-        epoch=0;hud_clear();
+        epoch=0;plan_clear();
     };
     const auto driver_input=[&]() {
         return ((axes()&1) && drive->steering_manual!=0) || ((axes()&2) && (drive->throttle_manual!=0 || drive->brake_manual!=0));

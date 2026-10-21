@@ -72,23 +72,29 @@ void seqlock() {
     check(overlay_read(block.get(),-1,*out,generation)==1 && generation==0 && !out->valid,"fresh block reads as invalid generation 0");
     check(overlay_read(block.get(),0,*out,generation)==0,"unchanged generation is not copied again");
     auto in=std::make_unique<OverlayContent>();
-    in->point_count=3;in->stamp_us=123;in->ttl_ms=500;in->width_m=3.5f;in->valid=true;in->ground_y=41.5;
-    for(int i=0;i<3;++i) {in->points[i][0]=-1e5+i;in->points[i][1]=1e5-i;}
+    in->point_count=5;in->stamp_us=123;in->ttl_ms=500;in->valid=true;in->ground_y=41.5;
+    in->stroke_count=2;in->strokes[0]={0,3,.2f,2,{1,1,1,.6f}};in->strokes[1]={3,2,.4f,4,{1,.6f,.1f,.8f}};
+    for(int i=0;i<5;++i) {in->points[i][0]=-1e5+i;in->points[i][1]=1e5-i;}
     overlay_write(block.get(),*in);
-    check(overlay_read(block.get(),0,*out,generation)==1 && generation==2 && out->point_count==3 && out->ground_y==41.5 &&
-          out->points[2][0]==-1e5+2 && out->valid,"one write is read back at generation 2");
+    check(overlay_read(block.get(),0,*out,generation)==1 && generation==2 && out->point_count==5 && out->ground_y==41.5 &&
+          out->points[2][0]==-1e5+2 && out->valid && out->stroke_count==2 && out->strokes[1].first==3 && out->strokes[1].min_px==4 &&
+          out->strokes[1].rgba[1]==.6f,"one write with two strokes is read back at generation 2");
     block->generation|=1;
     check(overlay_read(block.get(),2,*out,generation)==-1,"an odd generation is skipped");
     block->generation+=1;block->point_count=999;
     check(overlay_read(block.get(),2,*out,generation)==-2,"too many points are rejected");
+    block->generation+=2;block->point_count=5;block->strokes[1].count=3;
+    check(overlay_read(block.get(),4,*out,generation)==-2,"a stroke past the point pool is rejected");
+    block->generation+=2;block->strokes[1].count=2;block->strokes[1].width_m=0;
+    check(overlay_read(block.get(),6,*out,generation)==-2,"a stroke without width is rejected");
     // A writer streams paths whose every point encodes its generation; the
     // reader must only ever accept self-consistent copies.
     overlay_initialize(block.get());
     std::atomic<bool> done{false};
     std::thread writer([&] {
-        auto c=std::make_unique<OverlayContent>();c->valid=true;c->width_m=3;
+        auto c=std::make_unique<OverlayContent>();c->valid=true;c->stroke_count=1;
         for(uint32_t n=1;n<=20000;++n) {
-            c->point_count=1+n%overlay_max_points;c->stamp_us=n;
+            c->point_count=2+n%(overlay_max_points-1);c->stamp_us=n;c->strokes[0]={0,c->point_count,3,0,{1,1,1,1}};
             for(uint32_t i=0;i<c->point_count;++i) {c->points[i][0]=n;c->points[i][1]=-double(n);}
             overlay_write(block.get(),*c);
         }
@@ -102,7 +108,7 @@ void seqlock() {
         seen=generation;++accepted;
         if(!out->valid) continue;
         const auto n=out->stamp_us;
-        consistent=consistent && out->point_count==1+n%overlay_max_points;
+        consistent=consistent && out->point_count==2+n%(overlay_max_points-1) && out->strokes[0].count==out->point_count;
         for(uint32_t i=0;i<out->point_count;++i) consistent=consistent && out->points[i][0]==double(n) && out->points[i][1]==-double(n);
     }
     writer.join();
