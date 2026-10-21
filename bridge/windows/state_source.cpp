@@ -23,7 +23,7 @@ StateSource::StateSource(const VehicleProfile& vehicle,const json& settings,cons
                     const auto time=telemetry.at("paused_simulation_time_us").get<uint64_t>();
                     const auto frame=telemetry.at("frame_id").get<uint64_t>();
                     if(last_frame && (time<last_stamp || (telemetry.at("timer_flags").get<uint32_t>()&1)))
-                        throw std::runtime_error("SDK clock restarted; restart relay for a new sensor session");
+                        throw GameSessionChanged("SDK clock restarted (a save loaded); a new relay session starts");
                     if(frame!=last_frame) {
                         // The game sends the truck configuration again by itself (job market, delivery
                         // and service screens, 2026-10-21): the same truck keeps the session; another

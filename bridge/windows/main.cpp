@@ -194,10 +194,12 @@ int main(int argc,char** argv) {
             std::this_thread::sleep_for(20ms);
         }
         workers.stop();
+        if(workers.fatal && source.game_session_changed()) throw GameSessionChanged("Relay session ended: the game session changed");
         if(workers.fatal) throw std::runtime_error("Relay session ended on a data or game error; explicit restart required");
         };
         run(duration);
         return lease_ok?0:1;
     } catch(const SensorMountMismatch& e) {std::cerr<<e.what()<<std::endl;return 2;}
+    catch(const GameSessionChanged& e) {std::cerr<<e.what()<<std::endl;return 3;}
     catch(const std::exception& e) {std::cerr<<e.what()<<std::endl;return 1;}
 }

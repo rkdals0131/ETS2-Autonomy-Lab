@@ -17,6 +17,12 @@ public:
     ~StateSource();
     std::shared_ptr<const StateSample> latest() const;
     const json& configuration() const {return configuration_;}
+    // The worker ended on GameSessionChanged.
+    bool game_session_changed() const {
+        std::lock_guard lock(mutex_);
+        if(!error_) return false;
+        try {std::rethrow_exception(error_);} catch(const GameSessionChanged&) {return true;} catch(...) {return false;}
+    }
 private:
     MotionSensors sensors_;
     json truck_attributes_;

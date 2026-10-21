@@ -31,7 +31,7 @@ static V wgs84(V local,V reference) {
 }
 MotionSample MotionSensors::update(const json& state) {
     if(state.at("truck_generation").get<uint64_t>()!=generation_)
-        throw std::runtime_error("Truck configuration changed; restart bridge to update sensor mounts and wheel geometry");
+        throw GameSessionChanged("Truck configuration changed (another truck); a new relay session reads its sensor mounts and wheel geometry");
     MotionSample result;
     result.stamp_us=state.at("paused_simulation_time_us").get<uint64_t>();
     if(state.at("paused").get<bool>()) {previous_us_=previous_wheel_us_=0;return result;}

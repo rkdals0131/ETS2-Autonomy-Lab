@@ -158,6 +158,7 @@ class Controller:
                       "recording": {"phase": "idle"}, "recording_error": ""}
         self.relay = self.foxglove = self.drive = self.follow = self.lcc_change = self.job = None
         self.relay_stop = self.drive_stop_event = None
+        self.relay_restart = False  # the game session changed: start a new relay once the game is ready
         self.recording = self.session_log = None
         self.readers = []
         self.desired = self.assist = self.assist_started = False
@@ -242,12 +243,7 @@ class Controller:
         self.foxglove = self.spawn(["ros2", "run", "foxglove_bridge", "foxglove_bridge", "--ros-args",
                                     "--params-file", str(BRIDGE_ROOT / "config" / "foxglove.yaml"),
                                     "-p", "address:=127.0.0.1", "-p", f"port:={FOXGLOVE_PORT}"], "foxglove")
-        self.relay_stop = StopEvent("relay")
-        command = [str(RELAY), str(self.config), self.relay_stop.name]
-        if self.assist:
-            command.append("--input-only")
-        self.relay = self.spawn(command, "relay")
-        self.last_relay = time.monotonic()
+        self._spawn_relay()
         self.update(phase="connecting", message="게임 릴레이의 첫 상태 보고를 기다립니다.")
         if plan:
             try:
@@ -258,6 +254,17 @@ class Controller:
             except Exception as error:
                 self.layout = None
                 self.log(f"CPU 배치 건너뜀: {error}")
+
+    def _spawn_relay(self):
+        if self.relay_stop:
+            self.relay_stop.close()
+        self.relay_stop = StopEvent("relay")
+        command = [str(RELAY), str(self.config), self.relay_stop.name]
+        if self.assist:
+            command.append("--input-only")
+        self.relay = self.spawn(command, "relay")
+        self.last_relay = time.monotonic()
+        self.relay_restart = False
 
     def _release_drive(self, timeout=3):
         """Disarm through the GT node's stop event; kill only if it does not exit."""
@@ -328,6 +335,7 @@ class Controller:
 
     def _stop(self, phase="stopped", message="중지됨"):
         self.desired = False
+        self.relay_restart = False
         self.update(phase="stopping", message="기록·주행 보조·릴레이를 정상 종료합니다.")
         errors = []
         try:
@@ -418,8 +426,23 @@ class Controller:
             return
         if self.foxglove and self.foxglove.poll() is not None:
             raise RuntimeError(f"Foxglove 서버가 종료됐습니다 (code={self.foxglove.returncode}). 로그를 확인해 주세요.")
+        if self.relay_restart:
+            # The game is ready again once the core answers with the current truck configuration.
+            try:
+                Client(timeout=1).request("truck_config")
+            except Exception:
+                return
+            self.log("relay: 게임이 준비돼 릴레이를 다시 시작합니다.")
+            self._spawn_relay()
+            return
         if self.relay and self.relay.poll() is not None:
             code = self.relay.returncode
+            if code == 3:
+                # A save loaded or another truck: a new sensor session, started automatically. The
+                # cruise standby keeps waiting and engages again on the cruise control button.
+                self.log("relay: 게임 세션이 바뀌었습니다(세이브 불러오기·다른 트럭). 게임이 준비되면 릴레이를 자동으로 다시 시작합니다.")
+                self.relay, self.relay_restart = None, True
+                return
             message = ("실행이 종료됐습니다. 시작을 누르면 새 세션을 엽니다." if code == 0 else
                        "현재 차량과 센서 보정이 다릅니다. 설정의 rig를 차량에 맞추거나 주행 보조 모드로 시작해 주세요." if code == 2 else
                        "릴레이 종료: F11·게임 연결·relay.log를 확인해 주세요. 자동 재시작은 하지 않습니다.")

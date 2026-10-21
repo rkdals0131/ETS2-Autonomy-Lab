@@ -21,6 +21,10 @@ struct MotionSample {
 
 // One instance per physical sensor session. Subscription and transport state
 // never reset integration, move the geographic anchor, or change sampling.
+// The game started another session under the relay (a save loaded: the SDK clock went back,
+// or another truck): this sensor session ends; the launcher starts a new relay (exit code 3).
+struct GameSessionChanged:std::runtime_error {using std::runtime_error::runtime_error;};
+
 class MotionSensors {
 public:
     MotionSensors(const VehicleProfile& vehicle,const json& settings);
