@@ -50,16 +50,20 @@ sealed class RoutePlanner(SdMap map)
     double Fraction(EdgeSpot spot) {double length = map.Edges[spot.Edge].Length;return length > 0 ? Math.Clamp(spot.S / length, 0, 1) : 1;}
 
     // Where a job's destination depot is reached: the end of any edge entering its prefab (a yard
-    // road or prefab); where no navigation curve leads in (AI traffic does not enter many yards),
-    // the roads within 300 m of the depot.
-    public List<EdgeSpot> DepotTargets(SdPlace depot)
+    // road or prefab); where no navigation curve leads in (AI traffic does not enter many yards,
+    // and many company prefabs join no road), or with a radius, the roads within it (300 m by
+    // default; large sites need up to 2 km). Up to 64 of them (512 further out): the nearest are often yard road
+    // pieces joined to nothing (with 8, 38 depots beside a reachable road were unreachable,
+    // 2026-10-22).
+    public List<EdgeSpot> DepotTargets(SdPlace depot, double? around = null)
     {
         var found = new List<EdgeSpot>();
-        if (map.ItemByUid.TryGetValue(depot.Prefab, out var item))
+        if (around is null && map.ItemByUid.TryGetValue(depot.Prefab, out var item))
             for (int e = 0; e < map.Edges.Length; ++e) if (map.Next(e) == item) found.Add(new(e, map.Edges[e].Length, 0));
-        if (found.Count == 0) found.AddRange(Near(new(depot.X, depot.Y), 300).OrderBy(t => t.Distance).Take(8));
+        if (found.Count == 0) found.AddRange(Near(new(depot.X, depot.Y), around ?? 300).OrderBy(t => t.Distance).Take((around ?? 300) > 300 ? 512 : 64));
         return found;
     }
+    public static readonly double[] DepotRadii = [300, 1000, 2000];
     // Multi-source, multi-target A*. Sources pay the rest of their edge plus 2 s per m off it (a
     // nearby parallel road is a last resort); targets pay the part of their edge up to the spot
     // (an arrival target, fraction 1, is reached at the end of its edge).
@@ -142,7 +146,7 @@ sealed class RoutePlanner(SdMap map)
                 int pick = ranked.Where(i => (map.Inputs[i].Flags & SdMap.ReachesAny) != 0).DefaultIfEmpty(ranked[0]).First();
                 return (map.Inputs[pick].Flags & SdMap.ReachesExit) != 0 && Vector2.Distance(new(map.Inputs[pick].X, map.Inputs[pick].Y), end) <= Lane.MergeLimit;
             }).ToArray();
-        if (item.Kind == SdMap.KindRoad && nextOk is not null)
+        if (item.Kind == SdMap.KindRoad && nextOk is not null && x.Lanes > 0)
             return all.Where(rank =>
             {
                 var end = map.LanePoint(r.LanePoints + r.Lanes + rank);
@@ -422,7 +426,7 @@ static class RouteCli
         }
         // Goal: --to x,y, or the job destination (company in a city) from --job company,city, the
         // snapshot's "configs" (as the ot pipe's configs command returns them) or the live pipe.
-        var goals = new List<Vector2>();var targets = new List<EdgeSpot>();
+        var goals = new List<Vector2>();var targets = new List<EdgeSpot>();var places = new List<SdPlace>();
         string goalText;
         if (options.TryGetValue("--to", out var to))
         {
@@ -434,7 +438,7 @@ static class RouteCli
         else
         {
             var (company, city) = options.TryGetValue("--job", out var job) ? (job.Split(',')[0], job.Split(',').ElementAtOrDefault(1) ?? "") : JobDestination(snapshot, options.ContainsKey("--snapshot"));
-            var places = map.Companies.Where(c => c.Name == company && (city == "" || c.City == city)).ToList();
+            places = map.Companies.Where(c => c.Name == company && (city == "" || c.City == city)).ToList();
             goalText = $"company {company} in {city} ({places.Count} depots)";
             foreach (var p in places) {targets.AddRange(planner.DepotTargets(p));goals.Add(new(p.X, p.Y));}
             if (places.Count == 0 && city != "")
@@ -449,7 +453,11 @@ static class RouteCli
         if (sources.Count == 0) sources = planner.Near(from, 40, heading, 60);
         if (sources.Count == 0) throw new InvalidOperationException("No road along the heading near the start");
         watch.Restart();
-        var route = planner.Plan(sources, targets, goals) ?? throw new InvalidOperationException($"No route to {goalText}");
+        var route = planner.Plan(sources, targets, goals);
+        // A depot whose way in is cut off from the start: the roads around it, further out in steps.
+        foreach (var radius in RoutePlanner.DepotRadii)
+            if (route is null && places.Count > 0) route = planner.Plan(sources, places.SelectMany(p => planner.DepotTargets(p, radius)).ToList(), goals);
+        if (route is null) throw new InvalidOperationException($"No route to {goalText}");
         double queryMs = watch.Elapsed.TotalMilliseconds;
         var goalPoint = goals.Count == 1 ? goals[0] : goals.MinBy(g => Vector2.Distance(g, LastPoint(map, route)));
         var json = planner.ToJson(route, from, goalPoint);
@@ -780,6 +788,7 @@ static class RouteCli
         foreach (var c in map.Companies)
         {
             var targetsOf = planner.DepotTargets(c);
+            foreach (var radius in RoutePlanner.DepotRadii) if (!targetsOf.Any(t => reach[t.Edge] <= 1)) targetsOf = planner.DepotTargets(c, radius);
             string why = targetsOf.Any(t => reach[t.Edge] <= 1) ? (targetsOf.All(t => t.Distance == 0) ? "prefab entered" : "road within 300 m")
                 : targetsOf.Count == 0 ? "no road within 300 m" : "off the main network (island, ferry)";
             depotWhy[why] = depotWhy.GetValueOrDefault(why) + 1;

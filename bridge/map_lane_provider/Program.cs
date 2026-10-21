@@ -377,6 +377,14 @@ sealed class World : IDisposable
         currentReaders = new();
         Console.Error.WriteLine($"map: {loaded.Count} sectors [{(loaded.Count > 30 ? "..." : string.Join(' ', loaded.Select(s => $"{s.X},{s.Z}")))}] in {watch.ElapsedMilliseconds} ms");
     }
+    // A look without any AI lanes (yard and depot access roads, dirt tracks), unlike rail and
+    // tram tracks, which have lanes of their own: drivable, but not by the lane model.
+    public bool LaneLess(Road road)
+    {
+        if (!looks.TryGetValue("road." + road.RoadType, out var unit)) return false;
+        bool Empty(string name) => !unit.Attributes.TryGetValue(name, out var v) || v is System.Collections.ICollection {Count: 0};
+        return Empty("lanes_left") && Empty("lanes_right");
+    }
     // Unsupported looks always throw InvalidOperationException (cached).
     public LaneGeometry Geometry(Road road)
     {

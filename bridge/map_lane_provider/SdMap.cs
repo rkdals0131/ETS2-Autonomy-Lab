@@ -34,9 +34,11 @@ record SdPlace(string Name, string City, ulong Prefab, float X, float Y);
 
 sealed class SdMap
 {
-    public const int Format = 3;              // bump when the builder changes what it stores
+    public const int Format = 4;              // bump when the builder changes what it stores
     public const int KindRoad = 0, KindPrefab = 1, KindOther = 2;
-    public const int Reversed = 1, TrafficLight = 2, GpsAvoid = 4, Curveless = 8, Hidden = 16;
+    public const int Reversed = 1, TrafficLight = 2, GpsAvoid = 4, Curveless = 8, Hidden = 16, NoLanes = 32;
+    // Roads without AI lanes (depot and yard access): both directions on the reference line.
+    public const float NoLaneSpeed = 20 / 3.6f;
     public const int ReachesAny = 1, ReachesExit = 2;
     public const float MaxSpeed = 25;         // m/s, upper bound of every edge speed (A* heuristic)
     public string Key = "";
@@ -162,15 +164,17 @@ sealed class SdMap
         }
         static float Length(IReadOnlyList<Vector3> p) {float s = 0;for (int i = 1; i < p.Count; ++i) s += Vector2.Distance(Lane.Flat(p[i - 1]), Lane.Flat(p[i]));return s;}
         var laneKm = new Dictionary<string, double>();
-        int roads = 0, unsupported = 0, avoid = 0, city = 0;
+        int roads = 0, unsupported = 0, avoid = 0, city = 0, laneless = 0;
         // City areas: rectangles from the item's node over its width (X) and height (Z), as map viewers draw them.
         var areas = source.MapItems.Values.OfType<CityArea>().Where(c => c.Node is not null && c.Width > 0 && c.Height > 0).Select(c => (x: c.Node.Position.X, z: c.Node.Position.Z, w: c.Width, h: c.Height)).ToList();
         // Roads: one edge per travel direction with drivable lanes; the polyline follows the centre
         // of those lanes (the carriageway), lane ends are kept for lanes_ok.
         foreach (var road in source.MapItems.Values.OfType<Road>())
         {
-            LaneGeometry g;
-            try {g = world.Geometry(road);} catch (InvalidOperationException) {++unsupported;continue;}
+            LaneGeometry? g;
+            // Looks without any lanes lead into most company depots (2026-10-22: 133 of 140 mainland
+            // depots were unreachable without them); rail and tram tracks stay out.
+            try {g = world.Geometry(road);} catch (InvalidOperationException) {if (!world.LaneLess(road)) {++unsupported;continue;}g = null;++laneless;}
             if (road.Node is null || road.ForwardNode is null) continue;
             int item = ItemOf(road, KindRoad);++roads;
             int a = NodeOf(road.Node), b = NodeOf(road.ForwardNode);
@@ -179,6 +183,16 @@ sealed class SdMap
             if (inCity) ++city;
             foreach (bool increasing in new[] {true, false})
             {
+                if (g is null)
+                {
+                    int count = Math.Max(1, (int)Math.Ceiling(road.Length / step));
+                    var centre = Enumerable.Range(0, count + 1).Select(i => Lane.Point(road, increasing ? (float)i / count : 1 - (float)i / count, 0)).ToList();
+                    float centreLength = Length(centre);
+                    edges.Add(new SdEdge {Item = item, From = increasing ? a : b, To = increasing ? b : a, Length = centreLength, Cost = centreLength / NoLaneSpeed, Speed = NoLaneSpeed,
+                        Turn = (float)SignedTurn(Lane.Flat(centre[1] - centre[0]), Lane.Flat(centre[^1] - centre[^2])), Geom = Polyline(centre), GeomCount = centre.Count,
+                        LanePoints = lanePoints.Count / 2, Flags = (increasing ? 0 : Reversed) | NoLanes | (road.ShowInUiMap ? 0 : Hidden)});
+                    continue;
+                }
                 var lanes = g.Lanes(increasing);
                 if (lanes.Length == 0) continue;
                 float offset = lanes.Average(l => g.Centers[l]);
@@ -200,7 +214,7 @@ sealed class SdMap
                     Turn = (float)SignedTurn(Lane.Flat(tangent0), Lane.Flat(tangent1)), Geom = Polyline(line), GeomCount = line.Count, Lanes = lanes.Length, LanePoints = lp, Flags = flags});
             }
         }
-        log($"sdmap: {roads} roads ({city} in {areas.Count} city areas, {unsupported} without drivable lanes skipped, {avoid} gps-avoid directions) in {watch.ElapsedMilliseconds} ms");
+        log($"sdmap: {roads} roads ({city} in {areas.Count} city areas, {unsupported} without drivable lanes skipped, {laneless} without lanes at 20 km/h, {avoid} gps-avoid directions) in {watch.ElapsedMilliseconds} ms");
         foreach (var (type, km) in laneKm.OrderByDescending(x => x.Value)) log($"  lane type {type}: {km:F0} km, {LaneSpeed(type) * 3.6:F0} km/h");
         // Prefabs: every entry node to every exit its navigation curves reach (small-vehicle-only
         // curves excluded, as in the walker); a prefab without curves is crossed like the walker's
