@@ -425,8 +425,11 @@ int main(int argc,char** argv) {
                 if(lead_marked) bar=std::max(2.0,lead_ahead);
                 else if(acc) bar=front_offset+5+settings->following_time_s*v;
                 hud::Points points;
-                if(steering && lane) {
-                    points=hud::lane(*lane,lane->progress,bar?*bar:std::clamp(3*v,40.0,120.0));
+                // The ribbon starts 1 m past the front bumper (front_offset is from the rear point
+                // here): under the cab it only overlapped the truck.
+                const auto ribbon_start=front_offset+1,ribbon_end=bar?*bar:ribbon_start+std::clamp(3*v,40.0,120.0);
+                if(steering && lane && ribbon_end-ribbon_start>=hud::step_m) {
+                    points=hud::lane(*lane,lane->progress+ribbon_start,ribbon_end-ribbon_start);
                     if(bar) hud::bar(points);
                 } else if(bar && lane_frame) {
                     const auto s=lane->progress+*bar;const auto p=lane->at(s);

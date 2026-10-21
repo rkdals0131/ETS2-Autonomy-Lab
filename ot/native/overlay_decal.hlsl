@@ -28,6 +28,11 @@ struct Vertex { float4 position : SV_Position; };
 struct Paint { float4 add : SV_Target0; float4 multiply : SV_Target1; };
 static const float paint_gain = 2.2;     // tint of a full-strength mark on mid grey
 static const float paint_floor = 0.06;   // emissive share of the colour
+// A mark across the view is foreshortened on the road: the ACC bar's 0.5 m under a lead
+// 50 m ahead is about one pixel tall (2026-10-21, not seen). Every part of the path keeps
+// at least this half thickness on screen (pixels at 1080 lines), up to max_half_m on the road.
+static const float min_half_px = 4;
+static const float max_half_m = 4;       // overlay_decal.cpp widens the bounds by it
 // A 4-vertex strip over `bounds`: the command list stays fixed while the
 // rectangle (the scissor of the design) changes every frame.
 Vertex vs_main(uint id : SV_VertexID) {
@@ -44,28 +49,37 @@ Paint ps_main(Vertex input) {
     // Distance to the path and the arc length at the nearest point.
     float2 q = p.xz + camera.xz;
     float best = 1e9, arc = 0;
+    float2 along = 0;   // direction of the nearest segment
     uint count = (uint)path_info.x;
     for (uint i = 1; i < count; ++i) {
         float2 a = path_points[i - 1].xy, ab = path_points[i].xy - a;
         float l2 = dot(ab, ab);
         float t = l2 > 0 ? saturate(dot(q - a, ab) / l2) : 0;
         float dd = length(q - a - t * ab);
-        if (dd < best) { best = dd; arc = path_points[i - 1].z + t * sqrt(l2); }
+        if (dd < best) { best = dd; arc = path_points[i - 1].z + t * sqrt(l2); along = l2 > 0 ? ab * rsqrt(l2) : 0; }
     }
     // Derivatives before any discard: the quad still has all four lanes here. The edge is
     // one pixel wide at every distance (fwidth of the metric distance).
     float3 n = cross(ddx(p), ddy(p));
     float edge = max(fwidth(best), 0.01);
+    // Road metres per pixel across the nearest segment, from the view ray on the flat ground
+    // plane: smooth over depth edges, where fwidth(best) jumps to the object behind.
+    bool flat = camera.w != 0 && p.y < -1e-3 * length(p);
+    float2 g = camera.xz + p.xz * (flat ? -camera.y / p.y : 0);
+    float2 gx = ddx(g), gy = ddy(g), across = float2(-along.y, along.x);
+    float per_pixel = abs(dot(across, gx)) + abs(dot(across, gy));
+    float half_width = flat ? clamp(min_half_px * target.y / 1080 * per_pixel, path_info.y, max_half_m) : path_info.y;
     // Outside this frame's exterior range: interior (dashboard, pillars, mirrors) or sky.
     if (!(d >= depth.x && d <= depth.y) || !(eye.w != 0)) discard;
     float nl = length(n);
     if (!(nl > 0) || abs(n.y) < road.z * nl) discard;          // walls, car sides, housings
     float horizontal = length(p.xz);
     if (camera.w != 0 && abs(p.y + camera.y) > road.x + horizontal * road.y) discard; // off the road height
-    float coverage = 1 - smoothstep(path_info.y - edge, path_info.y + edge, best);
-    // A darker rim (12 cm, at most 40 % of the half width) outlines the mark on bright road.
-    float rim = min(0.12, 0.4 * path_info.y);
-    float inner = 1 - smoothstep(path_info.y - rim - edge, path_info.y - rim + edge, best);
+    float coverage = 1 - smoothstep(half_width - edge, half_width + edge, best);
+    // A darker rim (12 cm, at most 40 % of the half width; widened with it) outlines the
+    // mark on bright road.
+    float rim = min(0.12, 0.4 * path_info.y) * half_width / path_info.y;
+    float inner = 1 - smoothstep(half_width - rim - edge, half_width - rim + edge, best);
     float fade = 1 - smoothstep(path_info.z, path_info.w, arc);
     float alpha = color.a * coverage * fade;   // strength of the paint
     if (alpha <= 0) discard;

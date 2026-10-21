@@ -21,6 +21,8 @@ struct PathConstants {
     std::array<std::array<float,4>,overlay_max_points> points;
 };
 static_assert(sizeof(PathConstants)%16==0);
+// overlay_decal.hlsl: the most a foreshortened mark widens on the road (its minimum pixel thickness).
+constexpr double max_half_m=4;
 // Depth formats the main DSV may use: typeless storage and the depth-plane view.
 bool depth_formats(DXGI_FORMAT format,DXGI_FORMAT& typeless,DXGI_FORMAT& view) {
     if(format==DXGI_FORMAT_D32_FLOAT_S8X24_UINT || format==DXGI_FORMAT_R32G8X24_TYPELESS) {typeless=DXGI_FORMAT_R32G8X24_TYPELESS;view=DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;}
@@ -191,7 +193,7 @@ void OverlayDecal::draw(ID3D11DeviceContext* context,ID3D11RenderTargetView* tar
         prepare_depth(context,depth,depth_desc);
         const double width=desc.Width,height=desc.Height;
         const auto bounds=overlay::path_bounds(*view,path.points,frame->mask.points_used,path.ground_y,
-            path.width_m/2+overlay::edge_m,options->z_tolerance,options->slope);
+            std::max(double(path.width_m)/2,max_half_m)+overlay::edge_m,options->z_tolerance,options->slope);
         if(!bounds) {++skips_[offscreen];return;}
         if(uploaded_serial_!=frame->serial) {
             context->UpdateSubresource(mask_.Get(),0,nullptr,frame->mask.texels.data(),overlay::mask_width*2,0);
