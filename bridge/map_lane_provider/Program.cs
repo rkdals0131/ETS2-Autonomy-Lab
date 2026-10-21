@@ -103,6 +103,7 @@ try
         (double s, double distance) projection = (0, 0);
         try
         {
+            world.Swap();
             var (x, y) = ((double)placement.position.X, -(double)placement.position.Z);
             if (rolling is not null) projection = rolling.Project(x, y);
             // Off the published lane (lane change, other road, end passed): start a new path here.
@@ -123,6 +124,14 @@ try
             }
             if (updated) rolling.Write(output, ++revision);
             foreach (var side in sides) side.Update(world, rolling, projection.s, placement.position.Y, x, y, updated, reset, distance, keepBehind, ref pathId);
+            // The sectors the next cycles need: around the truck, 1.2 km along its heading, and the
+            // published lane's end and 600 m on along its last direction (an extension reaches
+            // about 400 m past the end; on a curving road the heading misses it).
+            var end = rolling.Points[^1];var before = rolling.Points[Math.Max(0, rolling.Points.Count - 6)];
+            double ex = end.X - before.X, ey = end.Y - before.Y, el = Math.Max(1e-6, Math.Sqrt(ex * ex + ey * ey));
+            world.Prefetch(placement.position, placement.position + placement.forward * 1200, [placement.position + placement.forward * 600, placement.position + placement.forward * 1200,
+                new Vector3((float)end.X, placement.position.Y, -(float)end.Y),
+                new Vector3((float)(end.X + ex / el * 600), placement.position.Y, -(float)(end.Y + ey / el * 600))]);
         }
         catch (Exception ex) {error = ex.Message;}
         // The scene apart from the lane: it is drawn also off the mapped lanes (yard, parking),
@@ -199,6 +208,17 @@ sealed class World : IDisposable
     Dictionary<string, bool>? lightProfiles;
     readonly HashSet<SectorCoordinate> loaded = new();
     public Map Map {get; private set;} = new();
+    // Roads and prefabs by 64 m cell of the current map, for Locate (it scanned every road).
+    ItemIndex index = ItemIndex.Empty;
+    // Background loading: a reopen took 0.7-2.4 s inside a follow cycle (2026-10-21; a lane
+    // reset after a lane change then waited for it). The map for the sectors around the truck
+    // and ahead is opened on its own archive readers while the loop runs, and swapped in at
+    // the start of a cycle (items are kept by UID, so a swap is like any reopen).
+    readonly List<string> mapPaths = new();
+    List<IHashFsReader> currentReaders = new();   // readers of a background-opened Map (none: mapFs)
+    Task<(Map Map, ItemIndex Index, List<IHashFsReader> Readers, long Ms)>? pending;
+    HashSet<SectorCoordinate>? pendingSectors;
+    int opens, pendingOpens;
     public int Sectors => loaded.Count;
     public IReadOnlyDictionary<string, Unit> Looks => looks;
     public World(string game)
@@ -214,7 +234,7 @@ sealed class World : IDisposable
             bool map = reader.DirectoryExists("/map/europe"), def = reader.DirectoryExists("/def/world");
             if (!map && !def && !reader.DirectoryExists("/prefab2") && !reader.DirectoryExists("/prefab") && !reader.DirectoryExists("/road_template")) {reader.Dispose();continue;}
             archives.Add(reader);assets.Add(reader);
-            if (map) maps.Add(reader);
+            if (map) {maps.Add(reader);mapPaths.Add(file);}
             if (def) keyParts.Add(Stamp(file));
         }
         var dlcs = archives.Count;
@@ -222,7 +242,7 @@ sealed class World : IDisposable
         {
             var reader = HashFsReader.Open(Path.Combine(game, name));
             archives.Add(reader);assets.Add(reader);
-            if (name == "base_map.scs") maps.Add(reader);
+            if (name == "base_map.scs") {maps.Add(reader);mapPaths.Add(Path.Combine(game, name));}
             if (name == "def.scs") keyParts.Insert(0, Stamp(Path.Combine(game, name)));
         }
         defKey = string.Join(';', keyParts);
@@ -256,15 +276,75 @@ sealed class World : IDisposable
         catch (Exception ex) {Console.Error.WriteLine($"prefab cache not written: {ex.Message}");}
         return prefabPaths;
     }
-    public void Dispose() {foreach (var a in archives) a.Dispose();}
-    // Loads the sectors within margin of the positions. Returns true when the map was
-    // reopened: every item and node reference taken before is then stale.
-    public bool Require(IEnumerable<Vector3> positions, float margin = 500)
+    public void Dispose()
+    {
+        try {pending?.Wait();} catch (AggregateException) {}
+        if (pending is {IsCompletedSuccessfully: true}) foreach (var r in pending.Result.Readers) r.Dispose();
+        foreach (var r in currentReaders) r.Dispose();
+        foreach (var a in archives) a.Dispose();
+    }
+    HashSet<SectorCoordinate> Wanted(IEnumerable<Vector3> positions, float margin)
     {
         var want = new HashSet<SectorCoordinate>();
         foreach (var p in positions) foreach (var dx in new[] {-margin, 0, margin}) foreach (var dz in new[] {-margin, 0, margin})
             want.Add(new((int)Math.Floor((p.X + dx) / Map.SectorSize), (int)Math.Floor((p.Z + dz) / Map.SectorSize)));
+        return want;
+    }
+    // Starts opening the map in the background when it lacks a sector the next cycles need
+    // (one load at a time): Locate's margin (a sector) around the truck and around the point
+    // `soon` it will reach (Locate runs there after a sector boundary: side lanes, a reset),
+    // and the walker's (500 m) along the way ahead. Loaded neighbours of the new area are kept.
+    public void Prefetch(Vector3 truck, Vector3 soon, IEnumerable<Vector3> ahead)
+    {
+        if (pending is not null) return;
+        var want = Wanted([truck, soon], Map.SectorSize);want.UnionWith(Wanted(ahead, 500));
+        if (want.IsSubsetOf(loaded)) return;
+        var set = new HashSet<SectorCoordinate>(want);
+        set.UnionWith(loaded.Where(s => want.Any(w => Math.Abs(w.X - s.X) <= 1 && Math.Abs(w.Z - s.Z) <= 1)));
+        pendingSectors = set;pendingOpens = opens;
+        var list = set.ToList();var paths = mapPaths.ToList();
+        pending = Task.Run(() =>
+        {
+            var watch = Stopwatch.StartNew();
+            var readers = paths.Select(f => (IHashFsReader)HashFsReader.Open(f)).ToList();
+            try
+            {
+                var map = Map.Open("/map/europe.mbd", new AssetLoader(readers.ToArray()), list);
+                return (map, ItemIndex.Build(map), readers, watch.ElapsedMilliseconds);
+            }
+            catch {foreach (var r in readers) r.Dispose();throw;}
+        });
+    }
+    // Between cycles: takes a finished background map. False when none is ready, it failed,
+    // or a synchronous reopen came after it started (then it is dropped; Prefetch again).
+    public bool Swap()
+    {
+        if (pending is not {IsCompleted: true}) return false;
+        var task = pending;pending = null;
+        if (!task.IsCompletedSuccessfully) {Console.Error.WriteLine($"map: background open failed: {task.Exception?.GetBaseException().Message}");return false;}
+        var (map, idx, readers, ms) = task.Result;
+        if (opens != pendingOpens) {foreach (var r in readers) r.Dispose();return false;}
+        foreach (var r in currentReaders) r.Dispose();
+        Map = map;index = idx;currentReaders = readers;++opens;
+        loaded.Clear();loaded.UnionWith(pendingSectors!);
+        Console.Error.WriteLine($"map: {loaded.Count} sectors opened in the background in {ms} ms");
+        return true;
+    }
+    // Loads the sectors within margin of the positions. Returns true when the map was
+    // reopened: every item and node reference taken before is then stale.
+    public bool Require(IEnumerable<Vector3> positions, float margin = 500)
+    {
+        var want = Wanted(positions, margin);
         if (want.IsSubsetOf(loaded)) return false;
+        // A background load that covers them: wait for it rather than open the map twice.
+        if (pending is not null && pendingSectors!.IsSupersetOf(want))
+        {
+            try {pending.Wait();} catch (AggregateException) {}
+            if (Swap() && want.IsSubsetOf(loaded)) return true;
+        }
+        // Logged: a synchronous reopen in a follow cycle is what the background loading avoids.
+        Console.Error.WriteLine($"map: synchronous open for {string.Join(' ', positions.Select(p => $"({p.X:F0},{p.Z:F0})"))} margin {margin:F0}"
+            + (pending is null ? ", nothing loading" : $", loading {pendingSectors!.Count} sectors without {string.Join(' ', want.Except(pendingSectors).Select(c => $"{c.X},{c.Z}"))}"));
         // Keep loaded neighbours of the new area so a rolling path does not reload them; drop the rest.
         var keep = loaded.Where(s => want.Any(w => Math.Abs(w.X - s.X) <= 1 && Math.Abs(w.Z - s.Z) <= 1)).ToList();
         loaded.Clear();loaded.UnionWith(want);loaded.UnionWith(keep);
@@ -282,6 +362,9 @@ sealed class World : IDisposable
     {
         var watch = Stopwatch.StartNew();
         Map = Map.Open("/map/europe.mbd", mapFs, loaded.ToList());
+        index = ItemIndex.Build(Map);++opens;
+        foreach (var r in currentReaders) r.Dispose();
+        currentReaders = new();
         Console.Error.WriteLine($"map: {loaded.Count} sectors [{(loaded.Count > 30 ? "..." : string.Join(' ', loaded.Select(s => $"{s.X},{s.Z}")))}] in {watch.ElapsedMilliseconds} ms");
     }
     // Unsupported looks always throw InvalidOperationException (cached).
@@ -388,7 +471,9 @@ sealed class World : IDisposable
     {
         Require([position], Map.SectorSize);
         StartPoint? selected = null;
-        var nearest = Map.MapItems.Values.OfType<Road>().Select(road =>
+        // Roads within about a cell (64-128 m) of the truck; every road only if none is indexed there.
+        var candidates = index.Roads(position).ToList();
+        var nearest = (candidates.Count > 0 ? candidates : Map.MapItems.Values.OfType<Road>()).Select(road =>
         {
             int n = Math.Max(1, (int)Math.Ceiling(road.Length / 2));
             float bestT = 0, bestDistance = float.PositiveInfinity;
@@ -431,7 +516,7 @@ sealed class World : IDisposable
         // closest to the heading wins, so a truck going straight is not put on a turn.
         var heading = Vector2.Normalize(Lane.Flat(forward));
         var curves = new List<(StartPoint start, double turn)>();
-        foreach (var prefab in Map.MapItems.Values.OfType<Prefab>().Where(p => p.Nodes.Any(n => Vector3.Distance(n.Position, position) < 400)))
+        foreach (var prefab in index.Prefabs(position, 400).Where(p => p.Nodes.Any(n => Vector3.Distance(n.Position, position) < 400)))
         {
             var view = PrefabView.Of(this, prefab);
             if (view is null) continue;
@@ -457,6 +542,49 @@ sealed class World : IDisposable
         }
         if (selected is null) throw new InvalidOperationException("No drivable lane along the heading near the current position");
         return selected;
+    }
+}
+
+// Roads (sampled every 16 m along the reference curve) and prefabs (their nodes) by 64 m
+// cell, built once per map open.
+sealed class ItemIndex
+{
+    const float Cell = 64;
+    public static readonly ItemIndex Empty = new();
+    readonly Dictionary<(int, int), List<Road>> roads = new();
+    readonly Dictionary<(int, int), List<Prefab>> prefabs = new();
+    static (int, int) Key(float x, float z) => ((int)MathF.Floor(x / Cell), (int)MathF.Floor(z / Cell));
+    public static ItemIndex Build(Map map)
+    {
+        var index = new ItemIndex();
+        foreach (var item in map.MapItems.Values)
+        {
+            if (item is Road road)
+            {
+                var keys = new HashSet<(int, int)>();
+                int n = Math.Max(1, (int)Math.Ceiling(road.Length / 16));
+                for (int i = 0; i <= n; ++i) {var p = road.InterpolateCurve((float)i / n).Position;keys.Add(Key(p.X, p.Z));}
+                foreach (var k in keys) {if (!index.roads.TryGetValue(k, out var list)) index.roads[k] = list = new();list.Add(road);}
+            }
+            else if (item is Prefab prefab)
+                foreach (var k in prefab.Nodes.Select(n => Key(n.Position.X, n.Position.Z)).Distinct())
+                {if (!index.prefabs.TryGetValue(k, out var list)) index.prefabs[k] = list = new();list.Add(prefab);}
+        }
+        return index;
+    }
+    // Roads with a sample within one cell of the position (so every road within 64 m).
+    public IEnumerable<Road> Roads(Vector3 p)
+    {
+        var (cx, cz) = Key(p.X, p.Z);var seen = new HashSet<Road>();
+        for (int dx = -1; dx <= 1; ++dx) for (int dz = -1; dz <= 1; ++dz)
+            if (roads.TryGetValue((cx + dx, cz + dz), out var list)) foreach (var r in list) if (seen.Add(r)) yield return r;
+    }
+    // Prefabs with a node within radius (and some beyond: whole cells).
+    public IEnumerable<Prefab> Prefabs(Vector3 p, float radius)
+    {
+        var (cx, cz) = Key(p.X, p.Z);int reach = (int)MathF.Ceiling(radius / Cell);var seen = new HashSet<Prefab>();
+        for (int dx = -reach; dx <= reach; ++dx) for (int dz = -reach; dz <= reach; ++dz)
+            if (prefabs.TryGetValue((cx + dx, cz + dz), out var list)) foreach (var q in list) if (seen.Add(q)) yield return q;
     }
 }
 
