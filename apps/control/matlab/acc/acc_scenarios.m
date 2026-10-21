@@ -9,7 +9,8 @@ function S = acc_scenarios()
 %       truck would be at constant start speed at time t, for cut-ins / late detection)
 %     resume ([t_on t_off] rows, driver resume pulses), time_gap (s).
 kmh = 1/3.6;
-th = 2.0; d0 = 5.0;
+C = acc_controller_params();
+th = C.fol.th_default; d0 = C.fol.d0;        % the node's default time gap
 base = struct("name", "", "title", "", "T", 60, "v0", 0, "vset", [0 0], ...
     "lead", struct("x0", 500, "v0", 0, "seg", zeros(0, 3), "valid", [0 0], "shift", zeros(0, 2)), ...
     "resume", zeros(0, 2), "time_gap", th);
@@ -60,7 +61,8 @@ S(end+1) = s;
 % lead leaves shortly after the truck has stopped: automatic GO without the resume input
 s.name = "stop_and_go_auto"; s.title = "Stop and go, lead leaves right after the truck stops (automatic GO)";
 s.T = 60;
-s.lead.seg = [5 -2 0; tStop + 10.8 1 v];    % truck in HOLD at tStop + 10.55 (with the idle creep of the plant)
+s.lead.seg = [5 -2 0; tStop + 5.9 1 v];     % truck in HOLD at tStop + 5.1-6.5 (12-40 t) with the 1.3 s gap
+                                             % (2.0 s gap: tStop + 10.55, lead left at + 10.8)
 s.resume = zeros(0, 2);
 S(end+1) = s;
 
@@ -74,6 +76,24 @@ v = 60*kmh;
 s = base; s.name = "lead_accel_away"; s.title = "Lead at 60 km/h accelerates away at 1 m/s^2 (set speed 80 km/h)";
 s.T = 45; s.v0 = v; s.vset = [0 80*kmh];
 s.lead = struct("x0", d0 + th*v, "v0", v, "seg", [5 1 100*kmh], "valid", [0 1], "shift", zeros(0, 2));
+S(end+1) = s;
+
+% approach a slower lead: how far ahead the truck starts slowing and how hard it brakes
+v = 90*kmh;
+s = base; s.name = "slower_lead"; s.title = "Approach a 70 km/h lead from 90 km/h, first seen at 150 m";
+s.T = 60; s.v0 = v; s.vset = [0 v];
+s.lead = struct("x0", 0, "v0", 70*kmh, "seg", zeros(0, 3), "valid", [0 0; 2 1], "shift", [2 150]);
+S(end+1) = s;
+
+% catch up after the lead pulls away: following at 60 km/h, the lead goes to 80 km/h at
+% 1.5 m/s^2 (5.0-8.7 s, faster than the truck can) and holds it; set speed 90 km/h.
+% Catch-up time = gap settled - 8.7 s.
+% (Not at 90 km/h: there the plant's automatic hunts 12 -> 14 -> 13 -> 12 at full throttle and
+% the truck cannot accelerate, with the old and the new tuning alike.)
+v = 60*kmh;
+s = base; s.name = "catch_up"; s.title = "Lead pulls away 60 -> 80 km/h at 1.5 m/s^2, catch up (set 90 km/h)";
+s.T = 60; s.v0 = v; s.vset = [0 90*kmh];
+s.lead = struct("x0", d0 + th*v, "v0", v, "seg", [5 1.5 80*kmh], "valid", [0 1], "shift", zeros(0, 2));
 S(end+1) = s;
 
 % normal driving for the mass estimator: accelerate 40 -> 80 km/h, catch up a slower lead and

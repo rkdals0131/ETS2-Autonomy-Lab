@@ -97,3 +97,60 @@ TEST(RoadGrade,RiseOverTheLast20m) {
     const auto held=grade.grade;grade.update(60*std::cos(.3),60*std::sin(.3)+.1,5);   // < 0.5 m: standstill
     EXPECT_EQ(grade.grade,held);
 }
+
+// Point-mass truck behind a lead (the acc_smoke_main plant: acceleration follows a_des with a
+// 0.4 s lag) at the node's 50 Hz, the node's default 1.3 s time gap and set speed 90 km/h. The
+// lead's speed is a function of time; returns the trace the tests below check.
+namespace {
+struct ApproachTrace {
+    double start_gap=-1,peak_decel=0,min_gap=1e9,settled_t=-1,final_gap=0,final_v=0,final_vl=0;
+    bool emergency=false;
+};
+template<class LeadSpeed>
+ApproachTrace drive_behind(double v,double gap,double seconds,LeadSpeed lead_speed) {
+    AccMpc acc;ApproachTrace r;
+    double a=0,xe=0,xl=gap,vl=lead_speed(0.0);
+    const double dt=.02,th=1.3;
+    for(int k=0;k<=static_cast<int>(seconds/dt);++k) {
+        const double t=k*dt,vl_next=lead_speed(t+dt),al=(vl_next-vl)/dt;
+        AccMpc::Input in;
+        in.enable=true;in.set_speed_mps=90/3.6;in.time_gap_s=th;in.ego_speed_mps=v;in.ego_accel_mps2=a;
+        in.lead_valid=true;in.lead_gap_m=xl-xe;in.lead_speed_mps=vl;in.lead_accel_mps2=al;
+        in.engine_rpm=1200;in.gear=12;
+        const auto& out=acc.update(in,t);
+        if(r.start_gap<0 && out.a_des_mps2<=-.2 && v-vl>.3) r.start_gap=xl-xe;
+        r.emergency|=out.mode==AccMpc::Emergency;
+        a+=(out.a_des_mps2-a)*dt/.4;v=std::max(0.0,v+a*dt);xe+=v*dt;vl=vl_next;xl+=vl*dt;
+        const double g=xl-xe,target=5+th*vl;
+        r.peak_decel=std::max(r.peak_decel,-a);r.min_gap=std::min(r.min_gap,g);
+        const bool settled=std::abs(g-target)<=std::max(2.0,.05*target) && std::abs(v-vl)<=.5;
+        if(!settled) r.settled_t=-1; else if(r.settled_t<0) r.settled_t=t;
+    }
+    r.final_gap=xl-xe;r.final_v=v;r.final_vl=vl;
+    return r;
+}
+}
+
+// A 70 km/h lead first seen 150 m ahead at 90 km/h: the truck keeps its speed until the
+// deceleration needed to reach the 1.3 s gap at the lead's speed has grown, then brakes
+// gently (no service-brake-sized deceleration), never closer than the target, and settles
+// at 5 + 1.3 v_lead.
+TEST(AccMpc,ApproachesASlowerLeadLateAndGently) {
+    const auto r=drive_behind(90/3.6,150,60,[](double){return 70/3.6;});
+    EXPECT_FALSE(r.emergency);
+    EXPECT_LT(r.start_gap,70);EXPECT_GT(r.start_gap,40);
+    EXPECT_LT(r.peak_decel,1.2);
+    EXPECT_GT(r.min_gap,5+1.3*70/3.6-2);
+    EXPECT_GE(r.settled_t,0);EXPECT_LT(r.settled_t,35);
+    EXPECT_NEAR(r.final_gap,5+1.3*70/3.6,1);EXPECT_NEAR(r.final_v,70/3.6,.2);
+}
+
+// The lead pulls away from 60 to 80 km/h at 1.5 m/s^2 (5.0-8.7 s): the truck catches up at up
+// to 3 m/s closing and 0.6 m/s^2 and is back at the 1.3 s gap well within 15 s.
+TEST(AccMpc,CatchesUpALeadThatPulledAway) {
+    const auto speed=[](double t){return std::min(60/3.6+1.5*std::max(0.0,t-5),80/3.6);};
+    const auto r=drive_behind(60/3.6,5+1.3*60/3.6,60,speed);
+    EXPECT_FALSE(r.emergency);
+    EXPECT_GE(r.settled_t,0);EXPECT_LT(r.settled_t-8.7,15);
+    EXPECT_NEAR(r.final_gap,5+1.3*80/3.6,1);
+}

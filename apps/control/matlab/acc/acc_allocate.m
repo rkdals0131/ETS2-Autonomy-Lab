@@ -51,7 +51,7 @@ end
 
 a_des = mv(1) + mv(2);
 mv_app = mv;
-urgent = mode == 6 || mv(2) < -0.3;
+urgent = mode == 6 || mv(2) < C.alc.urgent_mv2;
 ac = acc_coast(v, C, m, gear_d, rpm);
 
 % drive / coast decision with hysteresis: enter above coasting + db_drive (with the retarder

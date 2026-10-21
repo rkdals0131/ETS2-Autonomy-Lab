@@ -17,14 +17,14 @@ int main()
 
   ets2::AccController::ExtU_ACC_Controller_T in{};
   double v = 80.0 / 3.6, a = 0.0, xe = 0.0;          // ego
-  double vl = v, xl = 5.0 + 2.0 * v;                 // lead, rear bumper
+  double vl = v, xl = 5.0 + 1.3 * v;                 // lead, rear bumper (at the 1.3 s default gap)
   const double dt = 0.05;
   for (int k = 0; k <= 40 * 20; ++k) {
     const double t = k * dt;
     const double al = (t >= 10.0 && vl > 40.0 / 3.6) ? -2.0 : 0.0;
     in.enable = true;
     in.set_speed_mps = 90.0 / 3.6;
-    in.time_gap_s = 2.0;
+    in.time_gap_s = 1.3;
     in.ego_speed_mps = v;
     in.ego_accel_mps2 = a;
     in.lead_valid = true;

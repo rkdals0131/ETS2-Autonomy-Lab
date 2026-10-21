@@ -6,10 +6,14 @@ function [x, ref, md, umin, umax, ymin, ymax, ywt, sw] = acc_mpc_prep( ...
 %   last applied brake-path request, a1 = measured (filtered) acceleration - a2.
 %   FOLLOW-like modes track a shaped closing speed (y2 reference)
 %       e = gap - (d0 + th*v_lead)          gap error at the lead's speed
-%       e > 0: vr_ref = -min(sqrt(2*a*e + c^2) - c, max(v - v_lead, vr_catchup)), c = a/k:
-%              the closing speed from which the ego settles at the target gap with at most
-%              a = a_approach of deceleration, linear (slope k_gap) near the target; it never
-%              asks to close faster than now unless below the catch-up speed.
+%       e > 0: vr_ref = -min(sqrt(2*A*e + c^2) - c, max(v - v_lead, vr_catchup)), c = a/k:
+%              the closing speed from which the ego settles at the target gap braking at
+%              about A, linear (slope k_gap) near the target; it never asks to close faster
+%              than now unless below the catch-up speed. A = a_approach (comfortable), or the
+%              profile through the present state when that needs more (A = vr^2/(2*(e - vr/k)),
+%              at most a_approach_max): the truck keeps its speed until the needed deceleration
+%              vr^2/(2e) reaches a_approach*vr/(vr + 2c), and never brakes harder than the
+%              kinematics need (a required-deceleration / TTC-like approach).
 %       e < 0: vr_ref = min(k_open*|e|, vr_open_max) (too close: open the gap gently)
 %   STOP (lead stopped): target gap d0; below 1 m/s within 3 m of it no throttle (stop there).
 %   plus a weak gap term (y1 = gap - th_nom*v -> d0 + (th - th_nom)*v) and the soft minimum
@@ -96,13 +100,28 @@ if follow
     % gap shrinks with the lead's predicted speed (lead braking -> room to brake less).
     k = C.fol.k_gap;
     if mode == 3, k = C.fol.k_stop; end
-    c = C.fol.a_approach / k;
     cap = min(max(v - vl, C.fol.vr_catchup), C.fol.vr_ref_max);
+    % profile deceleration A: the comfortable a_approach, or the profile through the present
+    % state when the truck is already inside the comfortable one (late detection, cut-in, lead
+    % braking): sqrt(2*A*e + c^2) - c = v - v_lead with c = A/k gives A = vc^2/(2*(e - vc/k)),
+    % so it brakes at what the kinematics need, not more. c scales with A so that the slope
+    % near the target stays k (a fixed c made the last metres of a stop too stiff).
+    A = C.fol.a_approach;
+    vc = v - vl;
+    if e > 0 && vc > 0
+        room = e - vc / k;
+        if room > 0
+            A = min(max(A, vc^2 / (2 * room)), C.fol.a_approach_max);
+        else
+            A = C.fol.a_approach_max;
+        end
+    end
+    c = A / k;
     ei = e;
     vli = vl;
     for i = 1:p
         if ei > 0
-            prof = sqrt(2 * C.fol.a_approach * ei + c^2) - c;
+            prof = sqrt(2 * A * ei + c^2) - c;
             vr_ref(i) = -min(prof, cap);
         else
             vr_ref(i) = min(-C.fol.k_open * ei, C.fol.vr_open_max);   % too close: open gently

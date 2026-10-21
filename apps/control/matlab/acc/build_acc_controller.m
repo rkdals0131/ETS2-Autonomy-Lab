@@ -78,6 +78,7 @@ end
 lines(end+1) = "MODE_dt = C.Ts;";
 lines(end+1) = "FOL_d0 = C.fol.d0;";
 lines(end+1) = "FOL_a_approach = C.fol.a_approach;";
+lines(end+1) = "FOL_k_gap = C.fol.k_gap;";
 code = strjoin(lines, newline);
 end
 
@@ -231,6 +232,7 @@ for f = string(fieldnames(C.mode)).'
     sfdata(ch, "MODE_" + f, "Parameter");
 end
 sfdata(ch, "MODE_dt", "Parameter"); sfdata(ch, "FOL_d0", "Parameter"); sfdata(ch, "FOL_a_approach", "Parameter");
+sfdata(ch, "FOL_k_gap", "Parameter");
 
 sOFF = sfstate(ch, ["OFF", "entry: mode = uint8(0);"], [30 30 140 70]);
 sON = sfstate(ch, "ON", [230 30 900 620]);
@@ -280,8 +282,11 @@ f.LabelString = "r = follow_range()";
 f.Position = [30 700 200 60];
 f.Script = char(strjoin([
 "function r = follow_range()"
-"% distance within which a lead matters: target gap + distance to settle at a_approach + margin"
-"r = FOL_d0 + th*v + max(v - vl, 0)^2/(2*FOL_a_approach) + MODE_follow_range_extra;"], newline));
+"% distance within which a lead matters: target gap + error at which the approach profile"
+"% starts at this closing speed (acc_mpc_prep) + the closing distance over the preview + margin"
+"vr = max(v - vl, 0);"
+"c = FOL_a_approach / FOL_k_gap;"
+"r = FOL_d0 + th*v + vr*(vr + 2*c)/(2*FOL_a_approach) + MODE_follow_preview_s*vr + MODE_follow_range_extra;"], newline));
 end
 
 function d = sfdata(ch, name, scope, init)

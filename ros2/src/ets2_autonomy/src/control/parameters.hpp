@@ -32,9 +32,10 @@ struct DrivingParameters {
     // Curve speed while LCC steers (curve_speed.hpp): lateral acceleration on the lane ahead and
     // the deceleration it is planned with (under the ACC's 0.5 m/s^2 set-speed ramp).
     double lateral_acceleration_mps2=2,curve_deceleration_mps2=.45,stopping_deceleration_mps2=1.5;
-    // following_time_s 2.0 is the time gap the MPC was tuned for; its standstill gap is 5 m
-    // bumper to bumper, built into the controller (standstill_gap_m is the PID's).
-    double following_time_s=2,standstill_gap_m=5,following_gain=.5;
+    // following_time_s: the MPC's time gap (1.3 s default since 2026-10-21, was 2.0; tuned for
+    // 1.3, accepts 1-3); its standstill gap is 5 m bumper to bumper, built into the controller
+    // (standstill_gap_m is the PID's).
+    double following_time_s=1.3,standstill_gap_m=5,following_gain=.5;
     // Front axle to front bumper; not measured, Scania S cab estimate.
     double front_overhang_m=1.5;
     // Turn signal lane change: peak lateral acceleration of its path and its shortest

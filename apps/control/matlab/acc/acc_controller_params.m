@@ -144,7 +144,7 @@ C.mpc.tau1 = 0.5;
 C.mpc.tau2 = 0.33;
 C.mpc.p = 80;                       % 4 s prediction
 C.mpc.blocks = [2 3 5 10 20 40];    % move blocking (6 moves per MV)
-C.mpc.th_nom = 2.0;                 % time gap built into output 1 (y1 = gap - th_nom*v)
+C.mpc.th_nom = 1.3;                 % time gap built into output 1 (y1 = gap - th_nom*v), = th_default
 % weights (dimensionless after the scale factors below)
 C.mpc.scale_y = [10 2 5];           % gap term m, relative speed m/s, speed m/s
 C.mpc.w_y_follow = [0.05 0.5 0];    % gap, relative speed (shaped reference), speed
@@ -157,19 +157,29 @@ C.mpc.jerk_emerg = [3 3 12 6];
 C.mpc.a_min_comf = -3.0;            % m/s^2, total a_des lower limit in normal following
 C.mpc.a_min_emerg = -6.0;           % only in EMERGENCY
 C.mpc.a_max_comf = 0.8;             % m/s^2 comfort acceleration (also <= 0.85*full throttle)
-C.mpc.a_max_follow = 0.4;           % m/s^2 while catching up a lead that is not accelerating
+C.mpc.a_max_follow = 0.6;           % m/s^2 while catching up a lead that is not accelerating (<= 0.85*full
+                                    % throttle through u1max: 65-75 km/h 0.6 at 20.3 t)
 C.mpc.ecr_gap = 1;                  % soft minimum gap, equal concern
 C.mpc.ecr_vset = 2;                 % soft set-speed upper bound
 
 % ---------------- following policy -------------------------------------------------------
 C.fol.d0 = 5.0;                     % m standstill gap (bumper to bumper)
-C.fol.th_default = 2.0;             % s time gap for a truck with trailer
+C.fol.th_default = 1.3;             % s default time gap (user choice 2026-10-21; was 2.0, felt too far)
 C.fol.th_min = 1.0;  C.fol.th_max = 3.0;
 C.fol.safe_frac = 0.5;              % soft minimum gap = d0_safe + safe_frac*th*v
 C.fol.d0_safe = 3.0;                % m
-C.fol.a_approach = 2.0;             % m/s^2, most deceleration the closing-speed profile asks for
-C.fol.k_gap = 0.4;                  % 1/s, slope of the profile near the target gap (2.5 s)
-C.fol.vr_catchup = 1.5;             % m/s closing speed allowed when catching up a lead
+% Approach to a slower lead (closing-speed reference, acc_mpc_prep.m): the truck keeps its speed
+% until the deceleration needed to reach the target gap at the lead's speed has grown to about
+% a_approach*vr/(vr + 2c) (0.6 / 0.8 / 1.0 / 1.1 m/s^2 at 10 / 20 / 40 / 80 km/h closing; the old
+% a 2.0, k 0.4 gave 0.4 / 0.7 / 1.0 / 1.4 but a 2.5 s linear tail near the target), then follows
+% vr = sqrt(2*A*e + c^2) - c, c = A/k_gap. A = a_approach, or, when the state is already inside
+% that profile (late detection, cut-in, lead braking), the profile through the present state
+% (A = vr^2/(2*(e - vr/k)), at most a_approach_max): it brakes at what the kinematics need.
+C.fol.a_approach = 1.25;            % m/s^2, comfortable approach deceleration (sweep 1.0-1.5: same safety,
+                                    % 90 -> 70 km/h lead peak 0.66-0.90 m/s^2)
+C.fol.a_approach_max = 3.0;         % m/s^2, most the adapted profile asks for (= comfort a_min)
+C.fol.k_gap = 0.8;                  % 1/s, slope of the profile near the target gap (1.25 s)
+C.fol.vr_catchup = 3.0;             % m/s closing speed allowed when catching up a lead
 C.fol.vr_ref_max = 25;              % m/s
 C.fol.k_stop = 0.8;                 % 1/s profile slope in STOP (lead stopped: settle at d0 within ~1.3 s)
 C.fol.k_open = 0.05;                % 1/s opening speed per m when closer than the target
@@ -182,7 +192,8 @@ C.fol.a_lead_floor_T = 2.0;         % s: predicted lead deceleration limited to 
 C.fol.a_filter_tau = 0.1;           % s, first-order filter on the measured ego acceleration
 
 % ---------------- mode logic (Stateflow) ------------------------------------------------------
-C.mode.follow_range_extra = 20;     % m beyond the distance needed to settle at a_approach
+C.mode.follow_range_extra = 20;     % m beyond the distance where the approach profile starts ...
+C.mode.follow_preview_s = 4.0;      % ... plus this many seconds of closing (the MPC horizon sees it coming)
 C.mode.follow_hyst = 30;            % m
 C.mode.lead_lost_s = 0.5;           % s without lead before FOLLOW -> CRUISE
 C.mode.v_lead_stopped = 0.5;        % m/s lead counts as stopped (STOP)
@@ -216,6 +227,9 @@ C.alc.ret_dwell_rev = 2.5;          % s before a change against the direction of
 C.alc.ret_min_v = 3.0;              % m/s below this the retarder is released (weak, and the clutch opens)
 C.alc.brk_on = 0.12;                % m/s^2 residual before the service brake comes in (normal)
 C.alc.brk_on_urgent = 0.02;         % residual threshold when urgent
+C.alc.urgent_mv2 = -0.301;          % urgent when the MPC brake path asks below this (m/s^2); off the 0.1-per-step
+                                    % grid of a ramp at the brake jerk limit, which otherwise sits on -0.3 to
+                                    % rounding and made the model and the generated code differ (SIL, 1.3 s gap)
 C.alc.brk_off = 0.03;               % m/s^2 residual where it is released again
 C.alc.brk_ki = 0.0;                 % no integral on the brake (MPC closes the loop)
 C.alc.brk_max = 1.0;

@@ -59,6 +59,21 @@ if ~isempty(st)
 else
     m.standstill_gap_m = NaN; m.hold_s = 0; m.go_time_s = NaN;
 end
+% approach: gap at which the truck starts slowing for a lead it closes on (a_des <= -0.2 m/s^2
+% while closing faster than 0.3 m/s); gap settled: the time after which the gap stays within
+% max(2 m, 5 %) of d0 + th*v_lead with |v - v_lead| <= 0.5 m/s to the end of the run
+ap = find(lv & R.a_des <= -0.2 & (R.v - R.v_lead) > 0.3, 1);
+if ~isempty(ap), m.approach_start_gap_m = R.gap(ap); m.approach_start_s = t(ap);
+else, m.approach_start_gap_m = NaN; m.approach_start_s = NaN; end
+tgt = 5 + s.time_gap * R.v_lead;
+ok = lv & abs(R.gap - tgt) <= max(2, 0.05 * tgt) & abs(R.v - R.v_lead) <= 0.5;
+if any(lv) && ok(end)
+    kb = find(~ok, 1, "last");
+    if isempty(kb), m.gap_settled_s = 0; else, m.gap_settled_s = t(kb + 1); end
+else
+    m.gap_settled_s = NaN;
+end
+m.emergency = any(R.mode == 6);
 % speed tracking in the last 10 s (set-speed scenario) and gap error in the last 10 s
 last = t > t(end) - 10;
 m.final_speed_err_kmh = mean(R.v(last) - R.set_speed(last)) * 3.6;
