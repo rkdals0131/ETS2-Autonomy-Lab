@@ -74,14 +74,26 @@
             "road/lane_change": {
               "visible": true
             },
+            "scene/truck": {
+              "visible": true
+            },
             "scene/lane": {
+              "visible": true
+            },
+            "scene/lanes": {
               "visible": true
             },
             "scene/traffic": {
               "visible": true
             },
-            "scene/ego": {
+            "scene/acc": {
               "visible": true
+            },
+            "scene/curve": {
+              "visible": true
+            },
+            "debug/mpc": {
+              "visible": false
             },
             "scene/status": {
               "visible": false

@@ -244,25 +244,25 @@ int main(int argc,char** argv) {
         // Turn signal lane change: the switch's rising edge requests one to that side (both on,
         // the hazards, is none); it starts while LCC steers, once the gap on the side lane is
         // clear, and keeps going until merged (changing: its side).
-        int change_request=0,previous_signal=2,changing=0;std::string change_waiting;
+        int change_request=0,previous_signal=2,changing=0;std::string change_waiting;uint64_t change_blocker=0;
         // The driver's steering: since when without a pause over 0.3 s (the stick crossing centre).
         Clock::time_point steering_since{},steering_seen{};
         // A lane change waits for a gap on the target lane: nobody beside the truck, the vehicle
         // ahead at least 5 m + 0.5 s + 3 s of closing ahead of the front bumper, the one behind
         // at least 5 m + 3 s of its closing behind the rear (trailer included). front and rear
         // are from the lane's reference point at lane distance s.
-        const auto gap_problem=[&](const LanePath& target,double s,double front,double rear,double v)->std::string {
+        const auto gap_problem=[&](const LanePath& target,double s,double front,double rear,double v)->std::pair<std::string,uint64_t> {
             for(const auto& a:actors) {
                 const auto p=target.project(a.x,a.y,std::max(0.0,s-200),s+200);
                 if(!(p.d<=(target.width+a.width)/2)) continue;
                 const auto& A=target.points[p.segment];const auto& B=target.points[p.segment+1];
                 if(std::cos(a.yaw-std::atan2(B.y-A.y,B.x-A.x))<=0) continue;
                 const auto ahead=p.s-a.length/2-(s+front),behind=(s-rear)-(p.s+a.length/2);
-                if(ahead>=0) {if(ahead<5+.5*v+3*std::max(0.0,v-a.speed)) return "vehicle ahead at "+std::to_string(int(ahead))+" m";}
-                else if(behind>=0) {if(behind<5+3*std::max(0.0,a.speed-v)) return "vehicle behind at "+std::to_string(int(behind))+" m";}
-                else return "vehicle beside";
+                if(ahead>=0) {if(ahead<5+.5*v+3*std::max(0.0,v-a.speed)) return {"vehicle ahead at "+std::to_string(int(ahead))+" m",a.id};}
+                else if(behind>=0) {if(behind<5+3*std::max(0.0,a.speed-v)) return {"vehicle behind at "+std::to_string(int(behind))+" m",a.id};}
+                else return {"vehicle beside",a.id};
             }
-            return "";
+            return {"",0};
         };
         // Cruise mode: the game's cruise control is still on at arm. A light brake cancels it
         // (as the driver's brake does); a later press of the button turns it on again, which
@@ -366,7 +366,7 @@ int main(int argc,char** argv) {
             if(previous_signal==2) previous_signal=signal;
             if(signal!=previous_signal) {
                 if(change_request && !signal) std::cout<<"Lane change request withdrawn"<<std::endl;
-                change_request=signal;previous_signal=signal;change_waiting.clear();
+                change_request=signal;previous_signal=signal;change_waiting.clear();change_blocker=0;
             }
             const char* side_name=change_request<0?"left":"right";
             if(change_request && !(cruise_engage && lcc)) change_request=0;
@@ -380,13 +380,13 @@ int main(int argc,char** argv) {
                     // The side lane is one lane over: the truck is right of a left lane (offset < 0).
                     if(!(to.offset*change_request>.5*target->width && to.offset*change_request<1.6*target->width)) {
                         std::cout<<"Lane change: the "<<side_name<<" lane is not beside the truck (offset "<<to.offset<<" m)"<<std::endl;change_request=0;
-                    } else if(const auto problem=gap_problem(*target,to.s,front_axle+settings->front_overhang_m-axles.rear_x,
+                    } else if(const auto [problem,blocker]=gap_problem(*target,to.s,front_axle+settings->front_overhang_m-axles.rear_x,
                                                              (now-trailer_time<=200ms?15.0:3.0),std::max(0.0,vehicle->speed_mps));!problem.empty()) {
                         if(problem!=change_waiting) std::cout<<"Lane change to the "<<side_name<<" waits: "<<problem<<std::endl;
-                        change_waiting=problem;
+                        change_waiting=problem;change_blocker=blocker;
                     } else {
                         merge=LaneMerge::start(to.s,to.offset,to.heading_error,vehicle->speed_mps,settings->lane_change_lateral_acceleration_mps2,settings->lane_change_min_s);
-                        lane=std::move(target);lane_side=change_request;changing=change_request;change_request=0;change_waiting.clear();
+                        lane=std::move(target);lane_side=change_request;changing=change_request;change_request=0;change_waiting.clear();change_blocker=0;
                         std::cout<<"Lane change to the "<<side_name<<" over "<<merge->length<<" m"<<std::endl;
                     }
                 }
@@ -600,6 +600,11 @@ int main(int argc,char** argv) {
                 state.acc_mark=mark && ground_truth?(lead_marked?2:1):0;
                 state.acc_mark_x=mark_pose[0];state.acc_mark_y=mark_pose[1];state.acc_mark_heading=mark_pose[2];
                 state.lane_width_m=lane?lane->width:0;state.driver_throttle=acc && drive->throttle_manual>0;
+                state.lead_id=lead_marked?lead.id:0;state.lane_change_blocker_id=change_request?change_blocker:0;
+                state.target_gap_m=5+settings->following_time_s*v;state.curve_lateral_acceleration_mps2=settings->lateral_acceleration_mps2;
+                // Truck outline: front bumper (estimate, front_overhang_m) and 1 m behind the last axle.
+                double last_axle=0;for(const auto& [index,w]:axle_wheels) last_axle=std::min(last_axle,w.x);
+                state.truck_front_m=front_axle+settings->front_overhang_m;state.truck_rear_m=last_axle-1;
                 assist_state->publish(state);
             }
             // The lane in use, 50 m behind to 400 m ahead, once a second.

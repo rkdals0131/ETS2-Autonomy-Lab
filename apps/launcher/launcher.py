@@ -310,7 +310,7 @@ class Controller:
                                  "--ros-args", "-p", "arm:=true", "-p", "engage:=cruise", "-p", "path_file:=" + str(output),
                                  "-p", "acc_enabled:=true", "-p", "lcc_enabled:=" + str(self.lcc).lower()], "drive")
         # HUD marks from the assistance state, apart from the control loop (ends with the job).
-        self.hud = self.spawn(["ros2", "run", "ets2_autonomy", "hud"], "hud")
+        self.hud = self.spawn(["ros2", "run", "ets2_autonomy", "hud", "--ros-args", "-p", "path_file:=" + str(output)], "hud")
         self.update(assist="standby")
 
     def _apply_lcc(self):

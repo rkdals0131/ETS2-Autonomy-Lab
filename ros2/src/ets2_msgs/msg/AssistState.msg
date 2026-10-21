@@ -48,3 +48,13 @@ float64 acc_mark_y
 float64 acc_mark_heading
 float64 lane_width_m
 bool driver_throttle
+# Foxglove scene (hud_node): the lead's and the vehicle holding a turn signal lane change
+# back's GT traffic ids (0 none), ACC's target bumper gap (5 m + time gap x speed), the
+# lateral acceleration the curve speed is planned with, and the truck's front bumper and
+# rear end along base_link x (m).
+uint64 lead_id
+uint64 lane_change_blocker_id
+float64 target_gap_m
+float64 curve_lateral_acceleration_mps2
+float64 truck_front_m
+float64 truck_rear_m

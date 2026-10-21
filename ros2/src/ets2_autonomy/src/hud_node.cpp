@@ -3,8 +3,17 @@
 // (/ets2/drive/lane) and GT traffic. Namespaces:
 // - road/<kind>: the marks painted on the game's road (hud_marks.hpp; the relay draws
 //   LINE_STRIP markers of road/ only): lcc_path, acc, lane_change.
-// - scene/<kind>: Foxglove only: lane (centre and edges), traffic (boxes, the lead
-//   highlighted), ego (box), status (text above the truck).
+// - scene/<kind>: Foxglove only, one question each:
+//   truck: the truck and its trailer (articulation), outlines from the axles and estimates.
+//   lane: the lane in use, centre and edges; green while a lane change goes to it.
+//   lanes: the provider's other lanes beside (path_file's .left/.right); amber when a turn
+//     signal lane change waits for it.
+//   traffic: vehicles within 150 m; the lead green, the one holding a lane change back amber.
+//   acc: the gap ACC keeps behind the lead (a band from the lead back to where the front
+//     bumper should be).
+//   curve: lane stretches whose curve speed (lateral acceleration limit) is below the set
+//     speed, amber, with the lowest limit written there.
+//   status: text above the truck (the layout hides it: the indicators say the same).
 // Foxglove's 3D panel toggles each namespace. A separate process, so presentation never
 // touches the 50 Hz control loop. Assistance state older than 0.3 s (standby, released,
 // paused) clears the road marks; the scene stays while GT arrives.
@@ -33,6 +42,13 @@ int main(int argc,char** argv) {
         ets2_msgs::msg::AssistState::SharedPtr assist;Clock::time_point assist_time{};
         ets2_msgs::msg::TrafficState::SharedPtr traffic;Clock::time_point traffic_time{};
         hud::Points plan,lane;
+        // The provider's lanes beside (Foxglove only), read once a second.
+        const auto path_file=node->declare_parameter<std::string>("path_file","");
+        std::array<hud::Points,2> sides; // left, right
+        auto next_sides=Clock::now();
+        // Truck outline, from the last armed AssistState (the off messages carry none).
+        double truck_front=5.3,truck_rear=-2.5;
+        double trailer_yaw=0;Clock::time_point trailer_time{};
         geometry_msgs::msg::PoseStamped::SharedPtr ego;Clock::time_point ego_time{};
         auto as=node->create_subscription<ets2_msgs::msg::AssistState>("/ets2/drive/assist",rclcpp::QoS(10),
             [&](ets2_msgs::msg::AssistState::SharedPtr m){assist=std::move(m);assist_time=Clock::now();});
@@ -41,6 +57,9 @@ int main(int argc,char** argv) {
         auto ls=node->create_subscription<nav_msgs::msg::Path>("/ets2/drive/lane",rclcpp::QoS(1),[&](nav_msgs::msg::Path::SharedPtr m){lane=points(*m);});
         auto ts=node->create_subscription<ets2_msgs::msg::TrafficState>("/ets2/ground_truth/traffic",rclcpp::QoS(1),
             [&](ets2_msgs::msg::TrafficState::SharedPtr m){traffic=std::move(m);traffic_time=Clock::now();});
+        auto trs=node->create_subscription<geometry_msgs::msg::PoseStamped>("/ets2/ground_truth/trailer/pose",rclcpp::QoS(1),[&](geometry_msgs::msg::PoseStamped::SharedPtr m) {
+            const auto& q=m->pose.orientation;trailer_yaw=std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z));trailer_time=Clock::now();
+        });
         auto es=node->create_subscription<geometry_msgs::msg::PoseStamped>("/ets2/ground_truth/ego/pose",rclcpp::QoS(1),
             [&](geometry_msgs::msg::PoseStamped::SharedPtr m){ego=std::move(m);ego_time=Clock::now();});
         auto markers=node->create_publisher<visualization_msgs::msg::MarkerArray>("/ets2/hud/markers",rclcpp::QoS(1).best_effort());
@@ -92,39 +111,95 @@ int main(int argc,char** argv) {
             }
             in.ego_x=ex;in.ego_y=ey;in.ego_yaw=yaw;
             for(const auto& s:composer.update(in,dt)) line("road/"+s.kind,s.points,s.width_m,s.screen_px,s.rgba,ez);
-            // Scene (Foxglove only): the lane in use with its edges.
-            if(assisted && lane.size()>=2 && (assist->acc_active || assist->lcc_state)) {
-                line("scene/lane",lane,.08,0,{.6f,.65f,.7f,.5f},ez);
-                if(const auto w=assist->lane_width_m;w>0) for(const int side:{-1,1}) {
-                    hud::Points edge;
-                    for(size_t i=0;i<lane.size();++i) {
-                        const auto& a=lane[i==0?0:i-1];const auto& b=lane[i==0?1:i];
-                        const double l=std::hypot(b[0]-a[0],b[1]-a[1]);
-                        if(!(l>1e-6)) continue;
-                        edge.push_back({lane[i][0]-side*w/2*(b[1]-a[1])/l,lane[i][1]+side*w/2*(b[0]-a[0])/l});
-                    }
-                    line("scene/lane",edge,.05,0,{.6f,.65f,.7f,.3f},ez);
+            const bool on=assisted && (assist->acc_active || assist->lcc_state);
+            if(assisted && assist->truck_front_m>0) {truck_front=assist->truck_front_m;truck_rear=assist->truck_rear_m;}
+            const auto box=[&](const std::string& ns,double cx,double cy,double h,double length,double width,double height,std::array<float,4> c) {
+                auto m=marker(ns,Marker::CUBE);
+                m.pose.position.x=cx;m.pose.position.y=cy;m.pose.position.z=ez+height/2;
+                m.pose.orientation.z=std::sin(h/2);m.pose.orientation.w=std::cos(h/2);
+                m.scale.x=length;m.scale.y=width;m.scale.z=height;colour(m,c[0],c[1],c[2],c[3]);
+                array.markers.push_back(std::move(m));
+            };
+            const auto offset_line=[](const hud::Points& centre,double offset) {
+                hud::Points out;
+                for(size_t i=0;i<centre.size();++i) {
+                    const auto& a=centre[i==0?0:i-1];const auto& b=centre[i==0?1:i];
+                    const double l=std::hypot(b[0]-a[0],b[1]-a[1]);
+                    if(l>1e-6) out.push_back({centre[i][0]-offset*(b[1]-a[1])/l,centre[i][1]+offset*(b[0]-a[0])/l});
+                }
+                return out;
+            };
+            constexpr std::array<float,4> grey{.6f,.65f,.7f,.5f},green{.35f,.95f,.45f,.8f},amber{1,.62f,.15f,.8f};
+            // Truck and trailer. The trailer hangs from the fifth wheel (0.5 m ahead of the
+            // drive axle, estimate) along its own yaw: 13.6 m, front 1.6 m ahead of the kingpin.
+            box("scene/truck",ex+(truck_front+truck_rear)/2*std::cos(yaw),ey+(truck_front+truck_rear)/2*std::sin(yaw),yaw,truck_front-truck_rear,2.55,3.8,{.3f,.55f,.95f,.6f});
+            if(now-trailer_time<=500ms) {
+                const double kx=ex+.5*std::cos(yaw),ky=ey+.5*std::sin(yaw),centre=1.6-13.6/2;
+                box("scene/truck",kx+centre*std::cos(trailer_yaw),ky+centre*std::sin(trailer_yaw),trailer_yaw,13.6,2.55,4,{.3f,.55f,.95f,.35f});
+            }
+            const double width=on && assist->lane_width_m>0?assist->lane_width_m:3.5;
+            // Lanes: the one in use (green while changing to it), the provider's beside (amber
+            // while a lane change waits for that side).
+            if(on && lane.size()>=2) {
+                const auto c=assist->lane_change_active?green:grey;
+                line("scene/lane",lane,.08,0,c,ez);
+                for(const int side:{-1,1}) line("scene/lane",offset_line(lane,side*width/2),.05,0,{c[0],c[1],c[2],.3f},ez);
+            }
+            if(!path_file.empty() && now>=next_sides) {
+                next_sides=now+1s;
+                const auto dot=path_file.rfind('.');
+                for(int k=0;k<2;++k) {
+                    sides[k].clear();
+                    try {
+                        const LanePath side(path_file.substr(0,dot)+(k?".right":".left")+(dot==std::string::npos?"":path_file.substr(dot)));
+                        for(const auto& q:side.points) {
+                            const double dx=q.x-ex,dy=q.y-ey,ahead=dx*std::cos(yaw)+dy*std::sin(yaw);
+                            if(ahead>-50 && ahead<400 && std::abs(-dx*std::sin(yaw)+dy*std::cos(yaw))<30) sides[k].push_back({q.x,q.y});
+                        }
+                    } catch(const std::exception&) {} // no lane on that side, or a file being replaced
                 }
             }
-            // Traffic within 150 m; the lead (rear bumper at the ACC mark) in the mark's colour.
+            if(on) for(int k=0;k<2;++k) if(sides[k].size()>=2) {
+                const int side=k?1:-1;
+                const bool waiting=!assist->lane_change_active && assist->lane_change_request==side && assist->lane_source==0;
+                line("scene/lanes",sides[k],waiting?.12:.05,0,waiting?amber:std::array<float,4>{.6f,.65f,.7f,.25f},ez);
+            }
+            // Traffic: the lead green, the vehicle holding a lane change back amber, others grey.
             if(traffic && now-traffic_time<=500ms) for(size_t i=0;i<traffic->id.size();++i) {
-                const double x=traffic->x[i],y=traffic->y[i],h=traffic->yaw[i],length=traffic->length_m[i],width=traffic->width_m[i];
+                const double x=traffic->x[i],y=traffic->y[i];
                 if(std::hypot(x-ex,y-ey)>150) continue;
-                const bool lead=in.mark==2 && std::hypot(x-length/2*std::cos(h)-in.mark_x,y-length/2*std::sin(h)-in.mark_y)<3;
-                auto m=marker("scene/traffic",Marker::CUBE);
-                m.pose.position.x=x;m.pose.position.y=y;m.pose.position.z=ez+1.5;
-                m.pose.orientation.z=std::sin(h/2);m.pose.orientation.w=std::cos(h/2);
-                m.scale.x=length;m.scale.y=width;m.scale.z=3;
-                if(lead) colour(m,.35f,.95f,.45f,.7f);else colour(m,.7f,.7f,.75f,.35f);
-                array.markers.push_back(std::move(m));
+                const auto id=traffic->id[i];
+                const auto c=on && id==assist->lead_id?green:on && id==assist->lane_change_blocker_id?amber:std::array<float,4>{.7f,.7f,.75f,.3f};
+                box("scene/traffic",x,y,traffic->yaw[i],traffic->length_m[i],traffic->width_m[i],3,c);
             }
-            // The truck (cab and chassis, about 7 x 2.5 m ahead of the drive axle).
-            {
-                auto m=marker("scene/ego",Marker::CUBE);
-                m.pose.position.x=ex+1.5*std::cos(yaw);m.pose.position.y=ey+1.5*std::sin(yaw);m.pose.position.z=ez+1.75;
-                m.pose.orientation=q;m.scale.x=7;m.scale.y=2.5;m.scale.z=3.5;colour(m,.3f,.55f,.95f,.6f);
-                array.markers.push_back(std::move(m));
+            // ACC's gap behind the lead: from its rear bumper back to where the front bumper should be.
+            if(on && in.mark==2 && assist->target_gap_m>0) {
+                const double g=assist->target_gap_m,h=in.mark_heading;
+                box("scene/acc",in.mark_x-g/2*std::cos(h),in.mark_y-g/2*std::sin(h),h,g,width-.5,.05,{.35f,.95f,.45f,.15f});
+                const double tx=in.mark_x-g*std::cos(h),ty=in.mark_y-g*std::sin(h);
+                line("scene/acc",{{tx+std::sin(h)*(width/2-.25),ty-std::cos(h)*(width/2-.25)},{tx-std::sin(h)*(width/2-.25),ty+std::cos(h)*(width/2-.25)}},.25,0,green,ez+.05);
             }
+            // Curve speed below the set speed on the lane ahead (the same limit as drive_speed:
+            // sqrt(a / |curvature|) over a 10 m window).
+            if(on && assist->acc_active && lane.size()>=3 && assist->curve_lateral_acceleration_mps2>0) try {
+                const LanePath path(lane,width);
+                const auto p=path.project(ex,ey);
+                const double a=assist->curve_lateral_acceleration_mps2,set=assist->set_speed_mps;
+                hud::Points stretch;double lowest=1e9;std::array<double,2> at{};
+                const auto flush=[&] {if(stretch.size()>=2) line("scene/curve",stretch,.35,0,amber,ez+.03);stretch.clear();};
+                for(double s=p.s;s<path.points.back().s-5;s+=5) {
+                    const double k=std::abs(path.curvature(s,10)),limit=k>1e-6?std::sqrt(a/k):1e9;
+                    if(limit<set) {const auto q=path.at(s);stretch.push_back({q.x,q.y});if(limit<lowest) {lowest=limit;at={q.x,q.y};}}
+                    else flush();
+                }
+                flush();
+                if(lowest<1e8) {
+                    auto m=marker("scene/curve",Marker::TEXT_VIEW_FACING);
+                    m.pose.position.x=at[0];m.pose.position.y=at[1];m.pose.position.z=ez+3;m.scale.z=1.5;colour(m,1,.62f,.15f,.95f);
+                    m.text="커브 "+std::to_string(int(std::lround(lowest*3.6)))+" km/h";
+                    array.markers.push_back(std::move(m));
+                }
+            } catch(const std::exception&) {}
             // Status above the truck.
             if(assisted && (assist->acc_active || assist->lcc_state)) {
                 const auto& a=*assist;
