@@ -369,8 +369,10 @@ TEST(LateralSim,Float32MapLane) {
         const auto smoothed=simulate(s,lateral_mpc());print("new",s,smoothed);
         s.name="  same, unsmoothed lane";s.lane_fit_half_m=.5; // fewer than 3 points: segment headings
         const auto raw=simulate(s,lateral_mpc());print("raw",s,raw);
-        EXPECT_LT(smoothed.yaw_rate_jitter,.006);EXPECT_LT(smoothed.settled_offset,.05);
-        EXPECT_GT(raw.yaw_rate_jitter,2*smoothed.yaw_rate_jitter);
+        // The game-delay MPC (2026-10-21 evening) trades a few cm on curvature steps for less
+        // sway, and no longer shakes even on the unsmoothed lane.
+        EXPECT_LT(smoothed.yaw_rate_jitter,.006);EXPECT_LT(smoothed.settled_offset,.08);
+        EXPECT_LT(raw.yaw_rate_jitter,.006);
     }
 }
 
@@ -444,7 +446,7 @@ TEST(LateralSim,ModelPredictive) {
     }
     const auto speed=80/3.6;
     const auto [old,now]=compare({"MPC S-curve R300 "+speed_name(speed),PathBuilder{}.add(100,0).add(250,1/300.0).add(250,-1/300.0).add(speed*60,0).points,speed,0,(600+speed*30)/speed,0},lateral_mpc());
-    EXPECT_LT(now.max_offset,.04);
+    EXPECT_LT(now.max_offset,.08); // curvature step reversals: cut on purpose by the jerk weight
 }
 
 TEST(Hud,ArcLaneAndLeadBar) {
@@ -508,4 +510,188 @@ TEST(KinematicAxles,TagAxleMovesTheRearPoint) {
     EXPECT_NEAR(kinematic_axles(wheels,{}).wheelbase(),3.158,1e-9);   // no state yet: lift axle raised
     const std::map<uint32_t,AxleWheel> four{{0,{3.734,true,false}},{1,{3.734,true,false}},{2,{0,false,false}},{3,{0,false,false}}};
     EXPECT_NEAR(kinematic_axles(four,{}).wheelbase(),3.734,1e-9);
+}
+
+// Cornering with the game's steering delay on clothoid curves, curvature steps and the lane
+// wiggles of map navigation curves, truck alone and with the box trailer. Delay (bag
+// 20261021-163908): a command acts 3 game frames after the frame whose state it used (2-4 seen),
+// the applied steering read is from that frame (age 0; an older bag suggested 1). Plant: the
+// reference truck of apps/control/matlab/lcc (6x2 tag raised, wheelbase 3.158 m to the MPC),
+// yaw from the measured effective wheelbase L(v) and the drive axle sideslip, kinematic trailer
+// with hitch offset (lcc_plant_params.m), steering from the measured table above.
+namespace {
+constexpr std::array<double,7> yaw_kmh{0,25,50,60,80,90,100};
+struct YawTable {std::array<double,7> dL,slip;}; // effective wheelbase shift, reference-point sideslip (m)
+constexpr YawTable truck_yaw{{0,.008,.026,.029,.038,.040,.046},{0,-.027,-.053,-.065,-.084,-.092,-.098}};
+constexpr YawTable trailer_yaw{{0,-.050,-.082,-.097,-.119,-.132,-.141},{0,.042,.065,.070,.084,.086,.090}};
+double yaw_table(const std::array<double,7>& y,double kmh) {
+    if(kmh>=yaw_kmh.back()) return y.back();
+    int i=0;while(kmh>yaw_kmh[i+1]) ++i;
+    return y[i]+(kmh-yaw_kmh[i])/(yaw_kmh[i+1]-yaw_kmh[i])*(y[i+1]-y[i]);
+}
+// Segments {length, curvature at the start, at the end}: curvature linear in s (a clothoid when
+// they differ, a step between segments). Points 1.5 m apart like the map lanes; curve_from/to: s
+// of the curved part.
+struct CurveLane {Points points;double length=0,curve_from=-1,curve_to=0;};
+CurveLane curve_lane(std::initializer_list<std::array<double,3>> segments) {
+    CurveLane lane;lane.points.push_back({0,0});
+    double x=0,y=0,h=0,s=0,next=1.5;constexpr double ds=.01;
+    for(const auto& [length,k0,k1]:segments) {
+        if(k0!=0 || k1!=0) {if(lane.curve_from<0) lane.curve_from=s;lane.curve_to=s+length;}
+        const auto n=int(std::lround(length/ds));
+        for(int i=0;i<n;++i) {
+            const auto k=k0+(k1-k0)*(i+.5)/n,mid=h+k*ds/2;
+            x+=ds*std::cos(mid);y+=ds*std::sin(mid);h+=k*ds;s+=ds;
+            if(s>=next-1e-9) {lane.points.push_back({x,y});next+=1.5;}
+        }
+    }
+    lane.length=s;
+    return lane;
+}
+struct CornerRun {std::string name;CurveLane lane;double speed;bool trailer=false;int delay_frames=3,measure_age_frames=0;Plant plant{};};
+struct CornerMetrics {
+    double peak=0,rms=0,exit_peak=0;  // |offset| in the curve, after it (150 m), m
+    double max_rate=0,rms_accel=0;    // wheel angle rate rad/s, its change rad/s^2 (60 Hz)
+    double yaw_jitter=0;              // RMS of yaw rate minus its 1 s mean, rad/s
+    double sway=0;                    // max |lateral acceleration minus its 2 s mean|, curve +50 m, m/s^2
+    double trailer_peak=0;
+    int crossings=0; // sign changes of the offset beyond +-5 mm from the curve start to 150 m after its end
+};
+CornerMetrics corner_sim(const CornerRun& r) {
+    LanePath truth(r.lane.points,3.5),lane=truth;
+    const auto v=r.speed,kmh=v*3.6,wheelbase_mpc=3.158;
+    const auto& yt=r.trailer?trailer_yaw:truck_yaw;
+    const auto L=wheelbase_mpc+yaw_table(yt.dL,kmh),slip=yaw_table(yt.slip,kmh);
+    constexpr double hitch_offset=.478,trailer_length=7.851;
+    const auto [rate,centering]=measured_plant(v);
+    LccMpc mpc;VirtualEps eps;
+    // Start on the lane at its start, steering its curvature (a replay lane may start in a curve).
+    const auto start=truth.at(0);
+    double x=start.x,y=start.y,yaw=truth.heading(0),hitch=0,last_rate=0,sum2=0,accel2=0,s=0,next_control=.003;
+    double applied=std::clamp(std::atan(L*truth.curvature(3,6))/angle_per_unit,-.9,.9),command=centering*applied/rate;
+    std::vector<double> pipeline(std::max(1,r.delay_frames),command),history(r.measure_age_frames+1,applied),yaw_rates,lateral,lane_s;
+    CornerMetrics m;int samples=0,frames_counted=0,side=0;
+    const auto frames=int((r.lane.length-60)/v/game_dt);
+    // ETS2_CORNER_CSV=<folder>: per controller tick t, s, offset, heading error, applied, MPC angle and rate, input.
+    std::ofstream csv;
+    if(const auto* dir=std::getenv("ETS2_CORNER_CSV")) {
+        auto name=r.name+(r.trailer?"_trailer":"_truck")+"_d"+std::to_string(r.delay_frames)+"a"+std::to_string(r.measure_age_frames)+".csv";
+        for(auto& c:name) if(!std::isalnum(static_cast<unsigned char>(c)) && c!='_' && c!='.') c='_';
+        csv.open((std::filesystem::path(dir)/name).string());csv<<"t,s,offset,heading_error,applied,mpc_angle,mpc_rate,command,hitch\n";
+    }
+    for(int n=0;n<frames;++n) {
+        const auto t=n*game_dt;
+        for(;next_control<=t;next_control+=control_dt) {
+            const auto goal=LateralController::update(lane,x,y,yaw,v,wheelbase_mpc,{});
+            LccMpc::Input in;in.enable=true;in.speed_mps=v;in.lateral_error_m=goal.offset;in.heading_error_rad=goal.heading_error;
+            for(int i=0;i<LccMpc::preview_points;++i) in.curvature_preview[i]=lane.curvature(goal.s+i*LccMpc::preview_step_m,6);
+            in.wheel_angle_rad=angle_per_unit*history.front();in.wheelbase_m=wheelbase_mpc;
+            in.trailer_connected=r.trailer;in.hitch_angle_rad=hitch;
+            const auto& out=mpc.update(in);
+            EXPECT_EQ(out.status,LccMpc::Mpc);
+            command=eps.command(std::clamp(out.wheel_angle_rad/angle_per_unit,-1.0,1.0),out.wheel_rate_rad_s/angle_per_unit,history.front(),v,control_dt,{});
+            const auto p=truth.track(x,y);s=p.s;
+            if(csv) csv<<next_control<<','<<p.s<<','<<p.offset<<','<<goal.heading_error<<','<<applied<<','<<out.wheel_angle_rad<<','<<out.wheel_rate_rad_s<<','<<command<<','<<hitch<<'\n';
+            if(p.s>=r.lane.curve_from && p.s<=r.lane.curve_to) {m.peak=std::max(m.peak,std::abs(p.offset));sum2+=p.offset*p.offset;++samples;}
+            if(p.s>r.lane.curve_to && p.s<=r.lane.curve_to+150) m.exit_peak=std::max(m.exit_peak,std::abs(p.offset));
+            if(p.s>=r.lane.curve_from && p.s<=r.lane.curve_to+150) {
+                if((p.offset>.005 && side<0) || (p.offset<-.005 && side>0)) ++m.crossings;
+                if(std::abs(p.offset)>.005) side=p.offset>0?1:-1;
+            }
+            if(r.trailer && p.s>30) { // effective trailer axle against the lane
+                const auto hx=x-hitch_offset*std::cos(yaw),hy=y-hitch_offset*std::sin(yaw),psi_t=yaw-hitch;
+                const auto q=truth.project(hx-trailer_length*std::cos(psi_t),hy-trailer_length*std::sin(psi_t),p.s-20,p.s);
+                m.trailer_peak=std::max(m.trailer_peak,std::abs(q.offset));
+            }
+        }
+        const auto active=pipeline.front();pipeline.erase(pipeline.begin());pipeline.push_back(command);
+        const auto before=applied;
+        applied=std::clamp(applied+game_dt*(r.plant.rate_scale*rate*active-r.plant.centering_scale*centering*applied),-.94,.94);
+        history.erase(history.begin());history.push_back(applied);
+        const auto delta=angle_per_unit*applied,wheel_rate=angle_per_unit*(applied-before)/game_dt;
+        const auto yaw_rate=v*std::tan(delta)/L,side_speed=-slip*yaw_rate,mid=yaw+yaw_rate*game_dt/2;
+        x+=(v*std::cos(mid)-side_speed*std::sin(mid))*game_dt;y+=(v*std::sin(mid)+side_speed*std::cos(mid))*game_dt;yaw+=yaw_rate*game_dt;
+        hitch+=(yaw_rate-(v*std::sin(hitch)+(side_speed-hitch_offset*yaw_rate)*std::cos(hitch))/trailer_length)*game_dt;
+        if(t>5) {
+            m.max_rate=std::max(m.max_rate,std::abs(wheel_rate));accel2+=std::pow((wheel_rate-last_rate)/game_dt,2);++frames_counted;
+            yaw_rates.push_back(yaw_rate);lateral.push_back(yaw_rate*v);lane_s.push_back(s);
+        }
+        last_rate=wheel_rate;
+    }
+    m.rms=samples?std::sqrt(sum2/samples):0;m.rms_accel=frames_counted?std::sqrt(accel2/frames_counted):0;
+    double jitter2=0;int count=0;
+    for(size_t i=30;i+30<yaw_rates.size();++i) {
+        double mean=0;for(size_t j=i-30;j<i+30;++j) mean+=yaw_rates[j];
+        jitter2+=std::pow(yaw_rates[i]-mean/60,2);++count;
+    }
+    m.yaw_jitter=count?std::sqrt(jitter2/count):0;
+    for(size_t i=60;i+60<lateral.size();++i) if(lane_s[i]>=r.lane.curve_from && lane_s[i]<=r.lane.curve_to+50) {
+        double mean=0;for(size_t j=i-60;j<i+60;++j) mean+=lateral[j];
+        m.sway=std::max(m.sway,std::abs(lateral[i]-mean/120));
+    }
+    return m;
+}
+void print_corner(const CornerRun& r,const CornerMetrics& m) {
+    std::printf("| %-28s | %-7s | d%da%d | %6.1f | %5.1f | %6.1f | %2d | %.3f | %6.3f | %.4f | %.2f | %4.0f |\n",r.name.c_str(),r.trailer?"trailer":"truck",
+                r.delay_frames,r.measure_age_frames,1000*m.peak,1000*m.rms,1000*m.exit_peak,m.crossings,m.max_rate,m.rms_accel,m.yaw_jitter,m.sway,1000*m.trailer_peak);
+}
+constexpr double kmh(double k) {return k/3.6;}
+CurveLane arc_lane(double radius,double clothoid,double arc_length) {
+    const auto k=1/radius;
+    return curve_lane({{150,0,0},{clothoid,0,k},{arc_length,k,k},{clothoid,k,0},{300,0,0}});
+}
+// Curves at about their design speed (lateral acceleration 1.6-2 m/s^2): clothoids as on
+// motorways, steps (the worst case), the game's road joins (curvature steps of 2-4 /km) and the
+// S-wiggle of a navigation curve through a lane-drop prefab (bag 20261021-163908, mod_ger_35:
+// curvature ramps +2.7 -> -4.0 /km over 45 m, steps to +4.1, ramps to -3.6, steps to 0).
+std::vector<CornerRun> corner_runs() {
+    return {
+        {"R1000 clothoid 60 m, 90",arc_lane(1000,60,300),kmh(90)},
+        {"R400 clothoid 80 m, 90",arc_lane(400,80,300),kmh(90)},
+        {"R400 step, 90",arc_lane(400,0,300),kmh(90)},
+        {"R250 clothoid 60 m, 80",arc_lane(250,60,250),kmh(80)},
+        {"R130 clothoid 40 m, 58",arc_lane(130,40,150),kmh(58)},
+        {"R130 step, 58",arc_lane(130,0,150),kmh(58)},
+        {"S R400 clothoids, 90",curve_lane({{150,0,0},{80,0,1/400.0},{150,1/400.0,1/400.0},{160,1/400.0,-1/400.0},{150,-1/400.0,-1/400.0},{80,-1/400.0,0},{300,0,0}}),kmh(90)},
+        {"road joins 3 /km steps, 86",curve_lane({{150,0,0},{100,.003,.003},{100,.0033,.0033},{100,.003,.003},{300,0,0}}),kmh(86)},
+        {"nav-curve wiggle, 82",curve_lane({{150,0,0},{45,.0027,-.004},{45,.0041,-.0036},{300,0,0}}),kmh(82)},
+    };
+}
+} // namespace
+
+TEST(LateralSim,CorneringWithGameDelay) {
+    std::printf("| lane | vehicle | delay | peak mm | rms mm | exit mm | x | max rate | rms accel | yaw jitter | sway m/s2 | trailer axle mm |\n");
+    for(const bool trailer:{false,true}) for(const auto [delay,age]:{std::pair{3,0},std::pair{3,1},std::pair{2,0},std::pair{4,0}}) for(auto r:corner_runs()) {
+        r.trailer=trailer;r.delay_frames=delay;r.measure_age_frames=age;
+        const auto m=corner_sim(r);
+        print_corner(r,m);
+        EXPECT_LT(m.yaw_jitter,.006)<<r.name;   // no limit cycle (the 1-frame design shook at 0.03-0.05 rad/s at 90 km/h)
+        EXPECT_LT(m.max_rate,.1)<<r.name;
+        if(r.name.starts_with("R130")) {EXPECT_LT(m.peak,.1)<<r.name;EXPECT_LT(m.exit_peak,.1)<<r.name;}
+        else if(!r.name.starts_with("nav")) {EXPECT_LT(m.peak,.06)<<r.name;EXPECT_LT(m.exit_peak,.06)<<r.name;}
+    }
+}
+
+// The replay lane of a game drive (ETS2_REPLAY_LANE, e.g. the mod_ger_35 wiggle), truck and trailer.
+TEST(LateralSim,CorneringReplayLane) {
+    const auto* file=std::getenv("ETS2_REPLAY_LANE");
+    if(!file) GTEST_SKIP()<<"ETS2_REPLAY_LANE not set";
+    LanePath lane(file);CurveLane replay;
+    for(const auto& p:lane.points) replay.points.push_back({p.x,p.y});
+    replay.length=lane.points.back().s;replay.curve_from=0;replay.curve_to=replay.length;
+    for(const bool trailer:{false,true}) for(const double speed:{kmh(82),kmh(90)}) {
+        CornerRun r{"replay "+std::to_string(int(speed*3.6+.5))+" km/h",replay,speed,trailer};
+        print_corner(r,corner_sim(r));
+    }
+}
+
+// The MPC sends the steering input through the VirtualEps table: the rack off that table (rate
+// -30 %/+40 %, self-centering 0.5x/1.5x, as PlantUncertainty) must stay stable and in the lane.
+TEST(LateralSim,CorneringRackMismatch) {
+    for(const Plant plant:{Plant{.7,1},Plant{1.4,1},Plant{1,.5},Plant{1,1.5}}) for(auto r:{CornerRun{"R400 clothoid 80 m, 90",arc_lane(400,80,300),kmh(90),true},
+                                                                                      CornerRun{"R130 clothoid 40 m, 58",arc_lane(130,40,150),kmh(58),true}}) {
+        r.plant=plant;char name[80];std::snprintf(name,sizeof name,"%s rate x%.1f centering x%.1f",r.name.c_str(),plant.rate_scale,plant.centering_scale);r.name=name;
+        const auto m=corner_sim(r);print_corner(r,m);
+        EXPECT_LT(m.peak,.1)<<r.name;EXPECT_LT(m.yaw_jitter,.006)<<r.name;
+    }
 }

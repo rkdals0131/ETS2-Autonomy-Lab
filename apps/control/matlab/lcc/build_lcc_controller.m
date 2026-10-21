@@ -8,7 +8,7 @@ function model = build_lcc_controller()
 %     MPC        (Adaptive MPC Controller, mpcLcc from lcc_design_mpc.m; the plant model is
 %                 replaced every step through the model bus A, B, C, D, X, U, Y, DX)
 %     MPC_Post   (MATLAB Function -> lcc_mpc_post.m: wheel angle / rate command, status)
-%     memory     (Unit Delay: [delta_cmd; mv; epsi_pred; kb; mpc_active] of the last step)
+%     memory     (Unit Delay: [epsi_pred; kb; mpc_active; delta_pred; ub; u(k-1) .. u(k-nd-1)])
 %   The model workspace runs lcc_controller_params(); the InitFcn puts mpcLcc in the base
 %   workspace (lcc_controller_init). Fixed step 0.02 s, ERT / C++ class (lcc_codegen_config).
 here = fileparts(mfilename("fullpath"));
@@ -67,18 +67,18 @@ end
 function build_inside(sub, C)
 rt = sfroot;
 mfun(sub, "MPC_Prep", strjoin([
-"function [A, B, Cm, Dm, x0, md, ref, umin, umax, mv_ext, mode, fb_angle, fb_rate, kb, epsi_row] = MPC_Prep(enable, v, ey, epsi, preview, delta, wheelbase, trailer, hitch, mem, C)"
-"[A, B, Cm, Dm, x0, md, ref, umin, umax, mv_ext, mode, fb_angle, fb_rate, kb, epsi_row] = lcc_mpc_prep(enable, v, ey, epsi, preview, delta, wheelbase, trailer, hitch, mem, C);"], newline), rt);
+"function [A, B, Cm, Dm, x0, md, ref, umin, umax, mv_ext, mode, fb_angle, fb_rate, obs, pred_rows, conv] = MPC_Prep(enable, v, ey, epsi, preview, delta, wheelbase, trailer, hitch, mem, C)"
+"[A, B, Cm, Dm, x0, md, ref, umin, umax, mv_ext, mode, fb_angle, fb_rate, obs, pred_rows, conv] = lcc_mpc_prep(enable, v, ey, epsi, preview, delta, wheelbase, trailer, hitch, mem, C);"], newline), rt);
 names = ["enable", "speed_mps", "lateral_error_m", "heading_error_rad", "curvature_preview", ...
          "wheel_angle_rad", "wheelbase_m", "trailer_connected", "hitch_angle_rad"];
 for i = 1:numel(names), ln(sub, names(i) + "/1", "MPC_Prep/" + i); end
 
 % model bus (names A, B, C, D, X, U, Y, DX are what the Adaptive MPC block expects)
 add_block("simulink/Signal Routing/Bus Creator", sub + "/model_bus", "Inputs", "8");
-add_block("simulink/Sources/Constant", sub + "/X0", "Value", "zeros(5,1)", "SampleTime", "C.Ts", "VectorParams1D", "off");
+add_block("simulink/Sources/Constant", sub + "/X0", "Value", "zeros(5+C.act.nd,1)", "SampleTime", "C.Ts", "VectorParams1D", "off");
 add_block("simulink/Sources/Constant", sub + "/U0", "Value", "zeros(2,1)", "SampleTime", "C.Ts", "VectorParams1D", "off");
-add_block("simulink/Sources/Constant", sub + "/Y0", "Value", "zeros(5,1)", "SampleTime", "C.Ts", "VectorParams1D", "off");
-add_block("simulink/Sources/Constant", sub + "/DX0", "Value", "zeros(5,1)", "SampleTime", "C.Ts", "VectorParams1D", "off");
+add_block("simulink/Sources/Constant", sub + "/Y0", "Value", "zeros(6,1)", "SampleTime", "C.Ts", "VectorParams1D", "off");
+add_block("simulink/Sources/Constant", sub + "/DX0", "Value", "zeros(5+C.act.nd,1)", "SampleTime", "C.Ts", "VectorParams1D", "off");
 src = ["MPC_Prep/1", "MPC_Prep/2", "MPC_Prep/3", "MPC_Prep/4", "X0/1", "U0/1", "Y0/1", "DX0/1"];
 nm = ["A", "B", "C", "D", "X", "U", "Y", "DX"];
 for i = 1:8
@@ -97,13 +97,13 @@ ln(sub, "MPC_Prep/6", "MPC/4"); ln(sub, "MPC_Prep/10", "MPC/5"); ln(sub, "MPC_Pr
 ln(sub, "MPC_Prep/9", "MPC/7");
 
 mfun(sub, "MPC_Post", strjoin([
-"function [wheel_angle_cmd, wheel_rate_cmd, status, mem] = MPC_Post(mv, qp_status, mode, fb_angle, fb_rate, x0, md, kb, epsi_row, delta, C)"
-"[wheel_angle_cmd, wheel_rate_cmd, status, mem] = lcc_mpc_post(mv, qp_status, mode, fb_angle, fb_rate, x0, md(1), kb, epsi_row, delta, C);"], newline), rt);
+"function [wheel_angle_cmd, wheel_rate_cmd, status, mem] = MPC_Post(mv, qp_status, mode, fb_angle, fb_rate, x0, md, obs, pred_rows, delta, conv, C)"
+"[wheel_angle_cmd, wheel_rate_cmd, status, mem] = lcc_mpc_post(mv, qp_status, mode, fb_angle, fb_rate, x0, md(1), obs, pred_rows, delta, conv, C);"], newline), rt);
 ln(sub, "MPC/1", "MPC_Post/1"); ln(sub, "MPC/2", "MPC_Post/2"); ln(sub, "MPC_Prep/11", "MPC_Post/3");
 ln(sub, "MPC_Prep/12", "MPC_Post/4"); ln(sub, "MPC_Prep/13", "MPC_Post/5"); ln(sub, "MPC_Prep/5", "MPC_Post/6");
 ln(sub, "MPC_Prep/6", "MPC_Post/7"); ln(sub, "MPC_Prep/14", "MPC_Post/8"); ln(sub, "MPC_Prep/15", "MPC_Post/9");
-ln(sub, "wheel_angle_rad/1", "MPC_Post/10");
-add_block("simulink/Discrete/Unit Delay", sub + "/memory", "SampleTime", "C.Ts", "InitialCondition", "zeros(5,1)");
+ln(sub, "wheel_angle_rad/1", "MPC_Post/10"); ln(sub, "MPC_Prep/16", "MPC_Post/11");
+add_block("simulink/Discrete/Unit Delay", sub + "/memory", "SampleTime", "C.Ts", "InitialCondition", "zeros(C.mem_n,1)");
 ln(sub, "MPC_Post/4", "memory/1"); ln(sub, "memory/1", "MPC_Prep/10");
 ln(sub, "MPC_Post/1", "wheel_angle_cmd_rad/1"); ln(sub, "MPC_Post/2", "wheel_rate_cmd_rad_s/1");
 ln(sub, "MPC_Post/3", "status/1");

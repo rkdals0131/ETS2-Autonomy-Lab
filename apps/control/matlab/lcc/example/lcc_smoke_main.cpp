@@ -3,9 +3,12 @@
 // compiles it with MSVC; on Linux:
 //   g++ -std=c++17 -O2 -I../generated lcc_smoke_main.cpp ../generated/LCC_Controller.cpp \
 //       ../generated/LCC_Controller_data.cpp ../generated/rt*.cpp ../generated/coder_posix_time.c
-// A crude kinematic truck (wheelbase 3.158 m, wheel angle following the command with a 0.06 s
-// lag) starts 0.5 m right of a lane that turns into an R400 arc after 100 m, at 80 km/h with the
-// trailer flag set. It prints the state every 5 s and the step time statistics at the
+// A crude kinematic truck (wheelbase 3.158 m) starts 0.5 m right of a lane that turns into an
+// R400 arc after 100 m, at 80 km/h with the trailer flag set. Steering as in the node: the outputs
+// go through VirtualEps (virtual_eps.hpp, 80 km/h table entry) to the relative steering input u,
+// which acts 50 ms later (the game delay) on d(applied)/dt = a*u - c*applied, wheel angle 0.70 *
+// applied. While the MPC steers, its target is the measured angle and its rate makes VirtualEps
+// send exactly the planned input. It prints the state every 5 s and the step time statistics at the
 // end. Call step() every 20 ms. The controller object holds ~1.2 MB of solver work arrays, so
 // it is allocated on the heap.
 #include <algorithm>
@@ -33,16 +36,19 @@ int main()
   lcc->initialize();
   ets2::LccController::ExtU_LCC_Controller_T in{};
   const double dt = 0.02, v = 80.0 / 3.6, L = 3.158;
-  double s = 0.0, ey = -0.5, epsi = 0.0, delta = 0.0, hitch = 0.0;
+  double s = 0.0, ey = -0.5, epsi = 0.0, applied = 0.0, hitch = 0.0;
+  const double a = 0.320, c = 2.108, k = 0.70, bandwidth = 6.5;   // VirtualEps table at 80 km/h
+  std::vector<double> pending(25, 0.0);                           // 50 ms of 2 ms sub-steps
   std::vector<double> times;
-  for (int k = 0; k <= 60 * 50; ++k) {
+  for (int i = 0; i <= 60 * 50; ++i) {
     in.enable = true;
     in.speed_mps = v;
     in.lateral_error_m = ey;
     in.heading_error_rad = epsi;
-    for (int i = 0; i < 61; ++i) {
-      in.curvature_preview[i] = window_curvature(s + i);
+    for (int n = 0; n < 61; ++n) {
+      in.curvature_preview[n] = window_curvature(s + n);
     }
+    const double delta = k * applied;
     in.wheel_angle_rad = delta;
     in.wheelbase_m = L;
     in.trailer_connected = true;
@@ -53,20 +59,27 @@ int main()
     const auto t1 = std::chrono::steady_clock::now();
     times.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
     const auto &out = lcc->getExternalOutputs();
-    // crude plant, 10 sub-steps per tick
+    // VirtualEps (virtual_eps.hpp) -> 50 ms delay -> measured steering, 10 sub-steps per tick
+    const double target = std::fmin(std::fmax(out.wheel_angle_cmd_rad / k, -1.0), 1.0);
+    const double u = std::fmin(std::fmax((out.wheel_rate_cmd_rad_s / k + c * applied + bandwidth * (target - applied)) / a, -1.0), 1.0);
     for (int j = 0; j < 10; ++j) {
       const double h = dt / 10.0;
-      delta += (out.wheel_angle_cmd_rad - delta) * h / 0.06;
-      const double r = v * std::tan(delta) / L, kap = lane_curvature(s);
+      for (int q = 0; q < 2; ++q) {           // 2 ms each
+        pending.push_back(u);
+        const double acting = pending.front();
+        pending.erase(pending.begin());
+        applied += (a * acting - c * applied) * h / 2;
+      }
+      const double r = v * std::tan(k * applied) / L, kap = lane_curvature(s);
       const double sdot = v * std::cos(epsi) / (1.0 - kap * ey);
       ey += v * std::sin(epsi) * h;
       epsi += (r - kap * sdot) * h;
       hitch += (r - (v * std::sin(hitch) - 0.478 * r * std::cos(hitch)) / 7.851) * h;
       s += sdot * h;
     }
-    if (k % 250 == 0) {
-      std::printf("t %5.1f  s %6.1f  ey %+8.4f m  epsi %+7.4f  delta %+7.4f  rate %+7.4f  status %u\n",
-                  k * dt, s, ey, epsi, out.wheel_angle_cmd_rad, out.wheel_rate_cmd_rad_s,
+    if (i % 250 == 0) {
+      std::printf("t %5.1f  s %6.1f  ey %+8.4f m  epsi %+7.4f  delta %+7.4f  u %+7.4f  status %u\n",
+                  i * dt, s, ey, epsi, k * applied, u,
                   static_cast<unsigned>(out.status));
     }
   }

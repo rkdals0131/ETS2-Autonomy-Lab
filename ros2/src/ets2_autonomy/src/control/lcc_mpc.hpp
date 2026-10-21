@@ -1,8 +1,11 @@
 #pragma once
 // Model-predictive lane centering generated from apps/control/matlab/lcc (LCC_Controller.slx,
-// Adaptive MPC, Embedded Coder). States lateral and heading error, wheel angle, planned
-// angle and hitch angle; the move is the planned wheel angle rate; the lane curvature ahead
-// is a measured disturbance (61 points, 1 m apart) with a 2 s bias observer. Step 20 ms:
+// Adaptive MPC, Embedded Coder). States lateral and heading error, wheel angle, hitch angle and
+// the inputs still on their way to the game (measured 3-frame delay); the move is the game's
+// relative steering input itself, the lane curvature ahead is a measured disturbance (61
+// points, 1 m apart), with curvature-bias and rack input-bias observers and a lateral jerk
+// cost. While it steers (status 1) the output angle is the measured wheel angle and the rate
+// makes VirtualEps (same table, rate limit off) send exactly the planned input. Step 20 ms:
 // update() once per 50 Hz node frame. QP failure and low speed fall back to the built-in
 // pure pursuit (status 2/3); bad inputs give status 4 and the caller uses the baseline.
 #include "LCC_Controller.h"
@@ -40,6 +43,6 @@ public:
     }
     const Output& output() const {return output_;}
 private:
-    std::unique_ptr<ets2::LccController> controller_; // ~1.2 MB of QP work arrays: on the heap
+    std::unique_ptr<ets2::LccController> controller_; // ~1.4 MB of QP work arrays: on the heap
     Output output_;
 };

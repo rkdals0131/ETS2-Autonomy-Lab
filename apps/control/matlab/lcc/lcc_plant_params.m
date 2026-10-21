@@ -41,7 +41,11 @@ end
 % of the LS c/a: the self-centering holds 2.6 % less than the LS fit. The plant uses c*c_scale.
 P.steer.c_scale = 0.974;
 P.steer.delay = 1/60;        % one game frame (docs/31 "지연 약 1 프레임"); with the 20 ms sample hold of
-                             % the node this is the ~35 ms loop delay of virtual_eps.hpp
+                             % the node this is the ~35 ms loop delay of virtual_eps.hpp. Used by the
+                             % plant validation (sysid-era recordings).
+P.steer.delay_game = 3 / 60; % drive_speed in the game (bag 20261021-163908, assist vs drive state):
+                             % a command acts 3 frames (2-4) after the frame whose state it used, the
+                             % applied value read is from that frame. Scenarios use this delay.
 
 % ---------------- node inner loop (virtual_eps.hpp, code) ------------------------------------
 % VirtualEps runs in the node at 50 Hz with the 4x2 table (virtual_eps.hpp :31-32); it is part of

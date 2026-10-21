@@ -9,7 +9,7 @@
 //
 // Model version                  : 1.1
 // Simulink Coder version         : 26.2 (R2026b) 22-May-2026
-// C/C++ source code generated on : Wed Oct 21 00:25:24 2026
+// C/C++ source code generated on : Wed Oct 21 17:53:43 2026
 //
 // Target selection: ert.tlc
 // Embedded hardware selection: Intel->x86-64 (Windows64)
@@ -49,22 +49,27 @@ namespace ets2
    public:
     // Block signals and states (default storage) for system '<Root>'
     struct DW_LCC_Controller_T {
-      double memory_DSTATE[5];         // '<S1>/memory'
-      double Bv[760];
-      double Dv[760];
-      double r[1580];
+      double A[49];                    // '<S1>/MPC_Prep'
+      double B[14];                    // '<S1>/MPC_Prep'
+      double Cm[42];                   // '<S1>/MPC_Prep'
+      double Dm[12];                   // '<S1>/MPC_Prep'
+      double memory_DSTATE[8];         // '<S1>/memory'
+      double Bu[532];
+      double Bv[1064];
+      double Dv[912];
+      double r[2212];
       double t[48032];
       double v[2844];
-      double c_SuJm[3000];
-      double c_Sx[1875];
-      double c_Hv[57000];
+      double c_SuJm[3600];
+      double c_Sx[3150];
+      double c_Hv[68400];
       double c_Kv[1216];
-      double Su[28125];
+      double Su[33750];
       double I2Jm[600];
-      double WySuJm[3000];
+      double WySuJm[3600];
       double WuI2Jm[600];
       double y[600];
-      double CA[760];
+      double CA[912];
       double freq;                     // '<S33>/FixedHorizonOptimizer'
       bool Memory_PreviousInput[316];  // '<S5>/Memory'
       bool freq_not_empty;             // '<S33>/FixedHorizonOptimizer'
@@ -72,10 +77,10 @@ namespace ets2
 
     // Invariant block signals (default storage)
     struct ConstB_LCC_Controller_T {
-      double MathFunction[5];          // '<S5>/Math Function'
+      double MathFunction[6];          // '<S5>/Math Function'
       double MathFunction1;            // '<S5>/Math Function1'
       double MathFunction2;            // '<S5>/Math Function2'
-      double Reshape3[5];              // '<S5>/Reshape3'
+      double Reshape3[6];              // '<S5>/Reshape3'
       double Reshape4;                 // '<S5>/Reshape4'
       double Reshape5;                 // '<S5>/Reshape5'
     };
@@ -161,34 +166,37 @@ namespace ets2
     DW_LCC_Controller_T LCC_Controller_DW;
 
     // private member function(s) for subsystem '<Root>'
-    double LCC_Controller_norm_a(const double x[49]);
-    void LCC_Controller_xzgetrf(double A[49], int32_t ipiv[7], int32_t *info);
-    void LCC_Controller_xtrsm(const double A[49], double B[49]);
-    void LCC_Controller_inv(const double x[49], double y[49]);
-    void LCC_Controller_mpower(const double a[49], double b, double c[49]);
+    double LCC_Controller_norm_a(const double x[25]);
+    void LCC_Controller_xzgetrf(double A[25], int32_t ipiv[5], int32_t *info);
+    void LCC_Controller_xtrsm(const double A[25], double B[25]);
+    void LCC_Controller_inv(const double x[25], double y[25]);
+    void LCC_Controller_mpower(const double a[25], double b, double c[25]);
     double LCC_Controller_log2(double x);
-    void LCC_Controlle_padeApproximation(const double A[49], const double A2[49],
-      const double A4[49], const double A6[49], int32_t m, double F[49]);
-    void LCC_Controll_recomputeBlockDiag(const double A[49], double F[49], const
-      int32_t blockFormat[6]);
-    double LCC_Controller_xnrm2_e(int32_t n, const double x[49], int32_t ix0);
-    void LCC_Controller_xzsyhetrd(double A[49], double D[7], double E[6], double
-      tau[6]);
+    void LCC_Controlle_padeApproximation(const double A[25], const double A2[25],
+      const double A4[25], const double A6[25], int32_t m, double F[25]);
+    void LCC_Controll_recomputeBlockDiag(const double A[25], double F[25], const
+      int32_t blockFormat[4]);
+    double LCC_Controller_xnrm2_e(int32_t n, const double x[25], int32_t ix0);
+    void LCC_Controller_xzsyhetrd(double A[25], double D[5], double E[4], double
+      tau[4]);
     void LCC_Controller_xzlascl(double cfrom, double cto, int32_t m, int32_t n,
-      double A[7], int32_t iA0, int32_t lda);
+      double A[5], int32_t iA0, int32_t lda);
     void LCC_Controller_xzlascl_o(double cfrom, double cto, int32_t m, int32_t n,
-      double A[6], int32_t iA0, int32_t lda);
+      double A[4], int32_t iA0, int32_t lda);
     void LCC_Controller_xzlartg(double f, double g, double *cs, double *sn,
       double *r);
-    void LCC_Controller_rotateRight_j(int32_t m, int32_t n, double z[49],
-      int32_t iz0, int32_t ldz, const double cs[12], int32_t ic0, int32_t is0);
+    void LCC_Controller_rotateRight_j(int32_t m, int32_t n, double z[25],
+      int32_t iz0, int32_t ldz, const double cs[8], int32_t ic0, int32_t is0);
     void LCC_Controller_xdlaev2(double a, double b, double c, double *rt1,
       double *rt2, double *cs1, double *sn1);
-    void LCC_Controller_rotateRight(int32_t m, int32_t n, double z[49], int32_t
-      iz0, int32_t ldz, const double cs[12], int32_t ic0, int32_t is0);
-    int32_t LCC_Controller_xzsteqr(double d[7], double e[6], double z[49]);
-    void LCC_Controller_xsyheev(double A[49], int32_t *info, double W[7]);
-    void LCC_Controller_expm(double A[49], double F[49]);
+    void LCC_Controller_rotateRight(int32_t m, int32_t n, double z[25], int32_t
+      iz0, int32_t ldz, const double cs[8], int32_t ic0, int32_t is0);
+    int32_t LCC_Controller_xzsteqr(double d[5], double e[4], double z[25]);
+    void LCC_Controller_xsyheev(double A[25], int32_t *info, double W[5]);
+    void LCC_Controller_expm(double A[25], double F[25]);
+    void LCC_Controller_lcc_mpc_model(double v, double wheelbase, bool trailer,
+      double Ad[49], double Bd[14], double Cm[42], double Dm[12], double
+      *steady_slip, double rack[2]);
     int32_t LCC_Controller_xpotrf(double b_A[81]);
     double LCC_Controller_minimum(const double x[9]);
     void LCC_Controller_trisolve(const double b_A[81], double b_B[81]);
@@ -213,12 +221,12 @@ namespace ets2
     double LCC_Controll_enforceInputLimits(double uk, double uk1, double b_uoff,
       const double b_Mlim[316], const int32_t b_Mrows[316], int32_t b_ny,
       int32_t b_degrees);
-    void LCC_Controll_mpcblock_optimizer(const double rseq[375], const double
-      vseq[152], double umin, double umax, const double x[5], double old_u,
-      const bool iA[316], const double b_Mlim[316], double b_Mx[1580], double
+    void LCC_Controll_mpcblock_optimizer(const double rseq[450], const double
+      vseq[152], double umin, double umax, const double x[7], double old_u,
+      const bool iA[316], const double b_Mlim[316], double b_Mx[2212], double
       b_Mu1[316], double b_Mv[48032], const double b_utarget[75], double b_uoff,
-      double b_Ac[2844], const double b_A[25], const double Bu[380], const
-      double Bv[760], const double b_C[25], const double Dv[760], double *u,
+      double b_Ac[2844], const double b_A[49], const double Bu[532], const
+      double Bv[1064], const double b_C[42], const double Dv[912], double *u,
       double useq[76], double *status, bool iAout[316]);
 
     // Real-Time Model

@@ -181,6 +181,7 @@ load_system("lcc_closed_loop");
 game.trailer = [read_game("lanetest-20261020-154003"), read_game("lanetest-20261020-155105")];
 game.truck = [read_game("lanetest-20261020-121048"), read_game("lanetest-20261020-123506")];
 CL = struct([]);
+sysid_delay = lcc_plant_params().steer.delay;   % the recordings were made with the sysid-era delay
 for kind = ["trailer", "truck"]
     G = game.(kind);
     for s = S
@@ -188,9 +189,9 @@ for kind = ["trailer", "truck"]
         if isempty(g), continue; end
         g = g(end);
         % noise-free (steady curve offsets) and with the slow yaw-rate wander (straight RMS)
-        [in, lane, P] = lcc_scenario_input(s, kind, 1, Kmh=g.kmh_mean);
+        [in, lane, P] = lcc_scenario_input(s, kind, 1, Kmh=g.kmh_mean, Delay=sysid_delay);
         m = lcc_scenario_metrics(lcc_collect(sim(in)), lane, P);
-        [in, lane, P] = lcc_scenario_input(s, kind, 1, Kmh=g.kmh_mean, Wander=P.dist.amp_game);
+        [in, lane, P] = lcc_scenario_input(s, kind, 1, Kmh=g.kmh_mean, Wander=P.dist.amp_game, Delay=sysid_delay);
         mw = lcc_scenario_metrics(lcc_collect(sim(in)), lane, P);
         q.config = kind; q.name = s.name; q.kmh = g.kmh_mean;
         q.game_max_after150 = g.max_offset_after150m; q.model_max_after150 = m.max_offset_after150m;
@@ -283,6 +284,7 @@ exportgraphics(f, file); close(f);
 end
 
 function print_summary(V)
+sysid_delay = lcc_plant_params().steer.delay;   % the recordings were made with the sysid-era delay
 for kind = ["trailer", "truck"]
     fprintf("== %s replay (%s)\n", kind, V.(kind).run);
     for s = V.(kind).replay

@@ -8,7 +8,9 @@ function [in, lane, P, SCN] = lcc_scenario_input(s, config, ctrl, opts)
 %   Options: Kmh (override speed), Wheelbase (given to the controller, 3.158), Wander (amplitude
 %   of the plant's slow yaw-rate disturbance P.dist.amp, rad/s per component, 0 = off; the
 %   phases are drawn from the scenario index so the baseline and the MPC see the same one),
-%   Window (curvature averaging window of the node's preview, m; 6 = curvature_window_m).
+%   Window (curvature averaging window of the node's preview, m; 6 = curvature_window_m),
+%   Delay (steering command delay of the plant, s; default the game's P.steer.delay_game, the
+%   plant validation passes the sysid-era P.steer.delay).
 arguments
     s (1,1) struct
     config (1,1) string
@@ -17,6 +19,7 @@ arguments
     opts.Wheelbase (1,1) double = 3.158
     opts.Wander (1,1) double = 0
     opts.Window (1,1) double = 6
+    opts.Delay (1,1) double = NaN
 end
 lane = lcc_lane(s.segments);
 P = lcc_plant_params(config);
@@ -31,6 +34,8 @@ P.init.X = 0; P.init.Y = -s.shift; P.init.psi = -deg2rad(s.heading_deg);
 P.init.eff = 0; P.init.hitch = 0;
 P.dist.amp = opts.Wander;
 P.lane.window = opts.Window;
+P.steer.delay = P.steer.delay_game;
+if isfinite(opts.Delay), P.steer.delay = opts.Delay; end
 st = RandStream("mt19937ar", "Seed", 100 + s.index);
 P.dist.phase = 2 * pi * rand(st, 1, numel(P.dist.freq));
 SCN = struct("speed", v, "wheelbase", opts.Wheelbase, "trailer", P.trailer_connected, "enable", true, ...

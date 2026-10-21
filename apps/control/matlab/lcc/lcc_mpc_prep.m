@@ -1,17 +1,20 @@
-function [Ad, Bd, Cm, Dm, x0, md, ref, umin, umax, mv_ext, mode, fb_angle, fb_rate, kb, epsi_row] = ...
+function [Ad, Bd, Cm, Dm, x0, md, ref, umin, umax, mv_ext, mode, fb_angle, fb_rate, obs, pred_rows, conv] = ...
     lcc_mpc_prep(enable, v, ey, epsi, preview, delta, wheelbase, trailer, hitch, mem, C)
 %LCC_MPC_PREP Inputs of the Adaptive MPC block for one 20 ms step (MATLAB Function "MPC_Prep").
 %   Contract inputs: enable, v (speed_mps), ey (lateral_error_m, left +), epsi (heading_error_rad),
 %   preview (curvature_preview, 61 points at 1 m from the reference point), delta
-%   (wheel_angle_rad, actual), wheelbase (wheelbase_m), trailer (trailer_connected), hitch
-%   (hitch_angle_rad). mem = [delta_cmd; mv; epsi_pred; kb; mpc_active] of the last step
-%   (Unit Delay fed by lcc_mpc_post).
-%   Outputs: plant model at this speed (Ad, Bd, Cm, Dm), measured state x0, previewed
-%   curvature md ((p+1) x 1, midpoint of each step at v*Ts*(k+0.5) ahead, plus the bias kb),
-%   references ref (p x 5), steering-rate bounds, the MV applied last step, mode
+%   (wheel_angle_rad, measured: C.act.age_s old), wheelbase (wheelbase_m), trailer
+%   (trailer_connected), hitch (hitch_angle_rad). mem = [epsi_pred; kb; mpc_active; delta_pred;
+%   ub; u(k-1) .. u(k-nd-1)] of the last step (Unit Delay fed by lcc_mpc_post).
+%   Outputs: plant model at this speed (Ad, Bd, Cm, Dm), state x0 (the measured errors and hitch,
+%   the wheel angle carried forward over its age with the input then acting, the inputs still on
+%   their way), previewed curvature md ((p+1) x 1, midpoint of each step at v*Ts*(k+0.5) ahead,
+%   plus the bias kb), references ref (p x 6), input bounds, the MV applied last step, mode
 %   (1 MPC, 0 off, 3 low speed, 4 bad input), the fallback law (lateral_controller.hpp
-%   linearized pure pursuit), the bias estimate kb and the epsi row of the one-step prediction
-%   [Ad(2,:) Bd(2,:)] for the observer.
+%   linearized pure pursuit), the observer estimates obs = [kb; ub] (curvature bias, rack input
+%   bias), the epsi and delta rows of the one-step prediction [Ad(2:3,:) Bd(2:3,:)] for the
+%   observers, and conv = [angle_per_unit*a(v), c(v)] of the VirtualEps
+%   table (lcc_mpc_post turns the input into its rate feedforward).
 %#codegen
 p = C.p; Ts = C.Ts;
 valid = isfinite(v) && isfinite(ey) && isfinite(epsi) && isfinite(delta) && isfinite(wheelbase) ...
@@ -30,40 +33,55 @@ elseif vs < C.v_min
 else
     mode = 1;
 end
-active = mem(5) > 0.5;
+active = mem(3) > 0.5;
 
-% ---------------- curvature bias observer (yaw-rate disturbance) ----------------
-kb = 0;
+nh = C.act.nd + 1;
+kmh = vs * 3.6;
+[ea, ec] = eps_plant(C, kmh);
+conv = [C.angle_per_unit * ea, ec];
+
+vm = max(vs, C.v_min);
+[Ad, Bd, Cm, Dm, slip, rack] = lcc_mpc_model(vm, Lw, trailer, C);
+% inputs on their way (model inputs): the last moves, or (first step) the input that holds the
+% measured angle
+past = zeros(nh, 1);
+if active
+    past = mem(6:5 + nh);
+else
+    past(:) = min(max(rack(2) * ds / rack(1), -C.u_max), C.u_max);
+end
+% the measured angle is C.act.age_s old: carry it forward with the input that acted meanwhile
+j = min(max(round((C.act.delay_s + C.act.age_s / 2) / Ts), 1), nh);
+dnow = ds + C.act.age_s * (rack(1) * past(j) - rack(2) * ds);
+x0 = [eys; epsis; dnow; hs; past];
+
+% ---------------- observers (integral action) ----------------
+% curvature bias kb: yaw-rate disturbance, from the heading error the model predicted last step
+% rack input bias ub: the game rack off the VirtualEps table (a, c), from the predicted wheel
+% angle (measured below predicted: the rack does less, send more); lcc_mpc_post sends mv + ub so
+% that the rack behaves as the model
+kb = 0; ub = 0;
 if mode == 1 && active
-    kb = mem(4);
+    kb = mem(2); ub = mem(5);
     if vs > C.obs.v_min
-        rho = epsis - mem(3);                    % measured - predicted heading error
+        rho = epsis - mem(1);                    % measured - predicted heading error
         kb = min(max(kb - rho / (vs * C.obs.T), -C.obs.max), C.obs.max);
     end
+    ub = min(max(ub - (dnow - mem(4)) / (rack(1) * C.obs.T_rack), -C.obs.u_max), C.obs.u_max);
 end
-
-% ---------------- model, state, preview ----------------
-vm = max(vs, C.v_min);
-[Ad, Bd, Cm, Dm, slip] = lcc_mpc_model(vm, Lw, trailer, C);
-dcmd = ds;
-if active, dcmd = mem(1); end
-x0 = [eys; epsis; ds; dcmd; hs];
+obs = [kb; ub];
 md = zeros(p + 1, 1);
 for k = 0:p
     md(k + 1) = preview_at(pv, vm * Ts * (k + 0.5), C) + kb;
 end
-ref = zeros(p, 5);
+ref = zeros(p, 6);
 for k = 1:p
     ref(k, 2) = slip * md(k + 1);              % steady heading error of a curve (sideslip)
 end
-% ---------------- steering-rate bounds (VirtualEps |u| <= 1) ----------------
-kmh = vs * 3.6;
-[a, c] = eps_plant(C, kmh);
-rate = C.rate_margin * C.angle_per_unit * max(a - c * abs(ds) / C.angle_per_unit, 0.1 * a);
-umin = -rate; umax = rate;
-mv_ext = 0;
-if active, mv_ext = mem(2); end
-epsi_row = [Ad(2, :) Bd(2, :)];
+% ---------------- input bounds (VirtualEps clamps |u| at 1; it gets mv + ub) ----------------
+umin = -C.u_max - ub; umax = C.u_max - ub;
+mv_ext = past(1);
+pred_rows = [Ad(2:3, :) Bd(2:3, :)];
 
 % ---------------- fallback: lateral_controller.hpp (curvature feedforward + linearized pure pursuit) ----
 d = C.fb.lookahead_m + vs * C.fb.lookahead_time_s;
