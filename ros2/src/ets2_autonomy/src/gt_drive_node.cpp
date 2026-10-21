@@ -5,6 +5,7 @@
 #include <ets2_msgs/msg/vehicle_state.hpp>
 #include <ets2_msgs/msg/traffic_state.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/int8.hpp>
 #include <std_msgs/msg/string.hpp>
 #include "control/parameters.hpp"
 #include "control/kinematic_axles.hpp"
@@ -13,6 +14,7 @@
 #include "control/lcc_mpc.hpp"
 #include "control/hud_path.hpp"
 #include "control/road_grade.hpp"
+#include "control/turn_signal.hpp"
 #include "control/lane_merge.hpp"
 #include "control/curve_speed.hpp"
 #include <ets2_msgs/msg/assist_state.hpp>
@@ -77,6 +79,11 @@ int main(int argc,char** argv) {
     // retarder step applied feeds the ACC's mass estimator.
     auto pts=node->create_subscription<ets2_msgs::msg::PowertrainState>("/ets2/vehicle/powertrain",rclcpp::QoS(1),
         [&](ets2_msgs::msg::PowertrainState::SharedPtr value){powertrain=std::move(value);powertrain_time=Clock::now();});
+    // The turn signal the planner wants (-1 left, 0 off, 1 right), current for 1 s.
+    std::optional<int> wanted_signal;Clock::time_point wanted_signal_time{};
+    auto wss=node->create_subscription<std_msgs::msg::Int8>("/ets2/planning/turn_signal",rclcpp::QoS(1),[&](std_msgs::msg::Int8::SharedPtr value) {
+        wanted_signal=value->data<0?-1:value->data>0?1:0;wanted_signal_time=Clock::now();
+    });
     const bool mpc=initial.longitudinal=="mpc",lateral_mpc=initial.lateral=="mpc";
     // ego pose is base_link (drive axle); the controller's rear point and wheelbase follow
     // the grounded axles (kinematic_axles.hpp), so a lowered lift axle moves them.
@@ -251,6 +258,7 @@ int main(int argc,char** argv) {
         // the hazards, is none); it starts while LCC steers, once the gap on the side lane is
         // clear, and keeps going until merged (changing: its side).
         int change_request=0,previous_signal=2,changing=0;std::string change_waiting;uint64_t change_blocker=0;
+        TurnSignalControl turn_signals;Clock::time_point signal_since{};
         // The driver's steering: since when without a pause over 0.3 s (the stick crossing centre).
         Clock::time_point steering_since{},steering_seen{};
         // A lane change waits for a gap on the target lane: nobody beside the truck, the vehicle
@@ -383,7 +391,7 @@ int main(int argc,char** argv) {
             if(previous_signal==2) previous_signal=signal;
             if(signal!=previous_signal) {
                 if(change_request && !signal) std::cout<<"Lane change request withdrawn"<<std::endl;
-                change_request=signal;previous_signal=signal;change_waiting.clear();change_blocker=0;
+                change_request=signal;previous_signal=signal;change_waiting.clear();change_blocker=0;signal_since=now;
             }
             const char* side_name=change_request<0?"left":"right";
             if(change_request && !(cruise_engage && lcc)) change_request=0;
@@ -397,6 +405,11 @@ int main(int argc,char** argv) {
                     // The side lane is one lane over: the truck is right of a left lane (offset < 0).
                     if(!(to.offset*change_request>.5*target->width && to.offset*change_request<1.6*target->width)) {
                         std::cout<<"Lane change: the "<<side_name<<" lane is not beside the truck (offset "<<to.offset<<" m)"<<std::endl;change_request=0;
+                    } else if(turn_signals.by==2 && now-signal_since<3s) {
+                        // The assistance's own signal shows for 3 s before the truck moves over (the
+                        // driver's starts the change as soon as the gap allows).
+                        if(change_waiting!="signal") std::cout<<"Lane change to the "<<side_name<<" waits: turn signal on for 3 s"<<std::endl;
+                        change_waiting="signal";change_blocker=0;
                     } else if(const auto [problem,blocker]=gap_problem(*target,to.s,front_axle+settings->front_overhang_m-axles.rear_x,
                                                              (now-trailer_time<=200ms?15.0:3.0),std::max(0.0,vehicle->speed_mps));!problem.empty()) {
                         if(problem!=change_waiting) std::cout<<"Lane change to the "<<side_name<<" waits: "<<problem<<std::endl;
@@ -575,6 +588,13 @@ int main(int argc,char** argv) {
                 else command.brake=acc?AccMpc::folded_brake(out):0;
             }
             if(cancel_pending && acc && cruise_speed()>0) {command.throttle=0;command.brake=std::max(command.brake,.05f);}
+            // The planner's turn signal as lever presses (the relay forwards new counts). A signal
+            // the assistance turns on starts the same turn signal lane change as the driver's.
+            if(powertrain && now-powertrain_time<=1s) {
+                const int lever=powertrain->turn_signal_left && powertrain->turn_signal_right?2:powertrain->turn_signal_left?-1:powertrain->turn_signal_right?1:0;
+                turn_signals.update(std::chrono::duration<double>(now-started).count(),now-wanted_signal_time<=1s?wanted_signal:std::nullopt,lever);
+            }
+            command.left_signal_presses=turn_signals.left;command.right_signal_presses=turn_signals.right;
             if(enabled_axes&2) pedal_sequence=command.sequence;
             publisher->publish(command);last_command=command;
             // HUD inputs. The ACC mark: the lead's rear bumper (150 m at most), or without a lead
@@ -623,6 +643,7 @@ int main(int argc,char** argv) {
                 }
                 state.merge_offset_m=reference.offset;state.merge_heading_rad=reference.heading;
                 state.lane_source=int8_t(lane_side);state.lane_change_request=int8_t(change_request);state.lane_change_active=int8_t(changing);
+                state.turn_signal_by=int8_t(turn_signals.by);state.turn_signal_cancelled=turn_signals.cancelled;
                 state.lcc_status=lane && lateral_mpc?lcc_mpc.output().status:0;
                 state.wheel_angle_target_rad=wheel_angle;state.wheel_rate_target_rad_s=wheel_rate;
                 state.steering_target=steering_target;state.steering_input=command.steering;state.steering_applied=drive->steering_applied;

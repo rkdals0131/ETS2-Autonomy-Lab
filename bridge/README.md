@@ -122,6 +122,19 @@ F11·만료·릴레이 종료·pause는 전체를 해제하고, 크루즈 대기
 
 요청 `axes`는 1=조향/LCC, 2=페달/ACC, 3=전체이며 0은 기존 전체 축 요청의 기본값입니다. 4는 보조 제동(리타더 단·엔진브레이크)이고 페달과 함께만 씁니다(6=ACC+보조 제동, 7=전체). 보조 제동을 가지면 `DriveCommand`의 `retarder_step`(0–5, 0은 끔)과 `engine_brake`(누르고 있음)가 적용됩니다. loader 0.42.0 이상이 `ot_drive` 장치에 semantical `retarder0`–`retarder5`·`motorbrake` 입력을 더 등록하며, 프로필의 `semantical.retarderN?0`·`semantical.motorbrake?0` mix로 들어가므로 바인딩을 바꾸지 않습니다. 단은 바뀔 때와 0.5 s마다 50 ms 펄스로 고르고, 소유가 끝나면(해제·만료·수동 개입) 리타더가 켜져 있었으면 0단을 한 번 펄스합니다. 엔진브레이크는 소유하는 동안만 누릅니다. 리타더 키·B의 사람 조작은 해제 조건이 아니며, 소유 중에는 0.5 s 안에 명령 단으로 돌아갑니다. `DriveState`의 `auxiliary_brakes`·`retarder_command`(−1은 미소유)·`engine_brake_command`가 실제 명령을 보여 줍니다. △ 게임에서 semantical `retarderN`이 "N단 선택"으로 동작하는지, 같은 단을 다시 고를 때 부작용이 없는지는 아직 확인하지 않았습니다(loader 교체 후 게임 재시작 필요). 실제 상태 `axes=0`은 해제 상태입니다. 모두 끄기는 `arm=false`로 해제하며 `axes=0` arm을 보내지 않습니다. 한 owner/epoch 안의 새 명령으로 축을 전환하고 소유하지 않은 출력은 0으로 만듭니다. loader 0.31은 새로 맡길 축을 사람이 조작 중이면 해제하므로 켜기 전에 그 축을 놓습니다.
 
+방향지시등(core·loader 0.48.0)은 `DriveCommand`의 `left_signal_presses`·`right_signal_presses`로 냅니다.
+- **누적값:** 무장 뒤 레버를 누른 횟수를 보낸 쪽이 셉니다. 릴레이는 그 소유자·epoch에서 처음 본 값을 기준으로, 늘어난 만큼만 core의 `drive` `signal`(`side` −1/1)로 넘깁니다(명령 하나에 4개까지). 그래서 명령이 빠지거나 겹쳐도 누르기를 잃거나 반복하지 않습니다.
+- **loader:** semantical `lblinker`·`rblinker`를 100 ms 누르고 100 ms 쉰 뒤 다음을 누릅니다. 해제되면 대기 중인 누르기는 버립니다. 축 소유와 상관없이 무장돼 있으면 됩니다.
+- **상태:** 릴레이 1 Hz 상태의 `signal_presses`·`rejected_signal_presses`에 셉니다.
+- **`drive_speed`:** planner가 `/ets2/planning/turn_signal`(Int8: −1 왼쪽, 0 끔, 1 오른쪽, 1 s 지나면 무효)로 원하는 상태를 SDK 레버 상태와 비교해 누릅니다(`control/turn_signal.hpp`).
+  - 1 s에 한 번, 원하는 상태 하나에 3번까지 누릅니다.
+  - 자기가 누른 뒤 1 s 안의 변화는 어시스트가, 그 밖의 변화는 운전자가 켠 것으로 봅니다(`AssistState.turn_signal_by`).
+  - 운전자가 켠 깜빡이는 끄거나 바꾸지 않습니다.
+  - 어시스트가 켠 깜빡이를 운전자가 끄면 원하는 상태가 바뀔 때까지 다시 켜지 않습니다(`turn_signal_cancelled`).
+  - 비상등(양쪽)은 건드리지 않습니다.
+- **차선 변경:** 어시스트가 켠 깜빡이도 운전자 깜빡이와 같은 차선 변경을 시작합니다. 다만 3 s 켜 둔 뒤에야 옮깁니다.
+- △ 게임 시험 전입니다. 새 loader를 넣고 게임을 재시작해야 하며, 다음은 아직 모릅니다: semantical `lblinker`가 실제로 한 번 토글되는지, 반대쪽이 켜져 있을 때 누르면 바뀌는지, 게임의 자동 깜빡이 꺼짐과 어떻게 어울리는지.
+
 DriveCommand.steering은 **왼쪽 양수 [-1,1]인 프로필 입력**, throttle/brake는 **[0,1]**입니다. 현재 Xbox 프로필의 `c_relatsteer=1`은 조향 위치를 변화시키는 상대 입력입니다. 따라서 이 하위 명령값을 바퀴 위치나 각도 목표로 해석하지 않습니다. 현재 프로필의 steering mix가 semantical 값을 빼므로 SDK 장치에는 steering의 부호를 뒤집어 내보냅니다. 기존 `/ets2/vehicle/actuation`의 단위·부호는 유지합니다. applied 값은 게임의 effective 입력 관측이며 명령을 복사한 값이 아닙니다. SDK 입력은 실제 게임 전경에서 소비됐습니다. 비전경 실행은 native 명령이 승인돼도 게임 입력 축과 속도가 0이었으며, 전경 실행에서 가속·제동이 적용됐습니다.
 
 arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기다립니다. Command의 `sent_steady_ns`는 명령을 계산한 시점의 **발행 프로세스 steady clock ns**(Windows에서는 QPC: C++ `std::chrono::steady_clock`, Python `time.perf_counter_ns()`; `time.monotonic` 금지)이며 ROS stamp가 아닙니다. 릴레이 노드는 나이가 `max_command_age_ms`(노드 파라미터, 기본 50)를 넘거나 음수·0인 명령을 버리고, 가장 최근 명령만 core에 넘기면서 core 시계로 200 ms 유효창을 붙입니다(실차 DBW heartbeat와 같은 형태). 이전 epoch·반복 sequence·만료된 명령은 거절합니다. DriveState의 `command_window_ms`는 진단용 Windows 시계값이며 명령에 복사하지 않습니다. owner는 식별자이며 로컬 pipe ACL을 대신하지 않습니다.

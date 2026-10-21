@@ -1,5 +1,6 @@
 // The planner without ROS: the lane change state machine's transitions, and the behavior tree
 // (config/behavior.xml) ticked over hand-made worlds.
+#include "control/turn_signal.hpp"
 #include "planning/behavior.hpp"
 #include <gtest/gtest.h>
 #include <cmath>
@@ -106,4 +107,37 @@ TEST(BehaviorTree,ShadowDecisions) {
     for(double t=16.3;t<20;t+=.1) tick(t);
     EXPECT_EQ(c.fsm.state(),LaneChangeFsm::WaitGap);
     EXPECT_EQ(c.decision,"lane change left (overtake): gap free, would start");
+    // Commanding, the planner wants its own lane change's signal; the driver's never.
+    EXPECT_EQ(planning::turn_signal(c),-1);
+    c.w.signal=-1;c.w.signal_by=2;tick(20);
+    EXPECT_EQ(c.fsm.state(),LaneChangeFsm::WaitGap);              // its own signal is no driver intent
+    c.w.signal_cancelled=true;c.w.signal=0;c.w.signal_by=0;tick(20.1);
+    EXPECT_EQ(c.fsm.state(),LaneChangeFsm::Abort);                 // the driver said no
+    EXPECT_EQ(planning::turn_signal(c),0);
+}
+
+TEST(TurnSignal,PressesTowardTheWantedStateAndLeavesTheDriversAlone) {
+    TurnSignalControl ts;
+    ts.update(0,-1,0);EXPECT_EQ(ts.left,1u);                       // on: one press of the left lever
+    ts.update(.5,-1,0);EXPECT_EQ(ts.left,1u);                      // not again within a second
+    ts.update(.6,-1,-1);EXPECT_EQ(ts.by,2);                        // the lever follows: the assistance's
+    ts.update(3,-1,-1);EXPECT_EQ(ts.left,1u);
+    ts.update(4,0,-1);EXPECT_EQ(ts.left,2u);                       // off: the left lever again
+    ts.update(4.2,0,0);EXPECT_EQ(ts.by,0);
+    // The driver's signal: never cancelled or switched.
+    ts.update(10,0,1);EXPECT_EQ(ts.by,1);
+    ts.update(12,0,1);ts.update(13,-1,1);EXPECT_EQ(ts.left,2u);EXPECT_EQ(ts.right,0u);
+    ts.update(14,0,0);
+    // A lever that does not follow: three presses, then left alone.
+    for(double t=20;t<30;t+=.5) ts.update(t,1,0);
+    EXPECT_EQ(ts.right,3u);
+    // The driver turning the assistance's signal off: no press until the wanted state changes.
+    TurnSignalControl c2;
+    c2.update(0,1,0);c2.update(.3,1,1);EXPECT_EQ(c2.by,2);
+    c2.update(5,1,0);EXPECT_TRUE(c2.cancelled);
+    c2.update(7,1,0);EXPECT_EQ(c2.right,1u);
+    c2.update(8,0,0);EXPECT_FALSE(c2.cancelled);
+    c2.update(9,1,0);EXPECT_EQ(c2.right,2u);
+    // Hazards are not touched.
+    TurnSignalControl h;h.update(0,0,2);h.update(2,1,2);EXPECT_EQ(h.left+h.right,0u);
 }

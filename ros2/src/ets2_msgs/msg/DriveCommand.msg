@@ -21,3 +21,9 @@ uint8 axes
 # pulses the step on change and every 0.5 s, and step 0 once when control ends.
 int8 retarder_step
 bool engine_brake
+# Turn signal lever presses since arming, left and right, counted up by the sender: the relay
+# presses the lever (the game's lblinker/rblinker toggles) once for each count it has not seen
+# in this owner's epoch, starting from the counts in the first command it sees. A dropped or
+# repeated command neither loses nor repeats a press. Needs core and loader 0.48.0.
+uint32 left_signal_presses
+uint32 right_signal_presses

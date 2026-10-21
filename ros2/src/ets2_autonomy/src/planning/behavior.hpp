@@ -17,21 +17,33 @@ struct Context {
     LaneChangeFsm fsm;
     SlowLead slow;
     double signal_since=0;     // when the driver's current signal went on
-    // Written by the tree in a tick.
-    int want_side=0;std::string want_reason,decision;
+    // Written by the tree in a tick; the reason of the lane change under way.
+    int want_side=0;std::string want_reason,decision,active_reason;
 
     void begin() {want_side=0;want_reason.clear();decision.clear();}
     void end() {
         const auto& lane=w.side(want_side==0?fsm.side():want_side);
-        LaneChangeFsm::Input in{w.t,want_side!=0,want_side,want_side!=0 && w.side(want_side).has_value(),
+        // The driver turning the assistance's signal off says no to its lane change.
+        const bool wanted=want_side!=0 && !(want_reason!="driver" && w.signal_cancelled);
+        LaneChangeFsm::Input in{w.t,wanted,want_side,want_side!=0 && w.side(want_side).has_value(),
                                 want_side!=0 && lane?gap_problem(w,*lane):"",w.change_active,want_reason=="driver",signal_since};
         fsm.update(in);
+        if(wanted) active_reason=want_reason;
         if(decision.empty() && fsm.state()!=LaneChangeFsm::Idle)
             decision=std::string("lane change ")+(fsm.side()<0?"left":"right")+(want_reason.empty()?"":" ("+want_reason+")")+": "+fsm.note();
     }
 };
 
 inline const char* side_name(int s) {return s<0?"left":s>0?"right":"none";}
+
+// The turn signal the planner wants when it commands (-1 left, 0 off, 1 right): its own lane
+// change's side from the signal until the truck is over, else off (drive_speed never touches
+// the driver's own signal, so off is safe to send all the time).
+inline int turn_signal(const Context& c) {
+    const auto s=c.fsm.state();
+    const bool own=c.active_reason!="driver" && (s==LaneChangeFsm::Signal || s==LaneChangeFsm::WaitGap || s==LaneChangeFsm::Execute);
+    return own?c.fsm.side():0;
+}
 
 // ChangeLane(side, reason): wants a lane change this tick; running while the state machine
 // works on it, success when done, failure when aborted.
@@ -67,9 +79,11 @@ inline void register_nodes(BT::BehaviorTreeFactory& f,Context& c) {
         if(ttc<limit) {char text[64];std::snprintf(text,sizeof text,"emergency: lead %.1f s away",ttc);c.decision=text;}
         return ok(ttc<limit);
     },{BT::InputPort<double>("ttc_s")});
+    // The driver's own signal (one the assistance turned on is its plan, not the driver's intent).
     f.registerSimpleCondition("DriverSignal",[&c,ok](BT::TreeNode& n) {
-        if(c.w.signal!=0) n.setOutput("side",c.w.signal);
-        return ok(c.w.signal!=0);
+        const bool driver=c.w.signal!=0 && c.w.signal_by!=2;
+        if(driver) n.setOutput("side",c.w.signal);
+        return ok(driver);
     },{BT::OutputPort<int>("side")});
     f.registerSimpleCondition("RouteExitLane",[&c,ok](BT::TreeNode& n) {
         const int side=route_side(c.w,n.getInput<double>("range_m").value_or(1500));

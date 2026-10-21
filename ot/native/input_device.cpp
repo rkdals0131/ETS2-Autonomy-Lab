@@ -22,6 +22,10 @@ public:
         if(request.action==OtDriveAction::arm) sample();
         return control_.request(request,GetTickCount64(),result,axes,actual_axes,aux,actual_aux,allowed_axes);
     }
+    bool signal(const OtDriveRequest& request,int32_t side,OtDriveStatus& result) noexcept {
+        std::lock_guard lock(mutex_);
+        return control_.signal(request,GetTickCount64(),side,result);
+    }
     void release(OtDriveReason reason) {std::lock_guard lock(mutex_);control_.release(reason);}
     void pause(bool paused) {std::lock_guard lock(mutex_);control_.paused(paused);}
     void available(bool value) {std::lock_guard lock(mutex_);available_=value;if(!value) active_=false;control_.configure(available_,permitted_,bool(profile_),error_.c_str());}
@@ -74,7 +78,8 @@ const OtDriveHost host{1,sizeof(OtDriveHost),&device,
     [](void* context,OtDriveReason reason){static_cast<InputDevice*>(context)->release(reason);},
     [](void* context,const OtDriveRequest* request,uint32_t axes,OtDriveStatus* result,uint32_t* actual){return static_cast<InputDevice*>(context)->request(*request,*result,axes,actual);},
     [](void* context,const OtDriveRequest* request,uint32_t axes,const OtDriveAux* aux,OtDriveStatus* result,uint32_t* actual,OtDriveAux* actual_aux){
-        return static_cast<InputDevice*>(context)->request(*request,*result,axes,actual,aux,actual_aux,ot_drive_all_aux);}};
+        return static_cast<InputDevice*>(context)->request(*request,*result,axes,actual,aux,actual_aux,ot_drive_all_aux);},
+    [](void* context,const OtDriveRequest* request,int32_t side,OtDriveStatus* result){return static_cast<InputDevice*>(context)->signal(*request,side,*result);}};
 }
 const OtDriveHost* drive_host() {return &host;}
 void input_release(OtDriveReason reason) {device.release(reason);}
@@ -90,7 +95,7 @@ scs_result_t input_initialize(scs_u32_t version,const scs_input_init_params_t* p
     static const scs_input_device_input_t inputs[]={{"steering","Steering",SCS_VALUE_TYPE_float},{"aforward","Throttle",SCS_VALUE_TYPE_float},{"abackward","Brake",SCS_VALUE_TYPE_float},
         {"retarder0","Retarder off",SCS_VALUE_TYPE_bool},{"retarder1","Retarder 1",SCS_VALUE_TYPE_bool},{"retarder2","Retarder 2",SCS_VALUE_TYPE_bool},
         {"retarder3","Retarder 3",SCS_VALUE_TYPE_bool},{"retarder4","Retarder 4",SCS_VALUE_TYPE_bool},{"retarder5","Retarder 5",SCS_VALUE_TYPE_bool},
-        {"motorbrake","Engine brake",SCS_VALUE_TYPE_bool}};
+        {"motorbrake","Engine brake",SCS_VALUE_TYPE_bool},{"lblinker","Left turn signal",SCS_VALUE_TYPE_bool},{"rblinker","Right turn signal",SCS_VALUE_TYPE_bool}};
     static_assert(std::size(inputs)==DriveFrame::kInputs);
     scs_input_device_t description{};description.name="ot_drive";description.display_name="OT Driving Commands";
     description.type=SCS_INPUT_DEVICE_TYPE_semantical;description.input_count=DriveFrame::kInputs;description.inputs=inputs;

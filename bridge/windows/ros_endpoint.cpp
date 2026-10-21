@@ -14,7 +14,9 @@
 #include <cstring>
 #include <deque>
 #include <optional>
+#include <tuple>
 #include <unordered_map>
+#include <vector>
 
 namespace bridge {
 using namespace std::chrono_literals;
@@ -45,8 +47,12 @@ struct RosEndpoint::Impl {
     // Newest validated command; older ones are superseded, like the old TCP slot.
     std::mutex drive_mutex;std::condition_variable drive_ready;
     std::optional<json> drive_request;uint64_t drive_sent_ns=0;bool stopping=false;
+    // Turn signal presses: the counts seen in this owner's epoch, and the presses (-1 left,
+    // 1 right) waiting for the forward thread.
+    std::string signal_owner;uint64_t signal_epoch=0;uint32_t signal_left=0,signal_right=0;
+    std::vector<std::tuple<std::string,uint64_t,int>> signal_presses;
     Latency command_age;
-    std::atomic<uint64_t> stale{0},rejected{0},forwarded{0};
+    std::atomic<uint64_t> stale{0},rejected{0},forwarded{0},signals{0},signals_rejected{0};
     // Publishes that took 50 ms or more, newest 16 with wall time, to line
     // up with subscriber joins/exits when send_elapsed spikes.
     std::mutex slow_mutex;std::deque<json> slow;std::atomic<uint64_t> slow_count{0};
@@ -107,6 +113,14 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control,MarksSink overlay)
                     {"axes",command->axes?command->axes:3}};
                 if(command->axes&4) {(*m.drive_request)["retarder"]=command->retarder_step;(*m.drive_request)["engine_brake"]=bool(command->engine_brake);}
                 m.drive_sent_ns=command->sent_steady_ns;
+                if(command->owner!=m.signal_owner || command->epoch!=m.signal_epoch) {
+                    m.signal_owner=command->owner;m.signal_epoch=command->epoch;m.signal_left=command->left_signal_presses;m.signal_right=command->right_signal_presses;
+                }
+                // At most the loader's queue (4) per command; the rest follow with later commands.
+                for(int side:{-1,1}) {
+                    auto& seen=side<0?m.signal_left:m.signal_right;const auto count=side<0?command->left_signal_presses:command->right_signal_presses;
+                    while(seen!=count && m.signal_presses.size()<4) {++seen;m.signal_presses.emplace_back(command->owner,command->epoch,side);}
+                }
             }
             m.drive_ready.notify_one();
         });
@@ -199,12 +213,24 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control,MarksSink overlay)
     m.forward=std::jthread([&m] {
         for(;;) {
             json request;uint64_t sent=0;
+            std::vector<std::tuple<std::string,uint64_t,int>> presses;
             {
                 std::unique_lock lock(m.drive_mutex);
                 m.drive_ready.wait(lock,[&]{return m.stopping || m.drive_request.has_value();});
                 if(m.stopping) return;
                 request=std::move(*m.drive_request);m.drive_request.reset();sent=m.drive_sent_ns;
+                presses.swap(m.signal_presses);
             }
+            for(const auto& [owner,epoch,side]:presses) {
+                try {
+                    if(m.control({{"cmd","drive"},{"action","signal"},{"drive_owner",owner},{"epoch",epoch},{"side",side}}).value("accepted",false)) ++m.signals;
+                    else ++m.signals_rejected;
+                } catch(const std::exception& e) {
+                    ++m.signals_rejected;
+                    RCLCPP_WARN_THROTTLE(m.node->get_logger(),*m.node->get_clock(),1000,"Turn signal press failed: %s",e.what());
+                }
+            }
+            presses.clear();
             // The window starts at receipt on the core's clock (GetTickCount64),
             // so it never exceeds now+200.
             request["deadline_ms"]=ticks()+200;
@@ -274,6 +300,7 @@ json RosEndpoint::sensors_enabled() const {return {{"camera",impl_->camera_enabl
 json RosEndpoint::diagnostics() {
     return {{"command_age",impl_->command_age.snapshot()},{"forwarded_commands",impl_->forwarded.load()},
         {"stale_commands",impl_->stale.load()},{"rejected_commands",impl_->rejected.load()},
+        {"signal_presses",impl_->signals.load()},{"rejected_signal_presses",impl_->signals_rejected.load()},
         {"overlay_paths",impl_->overlay_received.load()},{"rejected_overlay_paths",impl_->overlay_rejected.load()}};
 }
 }

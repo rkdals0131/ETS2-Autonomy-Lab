@@ -58,3 +58,8 @@ float64 target_gap_m
 float64 curve_lateral_acceleration_mps2
 float64 truck_front_m
 float64 truck_rear_m
+# Turn signal (plan stage 3): who set the lever's current state, 0 off, 1 the driver, 2 the
+# assistance (a change within 1 s of its own press, control/turn_signal.hpp), and whether the
+# driver turned the assistance's signal off (stands until the planner wants another state).
+int8 turn_signal_by
+bool turn_signal_cancelled

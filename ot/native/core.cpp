@@ -21,6 +21,7 @@ static const OtDriveHost* input_host{};
 static bool has_tail(size_t end) {return input_host && input_host->size>=end;}
 static bool split_axes() {return has_tail(offsetof(OtDriveHost,request_axes)+sizeof(OtDriveHost::request_axes)) && input_host->request_axes;}
 static bool aux_brakes() {return has_tail(offsetof(OtDriveHost,request_aux)+sizeof(OtDriveHost::request_aux)) && input_host->request_aux;}
+static bool turn_signals() {return has_tail(offsetof(OtDriveHost,signal)+sizeof(OtDriveHost::signal)) && input_host->signal;}
 static json drive_status(OtDriveStatus status) {
     const char* reasons[]={"disabled","disarmed","armed","command","expired","manual","paused","panic","disconnected","unloaded","input_unavailable","profile_unsupported"};
     // A newer resident loader may report reasons this core does not know.
@@ -39,7 +40,7 @@ static json current_drive() {
     if(aux_brakes()) input_host->request_aux(input_host->context,&request,ot_drive_all,nullptr,&status,&axes,&aux);
     else if(split_axes()) input_host->request_axes(input_host->context,&request,ot_drive_all,&status,&axes);
     auto result=drive_status(status);result["axes"]=axes;result["independent_axes"]=split_axes();
-    result["auxiliary_brakes"]=aux_brakes();result["retarder"]=aux.retarder;result["engine_brake"]=aux.engine_brake!=0;return result;
+    result["auxiliary_brakes"]=aux_brakes();result["retarder"]=aux.retarder;result["engine_brake"]=aux.engine_brake!=0;result["turn_signals"]=turn_signals();return result;
 }
 static void configure_drive(const json& settings) {
     if(!input_host) return;
@@ -461,6 +462,16 @@ json Runtime::command(const json& request) {
         const auto driver=request.at("drive_owner").get<std::string>();
         if(driver.empty() || driver.size()>128 || driver.find('\0')!=std::string::npos) throw std::runtime_error("Invalid driving owner");
         OtDriveRequest decoded;decoded.owner=driver.c_str();
+        // One turn signal lever press by the armed owner (any axes).
+        if(action=="signal") {
+            if(!turn_signals()) throw std::runtime_error("Turn signal presses require the updated resident loader; exit and restart the game");
+            const auto side=request.at("side").get<int32_t>();
+            if(side!=-1 && side!=1) throw std::runtime_error("Turn signal side must be -1 (left) or 1 (right)");
+            decoded.epoch=request.at("epoch").get<uint64_t>();
+            OtDriveStatus status;
+            const bool accepted=input_host->signal(input_host->context,&decoded,side,&status);
+            auto result=drive_status(status);result["accepted"]=accepted;result["turn_signals"]=true;return result;
+        }
         if(action=="arm") decoded.action=OtDriveAction::arm;
         else if(action=="disarm") decoded.action=OtDriveAction::disarm;
         else if(action=="command") decoded.action=OtDriveAction::command;
@@ -492,7 +503,7 @@ json Runtime::command(const json& request) {
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","configs","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","drive_auxiliary_brakes","parallel_passes","overlay"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","configs","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","drive_auxiliary_brakes","drive_turn_signals","parallel_passes","overlay"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"parallel_passes_allowed",gate_ok_ && allow_tier1_ && allow_parallel_passes_},
         {"overlay",true},{"overlay_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false) || parallel_passes_->active()},

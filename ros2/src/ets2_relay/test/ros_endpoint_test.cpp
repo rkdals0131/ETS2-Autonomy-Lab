@@ -98,6 +98,19 @@ TEST(RosEndpoint,PublishesDemandsAndForwardsDrive) {
         if(!with_retarder().is_null()) return true;
         command.sent_steady_ns=steady_ns();commands->publish(command);return false;}));
     EXPECT_EQ(with_retarder().at("axes"),6);EXPECT_EQ(with_retarder().at("retarder"),3);EXPECT_EQ(with_retarder().at("engine_brake"),true);
+
+    // Turn signal presses: each count the relay has not seen in this epoch becomes one press,
+    // repeated or dropped commands neither repeat nor lose one.
+    const auto presses=[&](int side) {int n=0;for(const auto& call:core.snapshot()) if(call.at("action")=="signal" && call.at("side")==side) ++n;return n;};
+    command.left_signal_presses=2;command.right_signal_presses=1;
+    for(int i=0;i<5;++i) {command.sequence=6+i;command.sent_steady_ns=steady_ns();commands->publish(command);spin_until(node,[]{return false;},20ms);}
+    ASSERT_TRUE(spin_until(node,[&]{return presses(-1)==2 && presses(1)==1;}));
+    for(const auto& call:core.snapshot()) if(call.at("action")=="signal") {EXPECT_EQ(call.at("drive_owner"),"test");EXPECT_EQ(call.at("epoch"),7);}
+    command.left_signal_presses=3;command.sequence=20;command.sent_steady_ns=steady_ns();commands->publish(command);
+    ASSERT_TRUE(spin_until(node,[&]{return presses(-1)==3;}));
+    spin_until(node,[]{return false;},200ms);
+    EXPECT_EQ(presses(-1),3);EXPECT_EQ(presses(1),1);
+    EXPECT_EQ(endpoint.diagnostics().at("signal_presses").get<uint64_t>(),4u);
     const auto diagnostics=endpoint.diagnostics();
     EXPECT_GE(diagnostics.at("stale_commands").get<uint64_t>(),1u);
     EXPECT_GE(diagnostics.at("forwarded_commands").get<uint64_t>(),1u);

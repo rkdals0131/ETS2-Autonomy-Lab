@@ -35,8 +35,14 @@ struct OtDriveHost {
     // Optional ABI-1 tail: request_axes plus the auxiliary brakes (axes up to 7). The
     // aux argument may be null; the last argument receives the commanded aux state.
     bool (*request_aux)(void*,const OtDriveRequest*,uint32_t,const OtDriveAux*,OtDriveStatus*,uint32_t*,OtDriveAux*);
+    // Optional ABI-1 tail: one press of the turn signal lever, -1 left or 1 right (the
+    // game's semantical lblinker/rblinker toggles), by the armed owner and epoch of the
+    // request (any axes). Presses queue (up to ot_drive_signal_queue) and are sent one at a
+    // time; a release drops the queue.
+    bool (*signal)(void*,const OtDriveRequest*,int32_t,OtDriveStatus*);
 };
 inline constexpr uint32_t ot_drive_steering=1,ot_drive_pedals=2,ot_drive_all=3,ot_drive_auxiliary=4,ot_drive_all_aux=7;
 inline constexpr int32_t ot_drive_retarder_steps=5;
+inline constexpr uint32_t ot_drive_signal_queue=4;
 // Driver activity in ManualInput::Sample::active_axes, one bit per profile input.
 inline constexpr uint32_t ot_manual_steering=1,ot_manual_throttle=2,ot_manual_brake=8;

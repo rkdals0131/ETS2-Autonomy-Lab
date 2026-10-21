@@ -130,6 +130,27 @@ int main(int argc,char** argv) try {
         input.right_trigger=0;input.left_trigger=.04001f;check(profile.evaluate(input).active);
         input={false};input.keys[4]=true;sample=profile.evaluate(input);check(sample.active && sample.values[1]==1);
     }
+    { // Turn signal presses: owner and epoch, a 100 ms press per toggle with 100 ms between,
+      // queued up to four, dropped on release; the lever inputs are the last two buttons.
+        DriveControl signals;signals.configure(true,true,true);signals.paused(false);signals.frame(2000,true,{},0);OtDriveStatus s;
+        OtDriveRequest a;a.action=OtDriveAction::arm;a.owner="controller";check(signals.request(a,2000,s,ot_drive_steering));
+        OtDriveRequest press=a;press.action=OtDriveAction::command;press.epoch=s.epoch;
+        // Steering commands keep the session within its 200 ms windows meanwhile.
+        auto keep=press;keep.sequence=0;
+        const auto pulse=[&](uint64_t t) {keep.sequence++;keep.deadline_ms=t+190;check(signals.request(keep,t,s,ot_drive_steering));
+                                          signals.frame(t,true,{},0);return signals.aux_frame().signal_pulse;};
+        auto stranger=press;stranger.owner="someone";check(!signals.signal(stranger,2001,-1,s));
+        auto stale=press;stale.epoch=s.epoch+1;check(!signals.signal(stale,2001,-1,s));
+        check(!signals.signal(press,2001,0,s));
+        check(signals.signal(press,2001,-1,s) && signals.signal(press,2001,1,s));
+        check(pulse(2002)==-1 && pulse(2101)==-1 && pulse(2102)==0 && pulse(2201)==0 && pulse(2202)==1 && pulse(2301)==1 && pulse(2302)==0);
+        DriveFrame lever;lever.begin({},DriveAuxFrame{-1,false,1});uint32_t i;float v;
+        for(uint32_t k=0;k<DriveFrame::kInputs;++k) check(lever.next(i,v) && v==(i==DriveFrame::kRightSignal?1.f:0.f));
+        for(int k=0;k<4;++k) check(signals.signal(press,2400,-1,s));
+        check(!signals.signal(press,2400,-1,s)); // queue full
+        check(pulse(2401)==0 && pulse(2402)==-1); // 100 ms after the last press ended
+        signals.release(OtDriveReason::disarmed);signals.frame(2700,true,{},0);check(signals.aux_frame().signal_pulse==0);
+    }
     if(argc>2) { // Live profile: pedals gate on a custom modifier, deadzones 0/0.
         ManualInput profile{std::filesystem::path(argv[2])};PhysicalInput input{true};
         auto sample=profile.evaluate(input);check(!sample.active && sample.values==std::array<float,3>{});
@@ -153,5 +174,5 @@ int main(int argc,char** argv) try {
         check(loads("keyboard.a?0 & (! keyboard.d?0)"));check(!loads("keyboard.a?0 && keyboard.d?0"));check(!loads("keyboard.a?0 || keyboard.d?0"));
         std::filesystem::remove(path);
     }
-    std::cout<<"Driving owner, epoch, expiry, takeover and override, auxiliary brake and SDK frame contracts passed\n";
+    std::cout<<"Driving owner, epoch, expiry, takeover and override, auxiliary brake, turn signal and SDK frame contracts passed\n";
 } catch(const std::exception& e) {std::cerr<<e.what()<<"\n";return 1;}

@@ -1,8 +1,11 @@
 // Planner (plan stage 2): the behavior tree (config/behavior.xml, planning/behavior.hpp) and
 // the lane change state machine over the world model, ticked at 10 Hz, with each tick's tree
 // and state machine on /ets2/planning/behavior (BehaviorStatus) for the Foxglove status board.
-// Shadow mode: it decides and shows; drive_speed still decides and executes (the turn signal
-// lane change), and nothing here commands the truck.
+// Shadow mode (default): it decides and shows; drive_speed still decides and executes (the
+// turn signal lane change), and nothing here commands the truck. With command:=true it sets
+// the turn signal for its own lane changes (/ets2/planning/turn_signal): drive_speed presses
+// the lever, and the assistance's signal starts drive_speed's turn signal lane change after
+// 3 s when the gap allows.
 // The world model comes from ground truth (the GT adapter below): drive_speed's assistance
 // state, the driver's turn signal, the GT ego pose and traffic, and the map provider's lane
 // files (the followed lane, the lanes beside, route events from --route).
@@ -16,6 +19,7 @@
 #include <ets2_msgs/msg/traffic_state.hpp>
 #include <ets2_msgs/msg/vehicle_state.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/int8.hpp>
 #include <nlohmann/json.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <filesystem>
@@ -64,6 +68,7 @@ int main(int argc,char** argv) {
         auto node=std::make_shared<rclcpp::Node>("ets2_planner");
         const auto tree_file=node->declare_parameter<std::string>("tree",ament_index_cpp::get_package_share_directory("ets2_autonomy")+"/config/behavior.xml");
         const auto path_file=node->declare_parameter<std::string>("path_file","");
+        const bool command=node->declare_parameter("command",false);
         planning::Context c;
         const auto started=Clock::now();
         const auto seconds=[&](Clock::time_point t) {return std::chrono::duration<double>(t-started).count();};
@@ -92,6 +97,7 @@ int main(int argc,char** argv) {
             traffic_time=Clock::now();
         });
         auto status=node->create_publisher<ets2_msgs::msg::BehaviorStatus>("/ets2/planning/behavior",rclcpp::QoS(1));
+        auto turn_signal=node->create_publisher<std_msgs::msg::Int8>("/ets2/planning/turn_signal",rclcpp::QoS(1));
 
         BT::BehaviorTreeFactory factory;
         planning::register_nodes(factory,c);
@@ -102,8 +108,8 @@ int main(int argc,char** argv) {
         ets2_msgs::msg::BehaviorStatus message;
         for(const auto& [n,parent]:nodes) {message.node_name.push_back(n->name());message.node_kind.push_back(n->registrationName());message.node_parent.push_back(parent);}
         for(const auto* name:planning::LaneChangeFsm::names) message.fsm_state.push_back(name);
-        message.shadow=true;
-        std::cout<<"Planner (shadow): "<<tree_file<<", "<<nodes.size()<<" nodes -> /ets2/planning/behavior"<<std::endl;
+        message.shadow=!command;
+        std::cout<<(command?"Planner (commands the turn signal): ":"Planner (shadow): ")<<tree_file<<", "<<nodes.size()<<" nodes -> /ets2/planning/behavior"<<std::endl;
 
         auto next_lanes=Clock::now();std::string last_decision;
         auto timer=node->create_wall_timer(100ms,[&] {
@@ -116,6 +122,7 @@ int main(int argc,char** argv) {
             w.set_speed=live?assist->set_speed_mps:0;w.grade=live && std::isfinite(assist->grade)?assist->grade:0;
             w.lead=live && assist->lead_valid;w.lead_gap=live?assist->lead_gap_m:0;w.lead_speed=live?assist->lead_speed_mps:0;w.lead_id=live?assist->lead_id:0;
             w.change_request=live?assist->lane_change_request:0;w.change_active=live?assist->lane_change_active:0;
+            w.signal_by=live?assist->turn_signal_by:(w.signal!=0?1:0);w.signal_cancelled=live && assist->turn_signal_cancelled;
             if(now-traffic_time>500ms) w.objects.clear();
             // The provider's lanes, once a second; the truck's place on the followed lane every tick.
             if(!path_file.empty() && now>=next_lanes) {
@@ -143,6 +150,7 @@ int main(int argc,char** argv) {
             }
             message.fsm_active=c.fsm.state();message.fsm_note=c.fsm.note();message.decision=c.decision;
             status->publish(message);
+            if(command) {std_msgs::msg::Int8 wanted;wanted.data=int8_t(planning::turn_signal(c));turn_signal->publish(wanted);}
             if(c.decision!=last_decision) {std::cout<<"Decision: "<<c.decision<<std::endl;last_decision=c.decision;}
         });
         while(rclcpp::ok() && !stop.requested()) rclcpp::spin_some(node),std::this_thread::sleep_for(5ms);

@@ -25,8 +25,9 @@ struct World {
     bool acc=false,lcc=false;
     double set_speed=0;
     bool lead=false;double lead_gap=0,lead_speed=0;uint64_t lead_id=0;
-    // The driver's turn signal switch: -1 left, 1 right, 0 off (both on: hazards, 0).
-    int signal=0;
+    // The turn signal lever: -1 left, 1 right, 0 off (both on: hazards, 0); who set it (0 off,
+    // 1 the driver, 2 the assistance) and whether the driver turned the assistance's off.
+    int signal=0,signal_by=0;bool signal_cancelled=false;
     // drive_speed's lane change: requested side (waiting for a gap), side in progress.
     int change_request=0,change_active=0;
     std::vector<Object> objects;
