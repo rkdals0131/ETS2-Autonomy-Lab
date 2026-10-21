@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<!-- The planner's behavior tree (planner_node.cpp, planning/behavior.hpp). Re-evaluated from
+     the top every tick (10 Hz): the first branch that holds wins and halts any later one that
+     was running. Branches are reactive sequences so their conditions are checked every tick
+     (a plain Sequence resumes at its running child and would keep a lane change going after
+     its reason went). Edit and restart the planner; no rebuild. -->
+<root BTCPP_format="4" main_tree_to_execute="Drive">
+  <BehaviorTree ID="Drive">
+    <ReactiveFallback name="Drive">
+      <ReactiveSequence name="Emergency">
+        <CollisionImminent ttc_s="2.0"/>
+        <EmergencyBrake/>
+      </ReactiveSequence>
+      <ReactiveSequence name="Assistance off">
+        <Inverter><AssistEngaged/></Inverter>
+        <Standby/>
+      </ReactiveSequence>
+      <ReactiveSequence name="Driver intent">
+        <DriverSignal side="{signal}"/>
+        <ChangeLane name="Change lane (driver)" side="{signal}" reason="driver"/>
+      </ReactiveSequence>
+      <ReactiveSequence name="Route exit">
+        <RouteExitLane side="{exit}" range_m="1500"/>
+        <ChangeLane name="Change lane (route)" side="{exit}" reason="route"/>
+      </ReactiveSequence>
+      <ReactiveSequence name="Overtake">
+        <SlowLead/>
+        <LaneFree side="-1"/>
+        <ChangeLane name="Change lane (overtake)" side="-1" reason="overtake"/>
+      </ReactiveSequence>
+      <KeepLane/>
+    </ReactiveFallback>
+  </BehaviorTree>
+</root>

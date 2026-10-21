@@ -102,6 +102,7 @@ environments:
       - conda: https://prefix.dev/conda-forge/win-64/console_bridge-1.0.2-h5362a0b_1.tar.bz2
       - conda: https://prefix.dev/conda-forge/win-64/coverage-7.16.2-py312h6fa65f5_0.conda
       - conda: https://prefix.dev/conda-forge/win-64/cppcheck-2.22.0-py312h9df87ca_1.conda
+      - conda: https://prefix.dev/conda-forge/win-64/cppzmq-4.11.0-h0000e93_0.conda
       - conda: https://prefix.dev/conda-forge/win-64/cryptography-50.0.2-py311h67a9792_0.conda
       - conda: https://prefix.dev/conda-forge/win-64/cxx-compiler-2.0.0-h1c1089f_0.conda
       - conda: https://prefix.dev/conda-forge/win-64/cyclonedds-0.10.5-h2a109cb_0.conda
@@ -126,6 +127,7 @@ environments:
       - conda: https://prefix.dev/conda-forge/win-64/krb5-1.22.2-h719d79b_2.conda
       - conda: https://prefix.dev/conda-forge/win-64/lerc-4.2.0-hd936e49_0.conda
       - conda: https://prefix.dev/conda-forge/win-64/libblas-3.11.0-11_h8455456_mkl.conda
+      - conda: https://prefix.dev/conda-forge/win-64/libboost-1.90.0-h9dfe17d_3.conda
       - conda: https://prefix.dev/conda-forge/win-64/libcblas-3.11.0-11_h2a3cdd5_mkl.conda
       - conda: https://prefix.dev/conda-forge/win-64/libcurl-8.22.0-hdb0ef4a_0.conda
       - conda: https://prefix.dev/conda-forge/win-64/libdeflate-1.25-h1a1d4e4_1.conda
@@ -153,6 +155,7 @@ environments:
       - conda: https://prefix.dev/conda-forge/win-64/libpng-1.6.59-hdc8cecf_0.conda
       - conda: https://prefix.dev/conda-forge/win-64/libpsl-0.23.1-h9b16d47_1.conda
       - conda: https://prefix.dev/conda-forge/win-64/libpython-3.12.15-hcc31f7b_1_cpython.conda
+      - conda: https://prefix.dev/conda-forge/win-64/libsodium-1.0.22-h6a83c73_3.conda
       - conda: https://prefix.dev/conda-forge/win-64/libsqlite-3.54.0-hf5d6505_101.conda
       - conda: https://prefix.dev/conda-forge/win-64/libssh2-1.11.1-h734d217_1.conda
       - conda: https://prefix.dev/conda-forge/win-64/libtiff-4.7.2-h8f73337_1.conda
@@ -214,8 +217,10 @@ environments:
       - conda: https://prefix.dev/conda-forge/win-64/xorg-libxt-1.3.1-hfa92662_1.conda
       - conda: https://prefix.dev/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://prefix.dev/conda-forge/win-64/yaml-cpp-0.8.0-h5112557_1.conda
+      - conda: https://prefix.dev/conda-forge/win-64/zeromq-4.3.5-h3a581c9_12.conda
       - conda: https://prefix.dev/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - conda: https://prefix.dev/robostack-jazzy/win-64/ros-jazzy-ament-cmake-gtest-2.5.6-h9490d1a_25.conda
+      - conda: https://prefix.dev/robostack-jazzy/win-64/ros-jazzy-behaviortree-cpp-4.10.0-h9490d1a_25.conda
       - conda: https://prefix.dev/robostack-jazzy/win-64/ros-jazzy-foxglove-bridge-3.6.0-h9490d1a_25.conda
       - conda: https://prefix.dev/robostack-jazzy/win-64/ros-jazzy-rmw-fastrtps-cpp-8.4.4-h9490d1a_25.conda
       - conda: https://prefix.dev/robostack-jazzy/win-64/ros-jazzy-ros-base-0.11.0-h9490d1a_25.conda
@@ -266,6 +271,7 @@ environments:
       - conda: https://prefix.dev/robostack-jazzy/win-64/ros2-ament-pep257-0.17.5-np2py312hdd89193_25.conda
       - conda: https://prefix.dev/robostack-jazzy/win-64/ros2-ament-uncrustify-0.17.5-np2py312hdd89193_25.conda
       - conda: https://prefix.dev/robostack-jazzy/win-64/ros2-ament-xmllint-0.17.5-np2py312hdd89193_25.conda
+      - conda: https://prefix.dev/robostack-jazzy/win-64/ros2-behaviortree-cpp-4.10.0-np2py312h27c1513_25.conda
       - conda: https://prefix.dev/robostack-jazzy/win-64/ros2-builtin-interfaces-2.0.4-np2py312hdd89193_25.conda
       - conda: https://prefix.dev/robostack-jazzy/win-64/ros2-class-loader-2.7.1-np2py312he78ef48_25.conda
       - conda: https://prefix.dev/robostack-jazzy/win-64/ros2-common-interfaces-5.3.8-np2py312hdd89193_25.conda
@@ -1546,6 +1552,19 @@ packages:
   run_exports: {}
   size: 2462998
   timestamp: 1790418683325
+- conda: https://prefix.dev/conda-forge/win-64/cppzmq-4.11.0-h0000e93_0.conda
+  sha256: cc518834b6cb775bddbe60b27d5ad6c5f9fdee805146b071bb7a854f3cae8bf5
+  md5: 5a3728154ed1b8d7bdb6418087175f81
+  depends:
+  - ucrt >=10.0.20348.0
+  - vc >=14.3,<15
+  - vc14_runtime >=14.44.35208
+  - zeromq >=4.3.5,<4.3.6.0a0
+  license: MIT
+  license_family: MIT
+  run_exports: {}
+  size: 30872
+  timestamp: 1763729089600
 - conda: https://prefix.dev/conda-forge/win-64/cryptography-50.0.2-py311h67a9792_0.conda
   noarch: python
   sha256: f3a68411fd8c3eb6d2cd3503c8a3bea779b2edf162e447e05b6fb79d2b1bb859
@@ -1891,6 +1910,25 @@ packages:
     - libblas >=3.11.0,<4.0a0
   size: 67059
   timestamp: 1789061341346
+- conda: https://prefix.dev/conda-forge/win-64/libboost-1.90.0-h9dfe17d_3.conda
+  sha256: e82a6fdfc93a7fa72b188ba2bcc0f740d564cf742c001d2b58f15f1c6e0e6437
+  md5: 15620ea8e1fa6d5eb275ee8665f88b32
+  depends:
+  - bzip2 >=1.0.8,<2.0a0
+  - libiconv >=1.18,<2.0a0
+  - liblzma >=5.8.3,<6.0a0
+  - libzlib >=1.3.2,<2.0a0
+  - ucrt >=10.0.20348.0
+  - vc >=14.3,<15
+  - vc14_runtime >=14.44.35208
+  - zstd >=1.5.7,<1.6.0a0
+  constrains:
+  - __win >=10
+  - boost-cpp <0.0a0
+  license: BSL-1.0
+  run_exports: {}
+  size: 2550006
+  timestamp: 1790024540941
 - conda: https://prefix.dev/conda-forge/win-64/libcblas-3.11.0-11_h2a3cdd5_mkl.conda
   build_number: 11
   sha256: 9a2d431ead1463a7a96a38bedc901705c325c5bbafd7a2bcc5a198fbfcdea29e
@@ -2294,6 +2332,19 @@ packages:
   run_exports: {}
   size: 47585
   timestamp: 1791330099093
+- conda: https://prefix.dev/conda-forge/win-64/libsodium-1.0.22-h6a83c73_3.conda
+  sha256: 6ffc0f69a71a4b440414d32ae2960202c570431a4605069ad2762b5c04b45f16
+  md5: 44aa173fe5fec2e3ba2f884cf90253c6
+  depends:
+  - vc >=14.3,<15
+  - vc14_runtime >=14.44.35208
+  - ucrt >=10.0.20348.0
+  license: ISC
+  run_exports:
+    weak:
+    - libsodium >=1.0.22,<1.0.23.0a0
+  size: 280822
+  timestamp: 1789425326114
 - conda: https://prefix.dev/conda-forge/win-64/libsqlite-3.54.0-hf5d6505_101.conda
   sha256: 210405f21c300e72287281979bbb4be8a7aeb5f31329b8afffc6a1a2cae67427
   md5: d21c450f59e7c9d130ddd68cdbd6ac40
@@ -3224,6 +3275,22 @@ packages:
     - yaml-cpp >=0.8.0,<0.9.0a0
   size: 150033
   timestamp: 1785924043282
+- conda: https://prefix.dev/conda-forge/win-64/zeromq-4.3.5-h3a581c9_12.conda
+  sha256: 77666f68961acb86b985645734dcf7827355cf22a7f9236838e1a6e07bf06124
+  md5: fc0bef11265f13c4acd2ab4a7432d5ab
+  depends:
+  - vc >=14.3,<15
+  - vc14_runtime >=14.44.35208
+  - ucrt >=10.0.20348.0
+  - krb5 >=1.22.2,<1.23.0a0
+  - libsodium >=1.0.22,<1.0.23.0a0
+  license: MPL-2.0
+  license_family: MOZILLA
+  run_exports:
+    weak:
+    - zeromq >=4.3.5,<4.3.6.0a0
+  size: 265930
+  timestamp: 1789076564779
 - conda: https://prefix.dev/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
   sha256: ca7daae4f218a11fab82cc2857f0ea518ec3f46acec60490485347a4c22c6b3e
   md5: e4ac308c39d6d0e131154976da67cf3b
@@ -3247,6 +3314,14 @@ packages:
   run_exports: {}
   size: 2039
   timestamp: 1791431251338
+- conda: https://prefix.dev/robostack-jazzy/win-64/ros-jazzy-behaviortree-cpp-4.10.0-h9490d1a_25.conda
+  sha256: d0501306125586c8bce019a17308b9c7de72dcdf951d1b6716150b03659f83ba
+  md5: 565cdd06496d33809d0429fb769a9736
+  depends:
+  - ros2-behaviortree-cpp ==4.10.0
+  run_exports: {}
+  size: 2040
+  timestamp: 1791460672958
 - conda: https://prefix.dev/robostack-jazzy/win-64/ros-jazzy-foxglove-bridge-3.6.0-h9490d1a_25.conda
   sha256: 4ba13914a9eff2df36a9d4a05bc09889269b785a42359d56ddd0f74cc453e7f8
   md5: 9a47dcf91271903e16490498c24d990f
@@ -4159,6 +4234,35 @@ packages:
   run_exports: {}
   size: 36562
   timestamp: 1791431534342
+- conda: https://prefix.dev/robostack-jazzy/win-64/ros2-behaviortree-cpp-4.10.0-np2py312h27c1513_25.conda
+  sha256: b1119e016b80021e3c5f7872fd0d7f128e21ca7f74e2183cd945a071543a93e3
+  md5: a4f825a24802ec8fb15912361afc593e
+  depends:
+  - cppzmq
+  - libboost
+  - python
+  - ros2-ament-index-cpp
+  - ros2-distro-mutex 0.19.* jazzy_*
+  - ros2-rclcpp
+  - ros2-ros-workspace
+  - ros2-tinyxml2-vendor
+  - sqlite
+  - tinyxml2
+  - zeromq
+  - vc >=14.3,<15
+  - vc14_runtime >=14.44.35208
+  - ucrt >=10.0.20348.0
+  - zeromq >=4.3.5,<4.3.6.0a0
+  - numpy >=1.25,<3
+  - libboost >=1.90.0,<1.91.0a0
+  - libsqlite >=3.53.4,<4.0a0
+  - tinyxml2 >=11.0.0,<11.1.0a0
+  - ros2-distro-mutex >=0.19.0,<0.20.0a0
+  - python_abi 3.12.* *_cp312
+  license: MIT
+  run_exports: {}
+  size: 1935897
+  timestamp: 1791459804104
 - conda: https://prefix.dev/robostack-jazzy/win-64/ros2-builtin-interfaces-2.0.4-np2py312hdd89193_25.conda
   sha256: 60d6c9f599c90e97e796b8453e23ab64e4422a0645a1a311267a5b3e64023eea
   md5: 9844e80c1e4eefa93d002a118345a85e

@@ -164,7 +164,7 @@ class Controller:
         self.state = {"phase": "stopped", "message": "중지됨", "game": "확인 중", "relay": {}, "foxglove": False,
                       "sensors": {"camera": False, "lidar": False}, "assist": "off", "assist_note": "", "log_dir": "",
                       "recording": {"phase": "idle"}, "recording_error": ""}
-        self.relay = self.foxglove = self.drive = self.follow = self.sensor_change = self.job = self.hud = None
+        self.relay = self.foxglove = self.drive = self.follow = self.sensor_change = self.job = self.hud = self.planner = None
         self.relay_stop = self.drive_stop_event = None
         self.relay_restart = False  # the game session changed: start a new relay once the game is ready
         self.recording = self.session_log = None
@@ -312,6 +312,9 @@ class Controller:
                                  "-p", "acc_enabled:=true", "-p", "lcc_enabled:=true"], "drive")
         # HUD marks from the assistance state, apart from the control loop (ends with the job).
         self.hud = self.spawn(["ros2", "run", "ets2_autonomy", "hud", "--ros-args", "-p", "path_file:=" + str(output)], "hud")
+        # Behavior tree and lane change state machine in shadow mode: it shows what it would do
+        # (Foxglove status board, /ets2/planning/behavior); drive_speed still drives.
+        self.planner = self.spawn(["ros2", "run", "ets2_autonomy", "planner", "--ros-args", "-p", "path_file:=" + str(output)], "planner")
         self.update(assist="standby")
 
     def _apply_sensors(self, now):
@@ -374,7 +377,7 @@ class Controller:
         finally:
             if self.job:
                 self.job.close()  # Foxglove, provider and anything left in the job end here.
-            for process in (self.relay, self.foxglove, self.follow, self.sensor_change, self.hud):
+            for process in (self.relay, self.foxglove, self.follow, self.sensor_change, self.hud, self.planner):
                 if process:
                     try:
                         process.wait(timeout=3)
@@ -382,7 +385,7 @@ class Controller:
                         errors.append(f"PID {process.pid} 종료 확인 실패")
             if self.relay_stop:
                 self.relay_stop.close()
-            self.relay = self.foxglove = self.follow = self.sensor_change = self.job = self.relay_stop = self.hud = None
+            self.relay = self.foxglove = self.follow = self.sensor_change = self.job = self.relay_stop = self.hud = self.planner = None
         for reader in self.readers:
             reader.join(timeout=2)  # The last lines of each child reach its log file.
         self.readers = []
@@ -399,7 +402,7 @@ class Controller:
         while not self.lines.empty():
             source, pid, line = self.lines.get()
             process = {"relay": self.relay, "foxglove": self.foxglove, "follow": self.follow,
-                       "drive": self.drive, "param": self.sensor_change, "hud": self.hud}.get(source)
+                       "drive": self.drive, "param": self.sensor_change, "hud": self.hud, "planner": self.planner}.get(source)
             if not process or process.pid != pid:
                 continue
             if line is None:
@@ -424,6 +427,9 @@ class Controller:
         if self.hud and self.hud.poll() is not None:
             self.log(f"hud: HUD 노드 종료 (code={self.hud.returncode}), 게임 화면 표시가 멈춥니다. hud.log를 확인해 주세요.")
             self.hud = None
+        if self.planner and self.planner.poll() is not None:
+            self.log(f"planner: 판단 노드 종료 (code={self.planner.returncode}), 상황판이 멈춥니다. planner.log를 확인해 주세요.")
+            self.planner = None
         if self.follow and self.follow.poll() is not None:
             self.log(f"follow: 지도 provider 종료 (code={self.follow.returncode}), LCC 차로가 더 늘지 않습니다. follow.log를 확인해 주세요.")
             self.follow = None

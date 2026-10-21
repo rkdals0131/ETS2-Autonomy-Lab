@@ -19,6 +19,7 @@ nlohmann_json = "*"
 cmake = "*"
 ninja = "*"
 pkg-config = "*"
+ros-jazzy-behaviortree-cpp = ">=4.10.0,<5"
 
 [activation]
 # Overlay (when built) and the shared DDS profile for every process, not only launch files.
