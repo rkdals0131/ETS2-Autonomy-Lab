@@ -18,8 +18,8 @@ try
     for (int i = 0; i < args.Length; ++i)
     {
         if (!args[i].StartsWith("--")) throw new ArgumentException("Options require --name value pairs");
-        // --follow and --game-route are the options without a value.
-        if (args[i] is "--follow" or "--game-route") {options[args[i]] = "1"; continue;}
+        // Options without a value.
+        if (args[i] is "--follow" or "--game-route" or "--plan-route" or "--sdmap-build" or "--route-selftest") {options[args[i]] = "1"; continue;}
         if (i + 1 == args.Length) throw new ArgumentException($"{args[i]} requires a value");
         options.Add(args[i], args[++i]);
     }
@@ -37,6 +37,7 @@ try
         Audit.Run(all, audit);
         return 0;
     }
+    if (RouteCli.Handles(options)) return RouteCli.Run(options, game);
     double distance = Number("--distance-m", 1000);
     bool follow = options.ContainsKey("--follow");
     // Rolling mode: extend once less than extend-below is left ahead, drop points keep-behind past the truck.
@@ -63,6 +64,7 @@ try
         return (new Vector3(xyz[0].GetSingle(), xyz[1].GetSingle(), xyz[2].GetSingle()), new Vector3(-(float)Math.Sin(heading), 0, -(float)Math.Cos(heading)));
     }
     using var world = new World(game);
+    if (options.TryGetValue("--route", out var routeFile)) world.Route = RouteGuide.Load(routeFile);
     (Vector3 position, Vector3 forward)? initial = null;
     for (string? waiting = null; initial is null; )
     {
@@ -82,10 +84,10 @@ try
         lane.Fill(distance);
         lane.Write(output, 1);
         var o = lane.Origin;
-        Console.WriteLine(JsonSerializer.Serialize(new {output, start_item = o.Road is not null ? "road" : "prefab", road_uid = o.Road?.Uid.ToString("x"), road_type = o.Road?.RoadType.ToString(), lane_index = o.Lane,
+        Console.WriteLine(RouteGuide.Status(world, lane, JsonSerializer.Serialize(new {output, start_item = o.Road is not null ? "road" : "prefab", road_uid = o.Road?.Uid.ToString("x"), road_type = o.Road?.RoadType.ToString(), lane_index = o.Lane,
             road_direction = o.Road is null ? null : o.Increasing ? "forward" : "backward", prefab_uid = o.Prefab?.Uid.ToString("x"), prefab_model = o.Prefab?.Model.ToString(), prefab_curve = o.Road is null ? o.Lane : (int?)null,
             projection_distance_m = o.Distance, lane_width_m = lane.Width, point_count = lane.Points.Count, length_m = lane.EndS, end_reason = lane.EndReason, prefabs = lane.Walker.PrefabCount,
-            junction_choices = lane.Walker.Choices, events = lane.Events.Count, max_join_m = lane.Walker.MaxJoin, max_join_turn_deg = lane.Walker.MaxJoinTurn, blends = lane.Walker.Blends, max_blend_m = lane.Walker.MaxBlend, sectors = world.Sectors}));
+            junction_choices = lane.Walker.Choices, events = lane.Events.Count, max_join_m = lane.Walker.MaxJoin, max_join_turn_deg = lane.Walker.MaxJoinTurn, blends = lane.Walker.Blends, max_blend_m = lane.Walker.MaxBlend, sectors = world.Sectors})));
         return 0;
     }
     RollingLane? rolling = null;
@@ -149,10 +151,10 @@ try
             catch (Exception ex) {if (ex.Message != gameRoute.LastError) Console.Error.WriteLine($"game route: {ex.Message}");gameRoute.LastError = ex.Message;}
         // Replay mode reports every cycle so the driver can step in lockstep.
         if (updated || routeUpdate?.written == true || snapshotSource == "-" || (error is not null && error != lastError))
-            Console.WriteLine(JsonSerializer.Serialize(new {revision, path_id = rolling?.PathId, updated, reset, start_s = rolling?.StartS, end_s = rolling?.EndS, truck_s = rolling is null ? (double?)null : projection.s,
+            Console.WriteLine(RouteGuide.Status(world, rolling, JsonSerializer.Serialize(new {revision, path_id = rolling?.PathId, updated, reset, start_s = rolling?.StartS, end_s = rolling?.EndS, truck_s = rolling is null ? (double?)null : projection.s,
                 ahead_m = rolling is null ? (double?)null : rolling.EndS - projection.s, offset_m = rolling is null ? (double?)null : projection.distance, point_count = rolling?.Points.Count,
                 end_reason = rolling?.EndReason, prefabs = rolling?.Walker.PrefabCount, left_path_id = sides[0].Lane?.PathId, right_path_id = sides[1].Lane?.PathId, sectors = world.Sectors, elapsed_ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                scene_written = sceneUpdate?.written, scene_ms = sceneUpdate?.ms, scene_items = sceneUpdate?.items, route_written = routeUpdate?.written, route_nodes = routeUpdate?.items, error}));
+                scene_written = sceneUpdate?.written, scene_ms = sceneUpdate?.ms, scene_items = sceneUpdate?.items, route_written = routeUpdate?.written, route_nodes = routeUpdate?.items, error})));
         lastError = error;
         if (snapshotSource != "-") Thread.Sleep(TimeSpan.FromSeconds(Math.Max(0, period - Stopwatch.GetElapsedTime(started).TotalSeconds)));
         while (true)
@@ -215,6 +217,7 @@ sealed class World : IDisposable
     Dictionary<string, bool>? lightProfiles;
     readonly HashSet<SectorCoordinate> loaded = new();
     public Map Map {get; private set;} = new();
+    public RouteGuide? Route;   // --route: the exits to take at prefabs on the planned route
     // Roads and prefabs by 64 m cell of the current map, for Locate (it scanned every road).
     ItemIndex index = ItemIndex.Empty;
     // Background loading: a reopen took 0.7-2.4 s inside a follow cycle (2026-10-21; a lane
@@ -688,7 +691,9 @@ sealed class LaneWalker
 {
     readonly World world;
     public string? EndReason;
-    public int PrefabCount, Choices, Blends;
+    public int PrefabCount, Choices, Blends, RouteTaken;
+    // Route events of the last Step by sink index (--route).
+    public readonly List<(int index, RouteGuide.Note note)> RouteEvents = new();
     public double MaxJoin, MaxJoinTurn, MaxBlend;
     // Road still to emit, from startT in the travel direction, or a prefab curve to start on.
     ulong roadUid;float startT;bool increasing;int lane;bool roadPending;
@@ -902,11 +907,28 @@ sealed class LaneWalker
         var best = main.Count > 0 ? main.OrderBy(o => o.shift).ThenBy(o => o.exit.turn).ThenBy(o => o.path.length).First()
             : options.OrderBy(o => o.exit.turn).ThenBy(o => o.shift).ThenBy(o => o.path.length).First();
         string rule = main.Count > 0 ? (main.Select(o => o.exit.k).Distinct().Count() > 1 ? "split" : "through") : through < 0 ? "smallest_turn" : "lane_leaves_through";
+        // --route: the route's exit when this lane's curves reach it (route_turn when it is not the
+        // exit chosen above); otherwise the choice above and route_lane_mismatch with the entry
+        // lanes, ranked from the left like entryRank, whose curves reach the route's exit.
+        RouteGuide.Note? note = null;
+        if (world.Route?.Exit(prefab.Uid, node?.Uid) is ulong routeNode && prefab.Nodes.FindIndex(x => x.Uid == routeNode) is int routeIndex and >= 0)
+        {
+            int routeExit = view.Ppd(routeIndex);
+            var onRoute = options.Where(o => o.exit.k == routeExit).OrderBy(o => o.shift).ThenBy(o => o.path.length).ToList();
+            var lanesOk = paths.Where(p => p.exit == routeExit).Select(p => node is null ? 0 : Rank(Left(Lane.Flat(view.Point(p.start, 0)), entryPoint, heading), entryOffsets)).Distinct().Order().ToArray();
+            if (onRoute.Count > 0)
+            {
+                if (best.exit.k != routeExit) note = new("route_turn", prefab.Uid, routeNode, lanesOk, entryRank);
+                best = onRoute[0];rule = "route";++RouteTaken;
+            }
+            else note = new("route_lane_mismatch", prefab.Uid, routeNode, lanesOk, entryRank);
+        }
         var (chosenExit, chosen, _) = best;
         if (options.Select(o => o.exit.k).Distinct().Count() > 1) ++Choices;
         int exitRank = Rank(chosenExit.offsets[chosen.curves[^1]], chosenExit.offsets.Values);
         if (!Visit(prefab.Uid, kIn)) return End("loop");
         int from = sink.Count;
+        if (note is not null) RouteEvents.Add((from, note));
         for (int i = 0; i < chosen.curves.Count; ++i)
         {
             var curve = d.NavCurves[chosen.curves[i]];
@@ -1197,7 +1219,8 @@ sealed class RollingLane
     const double MinSpacing = .5; // joins of map pieces repeat a point within a few cm
     public readonly List<(double X, double Y, double S)> Points = new();
     public readonly List<(string Type, double S)> Events = new();
-    readonly Queue<(Vector3 point, string? type)> pending = new();
+    public readonly List<(RouteGuide.Note Note, double S)> RouteEvents = new();
+    readonly Queue<(Vector3 point, string? type, RouteGuide.Note? note)> pending = new();
     public readonly LaneWalker Walker;
     public readonly StartPoint Origin;
     public readonly float Width;
@@ -1222,12 +1245,12 @@ sealed class RollingLane
         {
             if (pending.Count == 0)
             {
-                buffer.Clear();marks.Clear();
+                buffer.Clear();marks.Clear();Walker.RouteEvents.Clear();
                 if (!Walker.Step(buffer, marks)) {EndReason = Walker.EndReason!;return;}
-                for (int i = 0; i < buffer.Count; ++i) pending.Enqueue((buffer[i], marks.FirstOrDefault(m => m.index == i).type));
+                for (int i = 0; i < buffer.Count; ++i) pending.Enqueue((buffer[i], marks.FirstOrDefault(m => m.index == i).type, Walker.RouteEvents.FirstOrDefault(m => m.index == i).note));
                 continue;
             }
-            var (q, type) = pending.Peek();
+            var (q, type, note) = pending.Peek();
             double x = q.X, y = -q.Z;
             if (Points.Count == 0) Points.Add((x, y, 0));
             else
@@ -1240,6 +1263,7 @@ sealed class RollingLane
                 }
             }
             if (type is not null) Events.Add((type, EndS));
+            if (note is not null) RouteEvents.Add((note, EndS));
             pending.Dequeue();
         }
     }
@@ -1248,6 +1272,7 @@ sealed class RollingLane
         int keep = Points.FindIndex(p => p.S >= before) - 1;
         if (keep > 0) Points.RemoveRange(0, Math.Min(keep, Points.Count - 2));
         Events.RemoveAll(e => e.S < StartS);
+        RouteEvents.RemoveAll(e => e.S < StartS);
     }
     // Point and unit direction at arc length s (clamped to the polyline).
     public (double x, double y) At(double s)
@@ -1282,7 +1307,8 @@ sealed class RollingLane
     {
         if (Points.Count < 2) throw new InvalidOperationException("No forward lane segment remains");
         Replace(output, JsonSerializer.Serialize(new {frame_id = "world", lane_width_m = Width, points = Points.Select(p => new[] {p.X, p.Y}),
-            end_reason = EndReason, revision, path_id = PathId, start_s = StartS, events = Events.Select(e => new {type = e.Type, s = e.S})}));
+            end_reason = EndReason, revision, path_id = PathId, start_s = StartS, events = RouteEvents.Count == 0 ? (object)Events.Select(e => new {type = e.Type, s = e.S})
+                : Events.Select(e => (e.S, (object)new {type = e.Type, s = e.S})).Concat(RouteEvents.Select(e => (e.S, RouteGuide.Event(e.Note, e.S)))).OrderBy(e => e.S).Select(e => e.Item2)}));
     }
     // Atomic replace. A reader holding the file open makes the replace fail on Windows; retry briefly.
     public static void Replace(string output, string text)
