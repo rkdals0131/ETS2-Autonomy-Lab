@@ -305,7 +305,7 @@ class Controller:
         output = BRIDGE_ROOT / "recordings" / "gt-path" / "follow-lane.json"
         output.parent.mkdir(parents=True, exist_ok=True)
         game = Path(LoaderClient(timeout=2).status()["module_path"]).parents[4]
-        self.follow = self.spawn([str(dotnet), str(provider), "--game", str(game), "--follow", "--out", str(output), "--distance-m", "1000"], "follow")
+        self.follow = self.spawn([str(dotnet), str(provider), "--game", str(game), "--follow", "--game-route", "--out", str(output), "--distance-m", "1000"], "follow")
         self.drive_stop_event = StopEvent("drive")
         self.drive = self.spawn(["ros2", "run", "ets2_autonomy", "drive_speed", "--stop-event", self.drive_stop_event.name,
                                  "--ros-args", "-p", "arm:=true", "-p", "engage:=cruise", "-p", "path_file:=" + str(output),

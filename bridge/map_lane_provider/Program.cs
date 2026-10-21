@@ -18,8 +18,8 @@ try
     for (int i = 0; i < args.Length; ++i)
     {
         if (!args[i].StartsWith("--")) throw new ArgumentException("Options require --name value pairs");
-        // --follow is the only option without a value.
-        if (args[i] == "--follow") {options[args[i]] = "1"; continue;}
+        // --follow and --game-route are the options without a value.
+        if (args[i] is "--follow" or "--game-route") {options[args[i]] = "1"; continue;}
         if (i + 1 == args.Length) throw new ArgumentException($"{args[i]} requires a value");
         options.Add(args[i], args[++i]);
     }
@@ -96,6 +96,8 @@ try
     // and for re-acquiring the lane the driver changed to before this lane resets.
     var sides = new[] {new Neighbour(-1, SidePath(output, "left")), new Neighbour(1, SidePath(output, "right"))};
     var scene = sceneRadius > 0 ? new Scene(SidePath(output, "scene"), sceneRadius) : null;
+    // The game's GPS route (<out>.route.json), read from the running game; not in replay.
+    using var gameRoute = options.ContainsKey("--game-route") && snapshotSource != "-" ? new GameRoute(SidePath(output, "route")) : null;
     for (var placement = first; ; )
     {
         long started = Stopwatch.GetTimestamp();
@@ -141,12 +143,16 @@ try
         if (scene is not null)
             try {sceneUpdate = scene.Update(world, placement.position);scene.LastError = null;}
             catch (Exception ex) {if (ex.Message != scene.LastError) Console.Error.WriteLine($"scene: {ex.Message}");scene.LastError = ex.Message;}
+        (bool written, int items)? routeUpdate = null;
+        if (gameRoute is not null)
+            try {routeUpdate = gameRoute.Update();gameRoute.LastError = null;}
+            catch (Exception ex) {if (ex.Message != gameRoute.LastError) Console.Error.WriteLine($"game route: {ex.Message}");gameRoute.LastError = ex.Message;}
         // Replay mode reports every cycle so the driver can step in lockstep.
-        if (updated || snapshotSource == "-" || (error is not null && error != lastError))
+        if (updated || routeUpdate?.written == true || snapshotSource == "-" || (error is not null && error != lastError))
             Console.WriteLine(JsonSerializer.Serialize(new {revision, path_id = rolling?.PathId, updated, reset, start_s = rolling?.StartS, end_s = rolling?.EndS, truck_s = rolling is null ? (double?)null : projection.s,
                 ahead_m = rolling is null ? (double?)null : rolling.EndS - projection.s, offset_m = rolling is null ? (double?)null : projection.distance, point_count = rolling?.Points.Count,
                 end_reason = rolling?.EndReason, prefabs = rolling?.Walker.PrefabCount, left_path_id = sides[0].Lane?.PathId, right_path_id = sides[1].Lane?.PathId, sectors = world.Sectors, elapsed_ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                scene_written = sceneUpdate?.written, scene_ms = sceneUpdate?.ms, scene_items = sceneUpdate?.items, error}));
+                scene_written = sceneUpdate?.written, scene_ms = sceneUpdate?.ms, scene_items = sceneUpdate?.items, route_written = routeUpdate?.written, route_nodes = routeUpdate?.items, error}));
         lastError = error;
         if (snapshotSource != "-") Thread.Sleep(TimeSpan.FromSeconds(Math.Max(0, period - Stopwatch.GetElapsedTime(started).TotalSeconds)));
         while (true)

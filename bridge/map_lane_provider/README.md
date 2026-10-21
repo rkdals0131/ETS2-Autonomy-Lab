@@ -82,6 +82,7 @@ provider가 실행 중이면 빌드 폴더의 DLL이 잠깁니다. 이때는 `-p
 | `--keep-behind-m` | 300 | follow: 차량 뒤로 남길 길이 |
 | `--period-s` | 0.5 | follow: placement 읽기 주기(약 2 Hz) |
 | `--scene-radius-m` | 120 | follow: 주변 지도 파일(`<out>.scene.json`)의 반경. 0이면 쓰지 않음 |
+| `--game-route` | 끔 | follow: 게임 GPS 경로를 실행 중인 게임에서 읽어 `<out>.route.json`에 씀(값 없는 옵션, 오프라인 재생에서는 안 함). 런처가 켬 |
 | `--audit-looks` | — | 지도 전체 sector를 읽고 road look별 차로 모델을 prefab 내비 곡선 끝점과 비교한 CSV를 쓰고 끝냄 |
 
 지도는 현재 위치 주변 3×3 sector(4 km)만 먼저 읽고, 기준선이 아직 읽지 않은 sector의 item에 닿으면 그 주변 sector를 더하고 멀어진 sector를 빼서 지도를 다시 엽니다(약 1–3초). archive 확인과 road look 읽기는 시작할 때 약 2.3초입니다. prefab 서술자 경로표는 처음 prefab에 닿을 때 SII에서 읽고(약 5초) 빌드 폴더의 `prefab-desc-cache.json`에 저장합니다. `def.scs`나 정의를 가진 DLC archive의 크기·시각이 바뀌면 다시 만듭니다.
@@ -122,6 +123,29 @@ follow는 Foxglove 표시용으로 트럭 주변 `--scene-radius-m`(기본 120 m
 - ✔ 2026-10-22 반경 120 m 오프라인 재생(고속도로 기록 1040주기, 90 km/h, 실시간 0.5 s): 매 위치에서 그 전 주기까지 쓴 파일이 트럭 주변 60 m를 모두 덮었습니다(최소 60 m; 같은 재생에서 예전 40 m는 27.5 m, hud의 0.5 s 읽기 지연 제외). 주기 중앙값 2.0 ms·p95 3.1 ms(40 m: 1.5·2.3 ms), 파일 중앙값 25 KB·최대 89 KB입니다. 반경 안 item이 자주 바뀌어 교체는 거의 매 주기입니다.
 
 한계: 교차로·램프 prefab 안의 도로 가장자리는 없습니다(서술자의 지도용 `MapPoints`로 만들 수 있지만 단순하지 않아 하지 않았습니다). 내비 곡선이 없는 prefab(건널목·다리 조각 등) 구간에서는 선이 끊깁니다. look 전환에서 차로 위치가 바뀌는 곳은 경계도 계단처럼 끊깁니다(차로 기준선만 S자로 흡수). 경계는 AI 차로 격자(4.5 m, 좁은 길 3 m) 기준이라 실제 노면 도색과 폭이 다를 수 있고, 점선·실선 구분은 지도에 없어 종류(`lane`/`centre`/`edge`)로만 나눕니다. Road 위 신호등(prefab 밖)과 신호 상태는 내지 않습니다.
+
+### 게임 GPS 경로(`--game-route`)
+
+follow는 게임 GPS에 잡힌 경로를 실행 중인 게임 메모리에서 읽어 `<out>.route.json`(예: `follow-lane.route.json`)에 씁니다. 판단 계층이 언제 어느 차로로 갈지 정하는 전역 경로입니다. 읽기만 합니다(`PROCESS_VM_READ`, 주입·쓰기 없음).
+
+- 찾는 길: 설치된 실행 파일 `.text`에서 ETS2LA 플러그인의 두 패턴(`research/sources/ETS2LA_plugin-3b01d90b5be2`, `src/patterns.win32.hpp`)으로 base_ctrl 정적 포인터와 gps_manager 멤버 오프셋을 찾고(1.61.1.9: RVA `0x36AF7C8`, `+0x4128`; 1.61.1.1은 `0x36AE6D8`, 같은 오프셋), base_ctrl이 `game_ctrl` 유닛일 때(주행 중) gps_manager → simple route source(+8) → route task(+0x20) → route items(+0x78, 0x30 바이트 항목)를 읽습니다. 항목은 경로 순서의 node(종류 0)와 그 사이 prefab(종류 1)이고, node마다 끝까지 남은 게임 거리·시간이 있습니다.
+- 도로·prefab 사슬: 이웃한 두 node가 함께 닿는 item(node의 backward/forward item, 종류 3 도로·4 prefab)이 그 구간입니다. 도로는 앞 node의 forward item이면 도로 방향(`forward` true)입니다. 지도 없이 메모리만으로 만들므로 아직 읽지 않은 sector의 경로도 나옵니다. 둘이 함께 닿는 item이 없으면 `gap`(페리·열차: 게임이 항구 node를 바로 잇습니다).
+- 쓰는 때: 매 주기(0.5 s) route task 머리(포인터·배열 주소·크기)만 읽고, 바뀌었을 때만 전체를 읽어 원자적으로 교체합니다(`revision` 1씩 증가). 읽는 중에 task가 바뀌면 그 주기를 버리고 다음 주기에 다시 읽습니다. 경로가 없거나 주행 중이 아니면 `{"source": "game", "unavailable": "no route" | "not driving"}`로 바꿉니다. 상태 줄에 `route_written`·`route_nodes`가 붙고, 오류는 stderr `game route: ...`로 바뀔 때만 남깁니다.
+
+```json
+{"frame_id": "world", "source": "game", "revision": 1, "created": "ISO 시각",
+ "start": [x, y], "goal": [x, y], "length_m": 9581.5, "eta_s": null,
+ "game_distance_m": 145909.6, "game_time_s": 8689.6,
+ "items": [{"kind": "road" | "prefab" | "gap", "uid": "16진 uid", "entry_node": "16진 uid", "exit_node": "16진 uid",
+            "forward": true, "exit_curves": [], "lanes_ok": [], "s_start_m": 0, "length_m": 64.3, "game_distance_m": 198.8}, ...],
+ "polyline": [[x, y, z], ...]}
+```
+
+- 좌표는 ROS world입니다. `polyline`은 경로 node 위치(도로 곡선이 아닌 node 사이 직선), `length_m`·`s_start_m`·항목 `length_m`은 그 직선 길이입니다. `game_*`는 게임이 GPS에 보여 주는 지도 축척 거리·시간(도시 밖 약 19배, 도시 안 3배)이며 참고용입니다.
+- 이 형식은 자체 경로 탐색(B, 같은 파일 형식에 `"source": "sdmap"`)과 같습니다. `exit_curves`(그 prefab에서 경로를 따르는 내비 곡선)와 `lanes_ok`(차로 변경 없이 다음 출구로 갈 수 있는 차로)는 지도로 채우는 공용 단계가 들어올 때까지 빈 배열입니다. △ walker가 이 파일을 따라 교차로 출구를 고르는 것은 아직 없습니다.
+- 경로는 게임이 마지막으로 경로를 계산한 지점에서 시작합니다(달려도 앞 항목이 줄지 않음). 트럭의 진행 위치는 소비자가 `polyline`에 투영해 구합니다.
+- ✔ 2026-10-22 실행 중인 1.61.1.9 게임: 패턴이 각각 두 곳(같은 값)에서 맞았습니다. 첫 읽기 경로는 node 688개(prefab 항목 70개), 직선 81 km·게임 거리 1,507 km(구간 비율 중앙값 19.0, 18.5 km 한 구간은 페리)였고, 다시 읽었을 때 경로는 node 176개(도로 134·prefab 41·gap 0), 직선 9.6 km였습니다. 트럭은 그 폴리라인에서 2.7 m(30번째 항목, prefab 안)였고, 그 항목 시작의 남은 게임 거리 137,461이 SDK `truck.navigation.distance` 136,216과 항목 안 진행만큼 차이 났습니다. 1.61.1.1(2026-10-08, `research/live/2026-10-08-readonly`)에서도 같은 경로가 읽혔습니다.
+- 한계: 차로 단위 안내(게임 route advisor의 차로 화살표, simple route source의 `lane_routing_task`)는 아직 읽지 않습니다. 게임 업데이트로 패턴이 안 맞으면 `game route: game GPS patterns not found`를 남기고 경로 파일 없이 계속 돕니다. 구조체 오프셋(+8, +0x20, +0x78, node +0x20/+0x28/+0x30, item +0xA/+0x40)이 바뀌면 읽기 검사(배열 크기·uid 0·읽는 중 변경)에서 걸러지지만 엉뚱한 값을 걸러 내지 못할 수 있어, 업데이트 뒤에는 위 검증(트럭이 폴리라인 위, 남은 거리)을 다시 해야 합니다.
 
 follow는 매 주기 placement를 기준선에 투영합니다.
 
