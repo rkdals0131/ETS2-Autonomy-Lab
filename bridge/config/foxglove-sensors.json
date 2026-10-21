@@ -1,0 +1,251 @@
+{
+  "configById": {
+    "3D!sensors": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 45,
+        "phi": 50,
+        "thetaOffset": 0,
+        "targetOffset": [
+          12,
+          0,
+          0
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_link",
+      "scene": {
+        "transforms": {
+          "showLabel": false,
+          "axisScale": 2
+        },
+        "meshUpAxis": "z_up"
+      },
+      "transforms": {
+        "frame:gt/base_link": {
+          "visible": false
+        },
+        "frame:wheel_odom": {
+          "visible": false
+        }
+      },
+      "layers": {
+        "grid": {
+          "layerId": "foxglove.Grid",
+          "visible": true,
+          "frameLocked": false,
+          "frameId": "base_link",
+          "size": 200,
+          "divisions": 20,
+          "lineWidth": 1,
+          "color": "#ffffff22",
+          "position": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "topics": {
+        "/ets2/lidar/L_F/preview/points": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "pointSize": 2
+        },
+        "/ets2/lidar/L_PL/preview/points": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "pointSize": 2
+        },
+        "/ets2/lidar/L_PR/preview/points": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "pointSize": 2
+        },
+        "/ets2/hud/markers": {
+          "visible": true,
+          "namespaces": {
+            "scene/traffic": {
+              "visible": true
+            },
+            "scene/ego": {
+              "visible": true
+            }
+          }
+        }
+      }
+    },
+    "Image!C_FN": {
+      "imageMode": {
+        "imageTopic": "/ets2/camera/C_FN/preview/image/compressed",
+        "calibrationTopic": "/ets2/camera/C_FN/preview/camera_info"
+      },
+      "cameraState": {},
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {}
+    },
+    "Image!C_FW": {
+      "imageMode": {
+        "imageTopic": "/ets2/camera/C_FW/preview/image/compressed",
+        "calibrationTopic": "/ets2/camera/C_FW/preview/camera_info"
+      },
+      "cameraState": {},
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {}
+    },
+    "Image!C_RL": {
+      "imageMode": {
+        "imageTopic": "/ets2/camera/C_RL/preview/image/compressed",
+        "calibrationTopic": "/ets2/camera/C_RL/preview/camera_info"
+      },
+      "cameraState": {},
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {}
+    },
+    "Image!C_RR": {
+      "imageMode": {
+        "imageTopic": "/ets2/camera/C_RR/preview/image/compressed",
+        "calibrationTopic": "/ets2/camera/C_RR/preview/camera_info"
+      },
+      "cameraState": {},
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {}
+    },
+    "Plot!imu": {
+      "paths": [
+        {
+          "value": "/ets2/imu/data_raw.linear_acceleration.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "ax"
+        },
+        {
+          "value": "/ets2/imu/data_raw.linear_acceleration.y",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "ay"
+        },
+        {
+          "value": "/ets2/imu/data_raw.angular_velocity.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "yaw rate"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30
+    },
+    "Plot!speed": {
+      "paths": [
+        {
+          "value": "/ets2/vehicle/state.speed_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "speed m/s"
+        },
+        {
+          "value": "/ets2/wheels/odometry.twist.twist.linear.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "wheel odom"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30
+    },
+    "RawMessages!diag": {
+      "topicPath": "/diagnostics",
+      "diffEnabled": false,
+      "expansion": "none"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "first": {
+      "first": {
+        "first": "Image!C_FN",
+        "second": "Image!C_FW",
+        "direction": "row",
+        "splitPercentage": 50
+      },
+      "second": "3D!sensors",
+      "direction": "column",
+      "splitPercentage": 45
+    },
+    "second": {
+      "first": {
+        "first": "Image!C_RL",
+        "second": "Image!C_RR",
+        "direction": "column",
+        "splitPercentage": 50
+      },
+      "second": {
+        "first": "Plot!speed",
+        "second": {
+          "first": "Plot!imu",
+          "second": "RawMessages!diag",
+          "direction": "column",
+          "splitPercentage": 50.0
+        },
+        "direction": "column",
+        "splitPercentage": 33.333333333333336
+      },
+      "direction": "column",
+      "splitPercentage": 50
+    },
+    "direction": "row",
+    "splitPercentage": 64
+  }
+}

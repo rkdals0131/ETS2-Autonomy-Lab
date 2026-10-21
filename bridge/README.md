@@ -72,7 +72,7 @@ Windows에서 출력을 캡처하는 스크립트는 `--no-daemon`을 씁니다.
 
 ## Foxglove
 
-Windows Foxglove에서 `ws://127.0.0.1:8765`에 연결합니다.
+Windows Foxglove에서 `ws://127.0.0.1:8765`에 연결합니다. 레이아웃은 `config/foxglove-assist.json`(주행 보조: 3D HUD 장면, ACC·LCC·앞차·차로 변경 표시등, 속도·종방향·횡방향·조향 그래프, 모드 전환, AssistState 원본)과 `config/foxglove-sensors.json`(센서 수집: 카메라 4개, 라이다 3D, 속도·IMU 그래프, 진단)을 Foxglove의 Layouts → Import로 불러옵니다. 서버 허용 목록(`config/foxglove.yaml`)에 `/ets2/hud/markers`, `/ets2/drive/*`, `/ets2/vehicle/powertrain`을 더했습니다(2026-10-21 저녁 전에는 HUD·보조 상태가 Foxglove에 오지 않았음). 런처는 서버가 떠 있는지 TCP 표의 LISTEN 소켓으로 봅니다(연결 시도는 서버에 "handshake failed" ERROR를 남겼음).
 
 - 영상: `/ets2/camera/{C_FN,C_FW,C_RL,C_RR}/preview/image/compressed`
 - 표시용 점군: `/ets2/lidar/{L_F,L_PL,L_PR}/preview/points`
@@ -169,7 +169,7 @@ ros2 param set /ets2_drive_speed target_speed_mps 0.0
 
 | 토픽·파라미터 | 계약 |
 | --- | --- |
-| `/ets2/overlay/marks` (구독) | `visualization_msgs/MarkerArray`. `LINE_STRIP` 마커 하나가 획 하나(8개까지): `scale.x` 노면 폭(m), `scale.y` 화면 최소 폭(1080줄 기준 px, 0이면 없음), `color`(a는 칠의 세기), 0이 아닌 `lifetime`은 TTL. 마커들은 한 `frame_id`(`base_link`/`world`)와 첫 마커의 stamp를 씁니다. 다른 마커 종류는 무시하고, `DELETEALL`은 그 앞의 획을 지우며(rviz와 같음), 획 없이 끝나면 지웁니다. 획마다 200 m에서 자르고 합쳐서 256점으로 솎되 획마다 2점 이상 남깁니다. Foxglove 3D 패널도 같은 토픽을 그대로 그립니다 |
+| `/ets2/hud/markers` (구독) | `visualization_msgs/MarkerArray`, HUD의 마커 토픽 하나(`hud` 노드). 노면에는 namespace가 `road/`로 시작하는 `LINE_STRIP`만 칠하고(나머지 `scene/*`는 Foxglove용), 그 마커 하나가 획 하나(8개까지): `scale.x` 노면 폭(m), `scale.y` 화면 최소 폭(1080줄 기준 px, 0이면 없음), `color`(a는 칠의 세기), 0이 아닌 `lifetime`은 TTL. 마커들은 한 `frame_id`(`base_link`/`world`)와 첫 마커의 stamp를 씁니다. 다른 마커 종류는 무시하고, `DELETEALL`은 그 앞의 획을 지우며(rviz와 같음), 획 없이 끝나면 지웁니다. 획마다 200 m에서 자르고 합쳐서 256점으로 솎되 획마다 2점 이상 남깁니다. Foxglove 3D 패널은 같은 토픽을 namespace별로 켜고 끕니다 |
 | `/ets2/overlay/path` (구독) | 획 하나짜리 예전 입력(호환). `nav_msgs/Path`. `frame_id`는 `base_link`(header.stamp는 그 경로를 만든 센서 stamp) 또는 `world`. 10–20 Hz, 256점 이내 권장(길면 200 m에서 자르고 256점으로 솎음). best effort 구독이라 reliable 발행자도 받음 |
 | `overlay_enabled` | 기본 false: 발행자가 있는 동안만 켬. true면 발행자가 없어도 켬 |
 | `overlay_width_m` / `overlay_alpha` / `overlay_ttl_ms` | 기본 3.5 / 0.22 / 300. TTL 동안 새 경로가 없으면 core가 숨김(시뮬레이션 시각 기준이라 일시정지 중에는 유지). 점이 없는 경로는 바로 지움 |
@@ -177,7 +177,7 @@ ros2 param set /ets2_drive_speed target_speed_mps 0.0
 
 릴레이는 `base_link` 경로를 자기 SDK 자세 이력(`engine.vehicle.pose_physics`, 최근 128 SDK 프레임)에서 stamp 이하 가장 가까운 자세로 world로 바꿔 `Local\OT_Overlay`에 씁니다. 스택은 GT 자세를 보지 않습니다. 최신 자세보다 500 ms 넘게 오래된 stamp는 숨김으로 씁니다. stamp 0은 최신 자세로 바꿉니다(수동 시험용). 발행자가 생기면 릴레이가 core에 `overlay enable`을 보내, 센서 수집 중이면 같은 훅을 함께 쓰고 아니면 overlay 전용 훅(OM·compile)만 켭니다. 주행 보조(입력·상태만) 실행에서도 그리며 이때도 이 두 훅은 켜집니다. 1 Hz 상태 줄의 `overlay`에 활성 여부·기록 수·마지막 거절 이유가, `/diagnostics`의 `drive_commands`에 받은·거절한 경로 수가 나옵니다.
 
-표시는 2026-10-21 저녁부터 별도 노드 `hud`(`ets2_autonomy`, 런처 주행 보조 모드가 띄움)가 만듭니다. `drive_speed`는 LCC가 조향하는 경로(`/ets2/drive/plan`, 20 Hz, 앞범퍼 1 m 앞부터 ACC 표시 지점 또는 3 s 앞까지, 합류·차로 변경 경로 포함)와 ACC 표시 지점(`AssistState.acc_mark`·`acc_mark_x/y/heading`, 차로 폭, 운전자 가속 개입)만 내고, `hud`가 30 Hz로 `/ets2/overlay/marks`를 냅니다(`hud_marks.hpp`). 규칙: LCC 조향 중 0.2 m 흰 띠(화면 최소 3 px), ACC가 앞차 없이 켜져 있으면 지킬 간격 위치의 차로 양 끝 괄호 두 개(가운데가 열림, 흐리게), 앞차가 있으면 그 뒤범퍼의 가로선 하나(괄호가 0.25 s에 걸쳐 미끄러져 와 닫힘), 감속 1 m/s² 넘으면 호박색·2.5 넘거나 비상이면 빨강, 운전자 가속 개입 중 흐리게, 방향지시등 차로 변경이 빈 틈을 기다리면 옆 차로 8–26 m에 점선, 꺼지면 없음. 띠와 가로선은 서로 다른 획이라 겹쳐도 두께가 섞이지 않습니다(0.46의 한 폴리라인 T자는 가로선의 화면 최소 두께가 띠 쪽 픽셀에 번졌습니다). △ 게임 화면 확인 전입니다. 아래는 그 전의 규칙입니다. `drive_speed`는 보조가 잡혀 있는 동안 20 Hz로 world 경로와 스타일을 냈습니다(2026-10-21 낮 규칙). LCC가 조향하는 동안만 앞범퍼 1 m 앞부터 차로 중심 띠를 그리고(운전자 조향·차로 찾기 중에는 없음), ACC가 켜져 있으면 선행차 뒤범퍼 아래 가로줄을 그립니다. 선행차가 없으면 ACC가 지킬 간격(앞범퍼 + 5 m + 시간 간격 × 속도) 위치에 흐린 청록 가로줄을 둡니다. 둘이 함께면 띠가 가로줄에서 끝나 T자가 됩니다. 폭 0.5 m, 색은 추종 초록·간격 흐린 청록·강한 감속 빨강·가속 페달 개입 흰색·ACC 없는 LCC 회색입니다. 그릴 것이 없거나 세션이 끝나면 빈 경로를 보내 바로 지웁니다.
+표시는 2026-10-21 저녁부터 별도 노드 `hud`(`ets2_autonomy`, 런처 주행 보조 모드가 띄움)가 만듭니다. `drive_speed`는 LCC가 조향하는 경로(`/ets2/drive/plan`, 20 Hz, 앞범퍼 1 m 앞부터 ACC 표시 지점 또는 3 s 앞까지, 합류·차로 변경 경로 포함)와 ACC 표시 지점(`AssistState.acc_mark`·`acc_mark_x/y/heading`, 차로 폭, 운전자 가속 개입)만 내고, `hud`가 30 Hz로 `/ets2/hud/markers`를 냅니다(`hud_marks.hpp`). namespace: 노면 `road/lcc_path`·`road/acc`·`road/lane_change`, Foxglove 전용 `scene/lane`(쓰는 차로 중심·가장자리)·`scene/traffic`(150 m 안 차량 상자, 앞차는 초록)·`scene/ego`(트럭 상자)·`scene/status`(트럭 위 글자: ACC 설정 속도·앞차 간격·LCC 상태·차로 변경). 규칙: LCC 조향 중 0.2 m 흰 띠(화면 최소 3 px), ACC가 앞차 없이 켜져 있으면 지킬 간격 위치의 차로 양 끝 괄호 두 개(가운데가 열림, 흐리게), 앞차가 있으면 그 뒤범퍼의 가로선 하나(괄호가 0.25 s에 걸쳐 미끄러져 와 닫힘), 감속 1 m/s² 넘으면 호박색·2.5 넘거나 비상이면 빨강, 운전자 가속 개입 중 흐리게, 방향지시등 차로 변경이 빈 틈을 기다리면 옆 차로 8–26 m에 점선, 꺼지면 없음. 띠와 가로선은 서로 다른 획이라 겹쳐도 두께가 섞이지 않습니다(0.46의 한 폴리라인 T자는 가로선의 화면 최소 두께가 띠 쪽 픽셀에 번졌습니다). △ 게임 화면 확인 전입니다. 아래는 그 전의 규칙입니다. `drive_speed`는 보조가 잡혀 있는 동안 20 Hz로 world 경로와 스타일을 냈습니다(2026-10-21 낮 규칙). LCC가 조향하는 동안만 앞범퍼 1 m 앞부터 차로 중심 띠를 그리고(운전자 조향·차로 찾기 중에는 없음), ACC가 켜져 있으면 선행차 뒤범퍼 아래 가로줄을 그립니다. 선행차가 없으면 ACC가 지킬 간격(앞범퍼 + 5 m + 시간 간격 × 속도) 위치에 흐린 청록 가로줄을 둡니다. 둘이 함께면 띠가 가로줄에서 끝나 T자가 됩니다. 폭 0.5 m, 색은 추종 초록·간격 흐린 청록·강한 감속 빨강·가속 페달 개입 흰색·ACC 없는 LCC 회색입니다. 그릴 것이 없거나 세션이 끝나면 빈 경로를 보내 바로 지웁니다.
 
 ### 게임 크루즈 버튼으로 켜기 (`engage:=cruise`)
 

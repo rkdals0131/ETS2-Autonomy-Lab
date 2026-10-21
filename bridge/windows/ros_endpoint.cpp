@@ -133,17 +133,19 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control,MarksSink overlay)
         ++m.overlay_received;
         if(m.overlay_sink) m.overlay_sink(marks);
     };
-    // HUD marks: LINE_STRIP markers in one frame. scale.x is the width on the road (m),
+    // HUD marks: /ets2/hud/markers, the one MarkerArray of the HUD (hud_node.cpp). The road
+    // is painted with its LINE_STRIP markers in namespaces road/*; everything else there is
+    // for Foxglove. Markers in one frame. scale.x is the width on the road (m),
     // scale.y the minimum width on screen (pixels at 1080 lines; 0 none), color the paint
     // (a: strength), a nonzero lifetime the TTL. Other marker types are ignored. DELETEALL drops
     // the strokes before it (rviz semantics); an array that ends without strokes clears.
-    m.overlay_marks=m.node->create_subscription<visualization_msgs::msg::MarkerArray>("/ets2/overlay/marks",rclcpp::QoS(1).best_effort(),
+    m.overlay_marks=m.node->create_subscription<visualization_msgs::msg::MarkerArray>("/ets2/hud/markers",rclcpp::QoS(1).best_effort(),
         [stamp_us,ttl_ms,deliver](const visualization_msgs::msg::MarkerArray::SharedPtr message) {
             OverlayMarks marks;marks.ttl_ms=ttl_ms();
             bool frame_set=false;
             for(const auto& marker:message->markers) {
                 if(marker.action==visualization_msgs::msg::Marker::DELETEALL) {marks.strokes.clear();continue;}
-                if(marker.action!=visualization_msgs::msg::Marker::ADD || marker.type!=visualization_msgs::msg::Marker::LINE_STRIP) continue;
+                if(marker.action!=visualization_msgs::msg::Marker::ADD || marker.type!=visualization_msgs::msg::Marker::LINE_STRIP || !marker.ns.starts_with("road/")) continue;
                 if(!frame_set) {
                     marks.frame=marker.header.frame_id;marks.stamp_us=stamp_us(marker.header.stamp);frame_set=true;
                     const auto& life=marker.lifetime;

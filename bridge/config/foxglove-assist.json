@@ -1,0 +1,384 @@
+{
+  "configById": {
+    "3D!assist": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 60,
+        "phi": 55,
+        "thetaOffset": 0,
+        "targetOffset": [
+          12,
+          0,
+          0
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_link",
+      "scene": {
+        "transforms": {
+          "showLabel": false,
+          "axisScale": 2
+        },
+        "meshUpAxis": "z_up"
+      },
+      "transforms": {
+        "frame:gt/base_link": {
+          "visible": false
+        },
+        "frame:wheel_odom": {
+          "visible": false
+        }
+      },
+      "layers": {
+        "grid": {
+          "layerId": "foxglove.Grid",
+          "visible": true,
+          "frameLocked": false,
+          "frameId": "base_link",
+          "size": 200,
+          "divisions": 20,
+          "lineWidth": 1,
+          "color": "#ffffff22",
+          "position": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "topics": {
+        "/ets2/hud/markers": {
+          "visible": true,
+          "namespaces": {
+            "road/lcc_path": {
+              "visible": true
+            },
+            "road/acc": {
+              "visible": true
+            },
+            "road/lane_change": {
+              "visible": true
+            },
+            "scene/lane": {
+              "visible": true
+            },
+            "scene/traffic": {
+              "visible": true
+            },
+            "scene/ego": {
+              "visible": true
+            },
+            "scene/status": {
+              "visible": true
+            }
+          }
+        },
+        "/ets2/drive/lane": {
+          "visible": false
+        },
+        "/ets2/drive/plan": {
+          "visible": false
+        }
+      }
+    },
+    "Indicator!acc": {
+      "path": "/ets2/drive/assist.acc_active",
+      "style": "background",
+      "fallbackColor": "#3a3a3a",
+      "fallbackLabel": "ACC off",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "true",
+          "color": "#2e7d32",
+          "label": "ACC"
+        }
+      ]
+    },
+    "Indicator!lcc": {
+      "path": "/ets2/drive/assist.lcc_state",
+      "style": "background",
+      "fallbackColor": "#3a3a3a",
+      "fallbackLabel": "LCC off",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "1",
+          "color": "#2e7d32",
+          "label": "LCC steering"
+        },
+        {
+          "operator": "=",
+          "rawValue": "2",
+          "color": "#f9a825",
+          "label": "LCC yields"
+        },
+        {
+          "operator": "=",
+          "rawValue": "3",
+          "color": "#8d6e63",
+          "label": "LCC searching"
+        }
+      ]
+    },
+    "Indicator!lead": {
+      "path": "/ets2/drive/assist.lead_valid",
+      "style": "background",
+      "fallbackColor": "#3a3a3a",
+      "fallbackLabel": "no lead",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "true",
+          "color": "#1565c0",
+          "label": "lead"
+        }
+      ]
+    },
+    "Indicator!change": {
+      "path": "/ets2/drive/assist.lane_change_active",
+      "style": "background",
+      "fallbackColor": "#3a3a3a",
+      "fallbackLabel": "lane kept",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "-1",
+          "color": "#f9a825",
+          "label": "<- changing"
+        },
+        {
+          "operator": "=",
+          "rawValue": "1",
+          "color": "#f9a825",
+          "label": "changing ->"
+        }
+      ]
+    },
+    "Plot!speed": {
+      "paths": [
+        {
+          "value": "/ets2/vehicle/state.speed_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "speed m/s"
+        },
+        {
+          "value": "/ets2/drive/assist.set_speed_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "set"
+        },
+        {
+          "value": "/ets2/drive/assist.target_speed_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "target (curve, lead)"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30
+    },
+    "Plot!longitudinal": {
+      "paths": [
+        {
+          "value": "/ets2/drive/assist.accel_target_mps2",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "a target"
+        },
+        {
+          "value": "/ets2/vehicle/state.acceleration_base_mps2[0]",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "a actual"
+        },
+        {
+          "value": "/ets2/drive/assist.lead_gap_m",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "lead gap m"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30
+    },
+    "Plot!lateral": {
+      "paths": [
+        {
+          "value": "/ets2/drive/assist.lateral_offset_m",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "offset m"
+        },
+        {
+          "value": "/ets2/drive/assist.merge_offset_m",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "merge ref m"
+        },
+        {
+          "value": "/ets2/drive/assist.heading_error_rad",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "heading err rad"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30
+    },
+    "Plot!steering": {
+      "paths": [
+        {
+          "value": "/ets2/drive/assist.steering_input",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "input"
+        },
+        {
+          "value": "/ets2/drive/assist.steering_applied",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "applied"
+        },
+        {
+          "value": "/ets2/drive/state.steering_manual",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "driver"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30
+    },
+    "StateTransitions!modes": {
+      "paths": [
+        {
+          "value": "/ets2/drive/assist.lcc_state",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "LCC 0 off 1 steer 2 yield 3 search"
+        },
+        {
+          "value": "/ets2/drive/assist.acc_mode",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "ACC 1 cruise 2 follow 3 stop 4 hold 5 go 6 emerg"
+        },
+        {
+          "value": "/ets2/drive/assist.lane_change_active",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "lane change"
+        },
+        {
+          "value": "/ets2/drive/state.armed",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "armed"
+        }
+      ],
+      "isSynced": true,
+      "showPoints": true
+    },
+    "RawMessages!assist": {
+      "topicPath": "/ets2/drive/assist",
+      "diffEnabled": false,
+      "expansion": "none"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "first": {
+      "first": "3D!assist",
+      "second": "StateTransitions!modes",
+      "direction": "column",
+      "splitPercentage": 78
+    },
+    "second": {
+      "first": {
+        "first": "Indicator!acc",
+        "second": {
+          "first": "Indicator!lcc",
+          "second": {
+            "first": "Indicator!lead",
+            "second": "Indicator!change",
+            "direction": "row",
+            "splitPercentage": 50.0
+          },
+          "direction": "row",
+          "splitPercentage": 33.333333333333336
+        },
+        "direction": "row",
+        "splitPercentage": 25.0
+      },
+      "second": {
+        "first": {
+          "first": "Plot!speed",
+          "second": {
+            "first": "Plot!longitudinal",
+            "second": {
+              "first": "Plot!lateral",
+              "second": "Plot!steering",
+              "direction": "column",
+              "splitPercentage": 50.0
+            },
+            "direction": "column",
+            "splitPercentage": 33.333333333333336
+          },
+          "direction": "column",
+          "splitPercentage": 25.0
+        },
+        "second": "RawMessages!assist",
+        "direction": "column",
+        "splitPercentage": 82
+      },
+      "direction": "column",
+      "splitPercentage": 8
+    },
+    "direction": "row",
+    "splitPercentage": 62
+  }
+}

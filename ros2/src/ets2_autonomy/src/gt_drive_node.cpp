@@ -101,18 +101,26 @@ int main(int argc,char** argv) {
                 throw std::runtime_error("Invalid GT ego pose");
             ego_x=p.x;ego_y=p.y;ego_z=p.z;ego_yaw=std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z));pose_received=true;pose_time=Clock::now();pose_stamp=msg->header.stamp;
         });
+        // The relay's latched configuration. A copy that does not parse (2026-10-21 20:16: one
+        // arrived as Foxglove connected and ended the session) is dropped: the geometry already
+        // known stays, and without one the session waits for a good copy.
         config=node->create_subscription<std_msgs::msg::String>("/ets2/sensors/config",rclcpp::QoS(1).transient_local(),[&](std_msgs::msg::String::SharedPtr msg) {
-            const auto data=nlohmann::json::parse(msg->data);double front=0;
-            std::map<uint32_t,AxleWheel> wheels;
-            for(const auto& w:data.at("vehicle").at("wheels")) {
-                const AxleWheel wheel{w.at("position_base_m").at(0).template get<double>(),w.value("steerable",false),w.value("liftable",false)};
-                if(!std::isfinite(wheel.x)) throw std::runtime_error("Current truck wheel geometry is unavailable");
-                wheels[w.at("index").template get<uint32_t>()]=wheel;
-                if(wheel.steerable) front=std::max(front,wheel.x);
+            try {
+                const auto data=nlohmann::json::parse(msg->data);double front=0;
+                std::map<uint32_t,AxleWheel> wheels;
+                for(const auto& w:data.at("vehicle").at("wheels")) {
+                    const AxleWheel wheel{w.at("position_base_m").at(0).template get<double>(),w.value("steerable",false),w.value("liftable",false)};
+                    if(!std::isfinite(wheel.x)) throw std::runtime_error("nonfinite wheel position");
+                    wheels[w.at("index").template get<uint32_t>()]=wheel;
+                    if(wheel.steerable) front=std::max(front,wheel.x);
+                }
+                if(!std::isfinite(front) || front<=0) throw std::runtime_error("no steering axle");
+                front_axle=front;axle_wheels=std::move(wheels);
+                liftable=std::any_of(axle_wheels.begin(),axle_wheels.end(),[](const auto& w){return w.second.liftable;});
+            } catch(const std::exception& e) {
+                std::cerr<<"Ignored /ets2/sensors/config ("<<e.what()<<"; "<<msg->data.size()<<" bytes, starts '"<<msg->data.substr(0,40)<<"'); "
+                    <<(front_axle>0?"keeping the known geometry":"waiting for a valid one")<<std::endl;
             }
-            if(!std::isfinite(front) || front<=0) throw std::runtime_error("Current truck steering axle geometry is unavailable");
-            front_axle=front;axle_wheels=std::move(wheels);
-            liftable=std::any_of(axle_wheels.begin(),axle_wheels.end(),[](const auto& w){return w.second.liftable;});
         });
         trs=node->create_subscription<geometry_msgs::msg::PoseStamped>("/ets2/ground_truth/trailer/pose",rclcpp::QoS(1),[&](geometry_msgs::msg::PoseStamped::SharedPtr msg) {
             const auto& q=msg->pose.orientation;

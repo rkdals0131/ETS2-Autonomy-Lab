@@ -15,10 +15,12 @@
 #include <cmath>
 #include <numbers>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace hud {
 struct Stroke {
+    std::string kind;              // lcc_path, acc, lane_change: the marker namespace road/<kind>
     Points points;
     double width_m=.2,screen_px=0; // width on the road; minimum width on screen (pixels at 1080 lines)
     std::array<float,4> rgba{1,1,1,1};
@@ -40,7 +42,7 @@ public:
     // dt: seconds since the last call.
     std::vector<Stroke> update(const Inputs& in,double dt) {
         std::vector<Stroke> strokes;
-        if(in.lcc_steering && in.plan.size()>=2) strokes.push_back({in.plan,.2,3,rgba(neutral,.5f,in)});
+        if(in.lcc_steering && in.plan.size()>=2) strokes.push_back({"lcc_path",in.plan,.2,3,rgba(neutral,.5f,in)});
         if(in.acc && in.mark) acc_marks(in,dt,strokes);
         else {shown_.reset();join_=0;}
         if(in.change_request && in.plan.size()>=2 && in.lane_width>0) waiting(in,strokes);
@@ -74,10 +76,10 @@ private:
         const auto across=[&](double from,double to) {
             return Points{{x-std::sin(h)*from,y+std::cos(h)*from},{x-std::sin(h)*to,y+std::cos(h)*to}};
         };
-        if(gap<.05) strokes.push_back({across(-half,half),width,px,rgba(colour,alpha,in)});
+        if(gap<.05) strokes.push_back({"acc",across(-half,half),width,px,rgba(colour,alpha,in)});
         else {
-            strokes.push_back({across(-half,-gap),width,px,rgba(colour,alpha,in)});
-            strokes.push_back({across(gap,half),width,px,rgba(colour,alpha,in)});
+            strokes.push_back({"acc",across(-half,-gap),width,px,rgba(colour,alpha,in)});
+            strokes.push_back({"acc",across(gap,half),width,px,rgba(colour,alpha,in)});
         }
     }
     static void waiting(const Inputs& in,std::vector<Stroke>& strokes) {
@@ -93,12 +95,12 @@ private:
                 const double at=s+t;
                 const bool on=at>=8 && at<=26 && std::fmod(at-8,2*dash_m)<dash_m;
                 if(on) dash.push_back({ax+(bx-ax)*t/l+nx*offset,ay+(by-ay)*t/l+ny*offset});
-                else if(dash.size()>=2) {strokes.push_back({dash,.2,3,rgba(amber,.5f,in)});dash.clear();}
+                else if(dash.size()>=2) {strokes.push_back({"lane_change",dash,.2,3,rgba(amber,.5f,in)});dash.clear();}
                 else dash.clear();
             }
             s+=l;
         }
-        if(dash.size()>=2 && strokes.size()<8) strokes.push_back({dash,.2,3,rgba(amber,.5f,in)});
+        if(dash.size()>=2 && strokes.size()<8) strokes.push_back({"lane_change",dash,.2,3,rgba(amber,.5f,in)});
     }
 };
 }

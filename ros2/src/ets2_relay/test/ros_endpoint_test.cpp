@@ -131,11 +131,12 @@ TEST(RosEndpoint,PublishesDemandsAndForwardsDrive) {
     EXPECT_EQ(endpoint.diagnostics().at("rejected_overlay_paths").get<uint64_t>(),rejected);
     // HUD marks: each LINE_STRIP marker is a stroke (scale.x road width, scale.y screen width
     // in pixels, the half of which is the stroke's minimum); other types are ignored.
-    auto marks=node->create_publisher<visualization_msgs::msg::MarkerArray>("/ets2/overlay/marks",rclcpp::QoS(1).best_effort());
+    auto marks=node->create_publisher<visualization_msgs::msg::MarkerArray>("/ets2/hud/markers",rclcpp::QoS(1).best_effort());
     visualization_msgs::msg::MarkerArray array;
-    for(int i=0;i<3;++i) {
+    // Two road strokes, a scene sphere and a scene line (Foxglove only: not painted).
+    for(int i=0;i<4;++i) {
         visualization_msgs::msg::Marker m;m.header.frame_id="world";m.header.stamp.sec=20;
-        m.type=i==2?visualization_msgs::msg::Marker::SPHERE:visualization_msgs::msg::Marker::LINE_STRIP;m.action=visualization_msgs::msg::Marker::ADD;
+        m.type=i==2?visualization_msgs::msg::Marker::SPHERE:visualization_msgs::msg::Marker::LINE_STRIP;m.ns=i>=2?"scene/x":"road/test";m.action=visualization_msgs::msg::Marker::ADD;
         m.scale.x=i?.4:.2;m.scale.y=i?8:4;m.color.r=1;m.color.g=i?.6f:1;m.color.b=1;m.color.a=.7f;m.pose.orientation.w=1;m.pose.position.x=i?10:0;
         m.points.resize(2);m.points[1].y=i?3:0;m.points[1].x=i?0:50;
         array.markers.push_back(m);

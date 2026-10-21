@@ -15,7 +15,7 @@ STATE_TOPICS = [
     "/clock", "/tf", "/tf_static", "/ets2/vehicle/state", "/ets2/vehicle/actuation", "/ets2/vehicle/powertrain", "/ets2/drive/state", "/ets2/drive/command",
     "/ets2/ground_truth/ego/pose", "/ets2/imu/data_raw", "/ets2/wheels/state",
     "/ets2/wheels/odometry", "/ets2/gnss/fix", "/ets2/sensors/config", "/diagnostics",
-    "/ets2/drive/assist", "/ets2/drive/lane", "/ets2/drive/plan", "/ets2/overlay/marks", "/ets2/overlay/path", "/ets2/overlay/style",
+    "/ets2/drive/assist", "/ets2/drive/lane", "/ets2/drive/plan", "/ets2/hud/markers", "/ets2/overlay/path", "/ets2/overlay/style",
     "/ets2/ground_truth/traffic",
     "/ets2/ground_truth/trailer/pose",
 ]
