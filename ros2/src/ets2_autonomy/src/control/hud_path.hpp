@@ -1,9 +1,9 @@
 #pragma once
-// HUD decal content for /ets2/overlay/path (world frame, ROS x/y): the assistance's path
-// ahead as a thin ribbon. With LCC it is the lane centreline from the rear point; without,
-// the arc the truck drives at its current yaw rate. A followed lead ends the ribbon with a
-// cross bar under its rear bumper (the relay's mask paints distance to the polyline, so a
-// bar drawn out and back reads as a T).
+// HUD decal content for /ets2/overlay/path (world frame, ROS x/y). Two marks, one per
+// assistance: LCC steering draws the lane centre ahead as a thin ribbon; ACC draws a cross
+// bar under the lead's rear bumper, or without a lead at the gap it would keep. Together the
+// ribbon ends in the bar (the relay paints distance to the polyline, so a bar drawn out and
+// back reads as a T); the bar alone is a two-point line across the lane.
 #include "path_following.hpp"
 #include <array>
 #include <cmath>
@@ -37,5 +37,10 @@ inline void bar(Points& points) {
     if(!(n>1e-6)) return;
     const auto nx=-(y-py)/n*bar_half_m,ny=(x-px)/n*bar_half_m;
     points.push_back({x+nx,y+ny});points.push_back({x-nx,y-ny});points.push_back({x,y});
+}
+// The bar alone at (x, y), across heading.
+inline Points cross(double x,double y,double heading) {
+    const auto nx=-std::sin(heading)*bar_half_m,ny=std::cos(heading)*bar_half_m;
+    return {{x+nx,y+ny},{x-nx,y-ny}};
 }
 } // namespace hud

@@ -41,6 +41,8 @@
 
 - 0.6 m 띠는 25 cm 마스크 텍셀로 계단처럼 보였습니다(사용자: "저해상도"). 0.44.0 셰이더는 마스크를 샘플하지 않고 경로 점(최대 256, 마스크 원점 기준 상대 좌표와 호 길이)을 상수 버퍼 b1로 받아 픽셀마다 폴리라인까지의 거리를 계산하고, 가장자리를 `fwidth` 한 픽셀로 부드럽게 합니다. 마스크는 원점·축·화면 범위 계산에만 남습니다. 사용자 확인: "이제 매끈함".
 - 반투명(0.55) 띠가 젖은 노면 반사와 조명을 비쳐 빛나 보였습니다. 불투명도 0.85와 12 cm 어두운 테두리로 바꿨으나 사용자는 "그래도 빛나 보인다"고 했습니다. △ 원인 후보: composition_out 뒤 단계(블릿·업스케일 등)의 처리, 또는 장면 밝기 대비 LDR 색 자체. 확인하지 않았습니다.
+- 2026-10-21 두 번째 주행 뒤 사용자: "여전히 너무 밝고 블렌딩되지 못함", "꺼질 때 1–2초 찌꺼기". 데칼은 tonemap 뒤 LDR 이미지(composition_out)에 그리므로, 평평한 색을 알파로 덮으면 그늘·밤·역광에서도 혼자 같은 밝기라 스티커처럼 뜹니다. core 0.45.0은 dual-source 블렌드(`target = add + target × multiply`)로 바꿨습니다. 칠의 세기 a, 색 c, 테두리를 뺀 안쪽에서 `multiply = 1 − a + a·2.2·c`, `add = a·0.06·c`입니다. 표시가 아래 노면색에 곱해지므로 장면의 조명·그늘을 따르고, 작은 발광분(0.06)이 불 없는 도로에서도 보이게 합니다. 테두리는 색 × 0.35로 어둡게 곱합니다. 잔상은 릴레이 TTL 1 s 때문이었습니다. 이제 TTL은 300 ms이고, 점 없는 경로는 바로 지웁니다(`drive_speed`는 그릴 것이 없을 때와 세션 끝에 보냄). △ 0.45.0은 게임에 교체만 했고(SDK 0.45.0 load 확인), 게임이 메인 메뉴라 화면 확인은 아직입니다.
+- 표시 규칙(같은 날): LCC가 조향할 때만 차로 띠, ACC가 켜져 있을 때 선행차 뒤 가로줄, 선행차가 없으면 ACC가 지킬 간격 위치에 흐린 가로줄([브리지 문서](../bridge/README.md#hud-궤적-오버레이)). 예전의 "LCC 없으면 요레이트 예측 호" 띠는 없앴습니다(사용자: 의미 없음).
 
 ## 1. 메인 프레임 구조(실측)
 
@@ -116,7 +118,7 @@ core가 overlay enable 때 매핑을 만들고 릴레이가 연다(✔ `OT_State
 1. `d = depth.Load(pixel)`; `d < near || d > far`(외부 범위 밖: 실내·하늘)면 discard.
 2. NDC(x,y,d) → `inv_projection` → 뷰 → world 상대 위치 `p`(✔ 깊이 복원 식은 `gpu_pack.cpp`의 라이다 깊이 셰이더와 같다).
 3. 노면 판정: `|p.z - ground_z| < z_tolerance + |p.xy|·slope_tolerance`이고 `ddx/ddy` 법선의 z > 0.7. 실패면 discard. **앞차 지붕·벽·미러 하우징은 이 판정이 막는다(셰이더 책임, 스택은 경로를 자르지 않음).**
-4. `mask.Sample(p.xy)` → 알파·호 길이 → 거리 페이드 → `float4(rgb, alpha)`, 블렌드 SRC_ALPHA/INV_SRC_ALPHA.
+4. `mask.Sample(p.xy)` → 알파·호 길이 → 거리 페이드 → `float4(rgb, alpha)`, 블렌드 SRC_ALPHA/INV_SRC_ALPHA. (구현: 0.44.0부터 마스크 대신 경로 점까지의 거리, 0.45.0부터 블렌드는 dual-source 칠 — §0 "주행 중 사용".)
 
 깊이 SRV: ✔ `gpu_capture.cpp:GpuCapture::geometry_constants`가 같은 DSV 리소스를 얻는다. `BindFlags`에 `SHADER_RESOURCE`가 있으면 `R32_FLOAT_X8X24_TYPELESS` SRV 직접, 없으면 ✔ `GpuPack::depth`처럼 `CopyResource`(1920×1080×8 B). 그리는 동안 DSV는 바인드하지 않는다.
 

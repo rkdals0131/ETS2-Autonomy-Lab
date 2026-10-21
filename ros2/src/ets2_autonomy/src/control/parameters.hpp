@@ -29,7 +29,9 @@ struct DrivingParameters {
     // Mean front wheel angle per applied steering unit, measured 2026-10-20: 0.698-0.700 rad at
     // 20-80 km/h (0.7087 at standstill, linear, residual <0.004 rad).
     double lookahead_m=6,lookahead_time_s=.7,steering_angle_per_unit_rad=.70;
-    double lateral_acceleration_mps2=1.5,stopping_deceleration_mps2=1.5;
+    // Curve speed while LCC steers (curve_speed.hpp): lateral acceleration on the lane ahead and
+    // the deceleration it is planned with (under the ACC's 0.5 m/s^2 set-speed ramp).
+    double lateral_acceleration_mps2=2,curve_deceleration_mps2=.45,stopping_deceleration_mps2=1.5;
     // following_time_s 2.0 is the time gap the MPC was tuned for; its standstill gap is 5 m
     // bumper to bumper, built into the controller (standstill_gap_m is the PID's).
     double following_time_s=2,standstill_gap_m=5,following_gain=.5;
@@ -60,7 +62,8 @@ inline constexpr std::array driving_double_parameters{
     DrivingDoubleParameter{"lookahead_m",&DrivingParameters::lookahead_m,DrivingDoubleParameter::Positive},
     DrivingDoubleParameter{"lookahead_time_s",&DrivingParameters::lookahead_time_s},
     DrivingDoubleParameter{"steering_angle_per_unit_rad",&DrivingParameters::steering_angle_per_unit_rad,DrivingDoubleParameter::Positive},
-    DrivingDoubleParameter{"lateral_acceleration_mps2",&DrivingParameters::lateral_acceleration_mps2},
+    DrivingDoubleParameter{"lateral_acceleration_mps2",&DrivingParameters::lateral_acceleration_mps2,DrivingDoubleParameter::Positive},
+    DrivingDoubleParameter{"curve_deceleration_mps2",&DrivingParameters::curve_deceleration_mps2,DrivingDoubleParameter::Positive},
     DrivingDoubleParameter{"stopping_deceleration_mps2",&DrivingParameters::stopping_deceleration_mps2,DrivingDoubleParameter::Positive},
     DrivingDoubleParameter{"following_time_s",&DrivingParameters::following_time_s},
     DrivingDoubleParameter{"standstill_gap_m",&DrivingParameters::standstill_gap_m},
@@ -101,7 +104,7 @@ inline rcl_interfaces::msg::SetParametersResult check_driving_parameter_changes(
         }
         for(const auto& field:driving_double_parameters) if(name==field.name) {
             if(p.get_type()!=rclcpp::ParameterType::PARAMETER_DOUBLE || !field.accepts(p.as_double())) {
-                result.successful=false;result.reason="Speed/gains must be finite and nonnegative (positive for steering bandwidth, wheel angle per unit, lookahead, window, stopping deceleration); steering must be in [-1,1]";break;
+                result.successful=false;result.reason="Speed/gains must be finite and nonnegative (positive for steering bandwidth, wheel angle per unit, lookahead, window, lateral acceleration, curve and stopping deceleration); steering must be in [-1,1]";break;
             }
         }
         if(!result.successful) break;

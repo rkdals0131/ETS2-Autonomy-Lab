@@ -116,10 +116,17 @@ TEST(RosEndpoint,PublishesDemandsAndForwardsDrive) {
     EXPECT_EQ(delivered(),0u);
     path.header.frame_id="base_link";
     ASSERT_TRUE(spin_until(node,[&]{overlay->publish(path);return delivered()>0;}));
-    std::lock_guard lock(paths_mutex);
-    EXPECT_EQ(paths.front().frame,"base_link");EXPECT_EQ(paths.front().stamp_us,12345678u);
-    ASSERT_EQ(paths.front().points.size(),2u);EXPECT_EQ(paths.front().points[1][0],80);
-    EXPECT_FLOAT_EQ(paths.front().width_m,3.5f);EXPECT_EQ(paths.front().ttl_ms,1000u);
+    {
+        std::lock_guard lock(paths_mutex);
+        EXPECT_EQ(paths.front().frame,"base_link");EXPECT_EQ(paths.front().stamp_us,12345678u);
+        ASSERT_EQ(paths.front().points.size(),2u);EXPECT_EQ(paths.front().points[1][0],80);
+        EXPECT_FLOAT_EQ(paths.front().width_m,3.5f);EXPECT_EQ(paths.front().ttl_ms,300u);
+    }
+    // An empty path is a clear request: it reaches the sink (any frame) instead of being rejected.
+    const auto rejected=endpoint.diagnostics().at("rejected_overlay_paths").get<uint64_t>();
+    path.header.frame_id="world";path.poses.clear();
+    ASSERT_TRUE(spin_until(node,[&]{overlay->publish(path);std::lock_guard lock(paths_mutex);return paths.back().points.empty();}));
+    EXPECT_EQ(endpoint.diagnostics().at("rejected_overlay_paths").get<uint64_t>(),rejected);
 }
 
 int main(int argc,char** argv) {

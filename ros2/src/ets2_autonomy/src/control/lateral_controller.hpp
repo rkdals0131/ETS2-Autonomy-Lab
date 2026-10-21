@@ -43,12 +43,14 @@ struct LateralController {
         const auto p=lane.track(x,y);
         const auto v=std::max(0.0,speed),d=settings.lookahead_m+v*settings.lookahead_time_s;
         const auto w=settings.curvature_window_m,s=p.s+v*settings.curvature_preview_s;
+        // Errors against the smoothed lane (LanePath::local), not the raw polyline.
+        const auto offset=lane.offset(x,y,p.s);
         const auto heading_error=std::remainder(yaw-lane.heading(p.s),2*std::numbers::pi);
         const auto path_curvature=lane.curvature(s,w);
-        const auto curvature=path_curvature-2*p.offset/(d*d)-2*std::sin(heading_error)/d;
+        const auto curvature=path_curvature-2*offset/(d*d)-2*std::sin(heading_error)/d;
         const auto curvature_rate=v*(lane.curvature(s+w/2,w)-lane.curvature(s-w/2,w))/w;
         const auto k=wheelbase*curvature;
         return {std::atan(k),wheelbase*curvature_rate/(1+k*k),curvature,path_curvature,
-                lane.pursuit(x,y,yaw,d),p.offset,heading_error,p.d,lane.remaining(),p.s};
+                lane.pursuit(x,y,yaw,d),offset,heading_error,p.d,lane.remaining(),p.s};
     }
 };

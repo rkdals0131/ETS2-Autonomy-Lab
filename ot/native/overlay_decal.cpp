@@ -110,7 +110,8 @@ void OverlayDecal::prepare(ID3D11Device* device) {
     sampler.ComparisonFunc=D3D11_COMPARISON_NEVER;sampler.MaxLOD=D3D11_FLOAT32_MAX;
     check(device->CreateSamplerState(&sampler,&sampler_),"CreateSamplerState(overlay)");
     D3D11_BLEND_DESC blend{};auto& b=blend.RenderTarget[0];
-    b.BlendEnable=TRUE;b.SrcBlend=D3D11_BLEND_SRC_ALPHA;b.DestBlend=D3D11_BLEND_INV_SRC_ALPHA;b.BlendOp=D3D11_BLEND_OP_ADD;
+    // Dual-source paint (overlay_decal.hlsl): target = output 0 + target * output 1.
+    b.BlendEnable=TRUE;b.SrcBlend=D3D11_BLEND_ONE;b.DestBlend=D3D11_BLEND_SRC1_COLOR;b.BlendOp=D3D11_BLEND_OP_ADD;
     b.SrcBlendAlpha=D3D11_BLEND_ZERO;b.DestBlendAlpha=D3D11_BLEND_ONE;b.BlendOpAlpha=D3D11_BLEND_OP_ADD;
     b.RenderTargetWriteMask=D3D11_COLOR_WRITE_ENABLE_RED|D3D11_COLOR_WRITE_ENABLE_GREEN|D3D11_COLOR_WRITE_ENABLE_BLUE;
     check(device->CreateBlendState(&blend,&blend_),"CreateBlendState(overlay)");

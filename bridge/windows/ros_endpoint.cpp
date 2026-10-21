@@ -110,7 +110,8 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control,PathSink overlay):
     m.node->declare_parameter("overlay_enabled",false);
     m.node->declare_parameter("overlay_width_m",3.5);
     m.node->declare_parameter("overlay_alpha",0.22);
-    m.node->declare_parameter("overlay_ttl_ms",1000);
+    // The GT node publishes at 20 Hz: a path it stopped sending disappears within 0.3 s.
+    m.node->declare_parameter("overlay_ttl_ms",300);
     // Optional style (width, colour) for the following paths, e.g. by assistance state.
     m.overlay_styles=m.node->create_subscription<ets2_msgs::msg::OverlayStyle>("/ets2/overlay/style",rclcpp::QoS(1).best_effort(),
         [&m](const ets2_msgs::msg::OverlayStyle::SharedPtr message) {m.overlay_style=*message;m.overlay_style_time=std::chrono::steady_clock::now();});
@@ -127,6 +128,8 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control,PathSink overlay):
                 path.width_m=style.width_m;path.rgba={style.color.r,style.color.g,style.color.b,style.color.a};
             }
             for(const auto& pose:message->poses) path.points.push_back({pose.pose.position.x,pose.pose.position.y,pose.pose.position.z});
+            // An empty path clears the decal now (the writer marks the content invalid).
+            if(path.points.empty()) {++m.overlay_received;if(m.overlay_sink) m.overlay_sink(path);return;}
             if((path.frame!="base_link" && path.frame!="world") || path.points.size()<2 || !std::isfinite(path.width_m) || path.width_m<=0 ||
                path.width_m>16 || !std::isfinite(path.rgba[3]) || path.rgba[3]<0 || path.rgba[3]>1) {
                 ++m.overlay_rejected;

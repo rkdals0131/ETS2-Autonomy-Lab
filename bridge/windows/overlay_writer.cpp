@@ -30,6 +30,7 @@ ot::OverlayContent overlay_content(const OverlayPath& path,const PoseHistory& hi
     content.stamp_us=path.stamp_us;content.ttl_ms=path.ttl_ms;content.width_m=path.width_m;
     std::copy(path.rgba.begin(),path.rgba.end(),content.rgba);
     const auto fail=[&](const char* why) {if(reason) *reason=why;content.valid=false;content.point_count=0;return content;};
+    if(path.points.empty()) return fail("cleared by an empty path");
     const auto newest=history.latest();
     std::optional<StampedPose> pose;
     if(path.frame=="base_link") {

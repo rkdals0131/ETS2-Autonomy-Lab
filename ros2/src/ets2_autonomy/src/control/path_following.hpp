@@ -72,10 +72,52 @@ struct LanePath {
         const auto& a=*(last-1);const auto& b=*last;const auto t=(s-a.s)/(b.s-a.s);
         return {a.x+t*(b.x-a.x),a.y+t*(b.y-a.y),s};
     }
-    // Tangent heading (unwrapped): segment headings at segment midpoints,
-    // interpolated linearly, so an arc's polyline yields its exact tangent and
-    // the 1.5 m vertex staircase does not ripple the curvature.
-    double heading(double s) const {
+    // The lane at s from a local least-squares quadratic through the points within
+    // fit_half_m (tricube weights in arc length, so points enter and leave the fit
+    // smoothly). The map lanes are float32 points 1.5 m apart (2-4 mm steps 30 km from
+    // the origin): single segments turn by +-3 mrad, and steering on them shook the
+    // truck at 3 Hz (2026-10-21). A quadratic follows arcs and clothoids without bias.
+    // Past either end the lane continues straight along the end tangent.
+    double fit_half_m=8;
+    struct Local {double x,y,heading,curvature;};
+    Local local(double s) const {
+        const auto end=points.back().s,c=std::clamp(s,0.0,end);
+        const auto& origin=at(c);
+        double m[5]{},px[3]{},py[3]{};
+        const auto first=std::lower_bound(points.begin(),points.end(),c-fit_half_m,[](const Point& p,double v){return p.s<v;});
+        for(auto i=first;i!=points.end() && i->s<=c+fit_half_m;++i) {
+            const auto t=i->s-c,u=std::abs(t)/fit_half_m,w=std::pow(1-u*u*u,3);
+            double tk=w;
+            for(int k=0;k<5;++k) {m[k]+=tk;if(k<3) {px[k]+=tk*(i->x-origin.x);py[k]+=tk*(i->y-origin.y);}tk*=t;}
+        }
+        // Normal equations [m0 m1 m2; m1 m2 m3; m2 m3 m4] q = p, by Cramer's rule.
+        const auto det3=[](double a,double b,double c,double d,double e,double f,double g,double h,double k) {return a*(e*k-f*h)-b*(d*k-f*g)+c*(d*h-e*g);};
+        const auto det=det3(m[0],m[1],m[2],m[1],m[2],m[3],m[2],m[3],m[4]);
+        Local out{origin.x,origin.y,segment_heading(c),0};
+        if(std::abs(det)>1e-9*std::pow(m[2],3)) {
+            const auto solve=[&](const double* r) {
+                return std::array{det3(r[0],m[1],m[2],r[1],m[2],m[3],r[2],m[3],m[4])/det,det3(m[0],r[0],m[2],m[1],r[1],m[3],m[2],r[2],m[4])/det,
+                                  det3(m[0],m[1],r[0],m[1],m[2],r[1],m[2],m[3],r[2])/det};
+            };
+            const auto qx=solve(px),qy=solve(py);
+            const auto speed=std::hypot(qx[1],qy[1]);
+            if(speed>0) {
+                out={origin.x+qx[0],origin.y+qy[0],out.heading+std::remainder(std::atan2(qy[1],qx[1])-out.heading,2*std::numbers::pi),
+                     2*(qx[1]*qy[2]-qy[1]*qx[2])/(speed*speed*speed)};
+            }
+        }
+        if(s!=c) {out.x+=(s-c)*std::cos(out.heading);out.y+=(s-c)*std::sin(out.heading);out.curvature=0;}
+        return out;
+    }
+    // Tangent heading (unwrapped), smoothed as local().
+    double heading(double s) const {return local(s).heading;}
+    // Signed lateral offset (left positive) of (x, y) from the smoothed lane at s, its projection.
+    double offset(double x,double y,double s) const {
+        const auto l=local(s);
+        return -(x-l.x)*std::sin(l.heading)+(y-l.y)*std::cos(l.heading);
+    }
+    // Segment headings at segment midpoints, interpolated linearly (no smoothing).
+    double segment_heading(double s) const {
         const auto mid=[&](size_t i){return (points[i].s+points[i+1].s)/2;};
         const auto n=headings.size();
         if(s<=mid(0)) return headings.front();
@@ -86,7 +128,7 @@ struct LanePath {
         const auto t=(s-mid(i))/(mid(i+1)-mid(i));
         return headings[i]+t*(headings[i+1]-headings[i]);
     }
-    // Mean curvature over [s-w/2, s+w/2]; zero once past the end.
+    // Mean curvature over [s-w/2, s+w/2] of the smoothed heading; zero once past the end.
     double curvature(double s,double w) const {return (heading(s+w/2)-heading(s-w/2))/w;}
     double remaining() const {return points.back().s-progress;}
     // Pure pursuit curvature toward the lane point lookahead past progress.
@@ -102,7 +144,7 @@ struct LanePath {
         return {pursuit(x,y,yaw,lookahead),remaining(),p.d};
     }
     // Appends points after the end. Existing points, their s and headings, progress and
-    // the tracking window are unchanged; lookups up to the old last segment midpoint
+    // the tracking window are unchanged; lookups up to fit_half_m before the old end
     // give the same values, only the extrapolation beyond it is replaced. A vehicle whose
     // lookahead and curvature window stay short of the old end sees no change. Returns the count added.
     size_t extend(const std::vector<std::array<double,2>>& xy) {

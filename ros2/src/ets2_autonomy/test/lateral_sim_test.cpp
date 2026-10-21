@@ -10,10 +10,13 @@
 #include "control/kinematic_axles.hpp"
 #include "control/lcc_mpc.hpp"
 #include "control/hud_path.hpp"
+#include "control/lane_merge.hpp"
+#include "control/curve_speed.hpp"
 #include <gtest/gtest.h>
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -51,8 +54,12 @@ struct PathBuilder {
 };
 
 struct Plant {double rate_scale=1,centering_scale=1,max=.94;}; // scales of the measured a(v), c(v)
-struct Scenario {std::string name;Points points;double speed,offset=0,duration=0,settle_s=0;Plant plant{};};
+// delay_frames: game frames from the controller tick to the frame the command acts in (1: the
+// next frame); measure_age_frames: frames the applied steering the controller reads is old.
+struct Scenario {std::string name;Points points;double speed,offset=0,duration=0,settle_s=0;Plant plant{};int delay_frames=1,measure_age_frames=0;double lane_fit_half_m=8;};
 struct Metrics {double max_offset=0,settled_offset=0,rms=0,overshoot=0,max_applied=0;int reversals=0;double input_variation=0;
+                double yaw_rate_jitter=0; // settled RMS of yaw rate minus its 1 s moving average, rad/s
+                double max_lateral_acceleration=0; // |yaw rate| * speed, m/s^2
                 int extensions=0;std::vector<double> offsets;}; // offsets: lane offset per controller tick
 
 // A controller maps (lane, pose, speed, applied steering) to the relative input u.
@@ -82,12 +89,21 @@ Controller current(VirtualEps::Settings eps_settings={},LateralController::Setti
 
 // The generated MPC as drive_speed wires it: lane errors and curvature preview from the
 // LanePath, measured wheel angle from the applied steering, VirtualEps for the input. No
-// trailer: the plant here is the measured truck-alone steering.
-Controller lateral_mpc() {
-    return [mpc=std::make_shared<LccMpc>(),eps=VirtualEps{}](LanePath& lane,double x,double y,double yaw,double v,double applied) mutable {
+// trailer: the plant here is the measured truck-alone steering. soft_engage: the node's
+// LaneMerge from the first pose (its errors and curvature against the merge reference).
+Controller lateral_mpc(bool soft_engage=false) {
+    return [mpc=std::make_shared<LccMpc>(),eps=VirtualEps{},soft_engage,merge=std::optional<LaneMerge>{},first=true]
+           (LanePath& lane,double x,double y,double yaw,double v,double applied) mutable {
         const auto goal=LateralController::update(lane,x,y,yaw,v,wheelbase,{});
-        LccMpc::Input in;in.enable=true;in.speed_mps=v;in.lateral_error_m=goal.offset;in.heading_error_rad=goal.heading_error;
-        for(int i=0;i<LccMpc::preview_points;++i) in.curvature_preview[i]=lane.curvature(goal.s+i*LccMpc::preview_step_m,6);
+        if(first && soft_engage) merge=LaneMerge::start(goal.s,goal.offset,goal.heading_error,v);
+        first=false;
+        if(merge && merge->done(goal.s)) merge.reset();
+        const auto ref=merge?merge->at(goal.s):LaneMerge::Reference{0,0,0};
+        LccMpc::Input in;in.enable=true;in.speed_mps=v;in.lateral_error_m=goal.offset-ref.offset;in.heading_error_rad=goal.heading_error-ref.heading;
+        for(int i=0;i<LccMpc::preview_points;++i) {
+            const auto s=goal.s+i*LccMpc::preview_step_m;
+            in.curvature_preview[i]=lane.curvature(s,6)+(merge?merge->at(s).curvature:0);
+        }
         in.wheel_angle_rad=angle_per_unit*applied;in.wheelbase_m=wheelbase;
         const auto& out=mpc->update(in);
         EXPECT_NE(out.status,LccMpc::BadInput);
@@ -103,10 +119,12 @@ Metrics simulate(const Scenario& scenario,Controller controller,bool rolling=fal
         return xy;
     };
     LanePath lane=rolling?LanePath(window(-1,1000),3.5):truth;
+    lane.fit_half_m=scenario.lane_fit_half_m;
     const auto heading=lane.heading(0);const auto start=lane.at(0);
     double x=start.x-std::sin(heading)*scenario.offset,y=start.y+std::cos(heading)*scenario.offset,yaw=heading;
     double applied=std::clamp(std::atan(wheelbase*lane.curvature(0,5))/angle_per_unit,-1.0,1.0);
-    double latched=0,active=0,command=0,next_control=.003; // controller phase vs game frames
+    double command=0,next_control=.003; // controller phase vs game frames
+    std::vector<double> pipeline(std::max(1,scenario.delay_frames),0.0),history(scenario.measure_age_frames+1,applied),yaw_rates;
     Metrics m;double sum2=0,last_u=0,extreme=applied;int direction=0,samples=0;
     const auto [rate,centering]=measured_plant(scenario.speed);
     const auto frames=int(scenario.duration/game_dt);
@@ -115,7 +133,7 @@ Metrics simulate(const Scenario& scenario,Controller controller,bool rolling=fal
         // Controller ticks in (t_{n-1}, t_n] see the state after frame n-1.
         for(;next_control<=t;next_control+=control_dt) {
             if(rolling && lane.remaining()<600 && lane.extend(window(lane.points.back().s,lane.progress+1000))>0) ++m.extensions;
-            command=controller(lane,x,y,yaw,scenario.speed,applied);
+            command=controller(lane,x,y,yaw,scenario.speed,history.front());
             m.input_variation+=std::abs(command-last_u);last_u=command;
             const auto p=truth.track(x,y);
             m.offsets.push_back(p.offset);
@@ -123,13 +141,16 @@ Metrics simulate(const Scenario& scenario,Controller controller,bool rolling=fal
             if(next_control>=scenario.settle_s) {m.settled_offset=std::max(m.settled_offset,std::abs(p.offset));sum2+=p.offset*p.offset;++samples;}
             if(scenario.offset>0) m.overshoot=std::max(m.overshoot,-p.offset);
         }
-        // The command latched at the previous frame boundary acts over this frame.
-        active=latched;latched=command;
+        // The command latched delay_frames frame boundaries ago acts over this frame.
+        const auto active=pipeline.front();pipeline.erase(pipeline.begin());pipeline.push_back(command);
         applied=std::clamp(applied+game_dt*(scenario.plant.rate_scale*rate*active-scenario.plant.centering_scale*centering*applied),-scenario.plant.max,scenario.plant.max);
+        history.erase(history.begin());history.push_back(applied);
         const auto angle=angle_per_unit*applied;
         // Midpoint heading: explicit Euler would bias heading against travel direction.
         const auto turn=scenario.speed*std::tan(angle)/wheelbase*game_dt;
         x+=scenario.speed*std::cos(yaw+turn/2)*game_dt;y+=scenario.speed*std::sin(yaw+turn/2)*game_dt;yaw+=turn;
+        if(t>=scenario.settle_s) yaw_rates.push_back(turn/game_dt);
+        m.max_lateral_acceleration=std::max(m.max_lateral_acceleration,std::abs(turn/game_dt*scenario.speed));
         m.max_applied=std::max(m.max_applied,std::abs(applied));
         // Steering direction reversals larger than 0.002 units (hysteresis).
         if(direction>=0 && applied<extreme-.002) {if(direction>0) ++m.reversals;direction=-1;extreme=applied;}
@@ -138,12 +159,18 @@ Metrics simulate(const Scenario& scenario,Controller controller,bool rolling=fal
         else if(direction<0) extreme=std::min(extreme,applied);
     }
     m.rms=samples?std::sqrt(sum2/samples):0;m.input_variation/=scenario.duration;
+    double jitter2=0;int count=0;
+    for(size_t i=30;i+30<yaw_rates.size();++i) {
+        double mean=0;for(size_t j=i-30;j<i+30;++j) mean+=yaw_rates[j];
+        jitter2+=std::pow(yaw_rates[i]-mean/60,2);++count;
+    }
+    m.yaw_rate_jitter=count?std::sqrt(jitter2/count):0;
     return m;
 }
 
 void print(const char* who,const Scenario& s,const Metrics& m) {
-    std::printf("| %-34s | %-4s | %.3f | %.3f | %.4f | %.3f | %3d | %.3f | %.3f |\n",
-                s.name.c_str(),who,m.max_offset,m.settled_offset,m.rms,m.overshoot,m.reversals,m.input_variation,m.max_applied);
+    std::printf("| %-34s | %-4s | %.3f | %.3f | %.4f | %.3f | %3d | %.3f | %.3f | %.4f |\n",
+                s.name.c_str(),who,m.max_offset,m.settled_offset,m.rms,m.overshoot,m.reversals,m.input_variation,m.max_applied,m.yaw_rate_jitter);
 }
 std::pair<Metrics,Metrics> compare(const Scenario& s,Controller controller=current()) {
     const auto old=simulate(s,baseline()),now=simulate(s,controller);
@@ -322,6 +349,74 @@ TEST(LateralSim,RecordedLane) {
         const Scenario s{"recorded lane "+speed_name(speed),points,speed,0,(lane.points.back().s-30)/speed,0};
         const auto [old,now]=compare(s);
         EXPECT_LT(now.max_offset,.03);EXPECT_LE(now.reversals,3);
+    }
+}
+
+// Map lanes are float32 points (2-4 mm steps 30 km from the origin). With the game's
+// steering delay (command to effect 2-3 frames, the applied value one frame old, measured
+// 2026-10-21) the MPC on raw segment headings shook the truck at 3 Hz (game: yaw rate
+// jitter 0.021 rad/s, 1016 reversals in 150 s here); on the smoothed lane it does not.
+Points float32_far(Points points) {
+    for(auto& [x,y]:points) {x=double(float(x-30915.24));y=double(float(y-28469.24));}
+    return points;
+}
+TEST(LateralSim,Float32MapLane) {
+    const auto lane=float32_far(PathBuilder{}.add(150,0).add(600,1/400.0).add(500,-1/300.0).add(900,0).add(700,1/700.0).add(400,0).points);
+    for(const double speed:{60/3.6,87/3.6}) {
+        Scenario s{"float32 lane, game delay "+speed_name(speed),lane,speed,0,std::min(140.0,3000/speed),10};
+        s.delay_frames=3;s.measure_age_frames=1;
+        const auto smoothed=simulate(s,lateral_mpc());print("new",s,smoothed);
+        s.name="  same, unsmoothed lane";s.lane_fit_half_m=.5; // fewer than 3 points: segment headings
+        const auto raw=simulate(s,lateral_mpc());print("raw",s,raw);
+        EXPECT_LT(smoothed.yaw_rate_jitter,.006);EXPECT_LT(smoothed.settled_offset,.05);
+        EXPECT_GT(raw.yaw_rate_jitter,2*smoothed.yaw_rate_jitter);
+    }
+}
+
+// Engaging 1 m off the centre at 80 km/h: the merge reference keeps the lateral acceleration
+// near its 0.5 m/s^2 design instead of the MPC's own correction.
+TEST(LateralSim,SoftEngagement) {
+    const auto speed=80/3.6;
+    for(const auto [offset,name]:{std::pair{1.0,"1 m"},std::pair{2.0,"2 m (after a lane change)"}}) {
+        Scenario s{std::string("engage ")+name+" off, 80 km/h",PathBuilder{}.add(speed*30+200,0).points,speed,offset,30,25};
+        const auto hard=simulate(s,lateral_mpc()),soft=simulate(s,lateral_mpc(true));
+        print("mpc",s,hard);print("soft",s,soft);
+        std::printf("  peak lateral acceleration %.2f -> %.2f m/s^2\n",hard.max_lateral_acceleration,soft.max_lateral_acceleration);
+        EXPECT_LT(soft.max_lateral_acceleration,.8);EXPECT_LT(soft.max_lateral_acceleration,hard.max_lateral_acceleration);
+        EXPECT_LT(soft.overshoot,.05);EXPECT_LT(soft.settled_offset,.02);
+    }
+}
+
+TEST(LaneMerge,ReferenceShape) {
+    const auto merge=LaneMerge::start(100,2.0,.03,25);
+    const auto a=merge.at(100);EXPECT_NEAR(a.offset,2.0,1e-12);EXPECT_NEAR(a.heading,.03,1e-12);
+    const auto b=merge.at(100+merge.length);EXPECT_EQ(b.offset,0);EXPECT_EQ(b.heading,0);
+    // Peak lateral acceleration of the reference at most 0.5 m/s^2.
+    double peak=0;for(double s=100;s<100+merge.length;s+=.5) peak=std::max(peak,std::abs(merge.at(s).curvature)*25*25);
+    EXPECT_LE(peak,.5+1e-3);EXPECT_GT(peak,.3);
+    EXPECT_GE(LaneMerge::start(0,0,0,25).length,50.0); // at least 2 s of driving
+}
+
+TEST(CurveSpeed,PlansTheDecelerationAhead) {
+    // R130 from 300 m ahead: sqrt(a*R + 2*d*distance) = sqrt(2*130 + 2*0.45*300) = 23.0 m/s.
+    LanePath lane(PathBuilder{}.add(300,0).add(300,1/130.0).points,3.5);
+    EXPECT_NEAR(curve_speed(lane,0,2,.45),std::sqrt(2*130+2*.45*295),.3);   // 10 m window: the curve shows 5 m early
+    EXPECT_NEAR(curve_speed(lane,400,2,.45),std::sqrt(2*130.0),.2);         // in the curve
+    LanePath straight(PathBuilder{}.add(800,0).points,3.5);
+    EXPECT_TRUE(std::isinf(curve_speed(straight,0,2,.45)));
+}
+
+// Exploration on a lane rebuilt from a game drive (map_lane_provider over the recorded poses):
+// ETS2_REPLAY_LANE=<lane json> [ETS2_LANE_FIT=<fit half width m>]. Skipped otherwise.
+TEST(LateralSim,GameReplayExploration) {
+    const auto* file=std::getenv("ETS2_REPLAY_LANE");
+    if(!file) GTEST_SKIP()<<"ETS2_REPLAY_LANE not set";
+    LanePath lane(file);Points points;for(const auto& p:lane.points) points.push_back({p.x,p.y});
+    for(const auto [delay,age]:{std::pair{1,0},std::pair{3,1}}) for(const double speed:{60/3.6,87/3.6}) {
+        Scenario s{"replay d"+std::to_string(delay)+"a"+std::to_string(age)+" "+speed_name(speed),points,speed,0,std::min(150.0,(lane.points.back().s-80)/speed),10};
+        s.delay_frames=delay;s.measure_age_frames=age;
+        if(const auto* fit=std::getenv("ETS2_LANE_FIT")) s.lane_fit_half_m=std::atof(fit);
+        compare(s,lateral_mpc());
     }
 }
 

@@ -21,6 +21,13 @@ cbuffer Path : register(b1) {
     float4 path_points[256];   // x, z relative to the mask origin; z: arc length from the start
 };
 struct Vertex { float4 position : SV_Position; };
+// Dual-source output (blend: target = add + target * multiply). The mark is paint on the lit,
+// tone-mapped scene: it tints what is below, so it takes the scene's light, shade and
+// night instead of a flat colour laid over the image (that read as glowing, 2026-10-21),
+// and a small emissive floor keeps it readable on an unlit road.
+struct Paint { float4 add : SV_Target0; float4 multiply : SV_Target1; };
+static const float paint_gain = 2.2;     // tint of a full-strength mark on mid grey
+static const float paint_floor = 0.06;   // emissive share of the colour
 // A 4-vertex strip over `bounds`: the command list stays fixed while the
 // rectangle (the scissor of the design) changes every frame.
 Vertex vs_main(uint id : SV_VertexID) {
@@ -28,7 +35,7 @@ Vertex vs_main(uint id : SV_VertexID) {
     v.position = float4((id & 1) ? bounds.z : bounds.x, (id & 2) ? bounds.y : bounds.w, 0, 1);
     return v;
 }
-float4 ps_main(Vertex input) : SV_Target {
+Paint ps_main(Vertex input) {
     float2 pixel = input.position.xy;
     float d = scene_depth.Load(int3(pixel * depth.zw, 0));
     float2 uv = pixel * target.zw;
@@ -56,12 +63,15 @@ float4 ps_main(Vertex input) : SV_Target {
     float horizontal = length(p.xz);
     if (camera.w != 0 && abs(p.y + camera.y) > road.x + horizontal * road.y) discard; // off the road height
     float coverage = 1 - smoothstep(path_info.y - edge, path_info.y + edge, best);
-    // A dark rim (12 cm, at most 40 % of the half width) keeps the ribbon readable as an
-    // overlay on bright or wet road instead of a glowing paint.
+    // A darker rim (12 cm, at most 40 % of the half width) outlines the mark on bright road.
     float rim = min(0.12, 0.4 * path_info.y);
     float inner = 1 - smoothstep(path_info.y - rim - edge, path_info.y - rim + edge, best);
     float fade = 1 - smoothstep(path_info.z, path_info.w, arc);
-    float alpha = color.a * coverage * fade;
+    float alpha = color.a * coverage * fade;   // strength of the paint
     if (alpha <= 0) discard;
-    return float4(lerp(color.rgb * 0.2, color.rgb, inner), alpha);
+    float3 tint = lerp(color.rgb * 0.35, color.rgb, inner);
+    Paint paint;
+    paint.add = float4(alpha * paint_floor * tint, 0);
+    paint.multiply = float4(1 - alpha + alpha * paint_gain * tint, 1);
+    return paint;
 }
