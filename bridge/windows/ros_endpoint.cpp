@@ -40,6 +40,7 @@ struct RosEndpoint::Impl {
     rclcpp::TimerBase::SharedPtr demand_timer;
     std::atomic<std::shared_ptr<const Demand>> demand{std::make_shared<const Demand>()};
     std::atomic<bool> capture{true};
+    std::atomic<bool> camera_enabled{true},lidar_enabled{true};
     std::chrono::nanoseconds max_age{};
     // Newest validated command; older ones are superseded, like the old TCP slot.
     std::mutex drive_mutex;std::condition_variable drive_ready;
@@ -177,9 +178,21 @@ RosEndpoint::RosEndpoint(int argc,char** argv,Control control,MarksSink overlay)
             }
             deliver(marks);
         });
+    // Rendered sensors the launcher allows (settable while running): a subscriber to a disabled
+    // camera or LiDAR topic does not start rendering. State sensors are not affected.
+    m.node->declare_parameter("camera_enabled",true);
+    m.node->declare_parameter("lidar_enabled",true);
     m.demand_timer=m.node->create_wall_timer(200ms,[&m] {
+        const bool camera=m.node->get_parameter("camera_enabled").as_bool(),lidar=m.node->get_parameter("lidar_enabled").as_bool();
+        m.camera_enabled=camera;m.lidar_enabled=lidar;
+        const auto allowed=[&](const std::string& name) {
+            if(name.starts_with("/ets2/lidar/")) return lidar;
+            const bool rendered=name.starts_with("/ets2/camera/") || name.starts_with("/ets2/frame_info") ||
+                (name.starts_with("/ets2/ground_truth/C_") && (name.ends_with("/objects") || name.ends_with("/markers")));
+            return camera || !rendered;
+        };
         auto demand=std::make_shared<Demand>();
-        for(const auto& [name,entry]:m.publishers) if(entry->publisher->get_subscription_count()>0) demand->insert(name);
+        for(const auto& [name,entry]:m.publishers) if(entry->publisher->get_subscription_count()>0 && allowed(name)) demand->insert(name);
         m.demand.store(std::move(demand));
         m.overlay=m.node->get_parameter("overlay_enabled").as_bool() || m.overlay_paths->get_publisher_count()>0 || m.overlay_marks->get_publisher_count()>0;
     });
@@ -257,6 +270,7 @@ json RosEndpoint::publish_stats() {
 std::shared_ptr<const Demand> RosEndpoint::demand() const {return impl_->demand.load();}
 bool RosEndpoint::capture_wanted() const {return impl_->capture.load();}
 bool RosEndpoint::overlay_wanted() const {return impl_->overlay.load();}
+json RosEndpoint::sensors_enabled() const {return {{"camera",impl_->camera_enabled.load()},{"lidar",impl_->lidar_enabled.load()}};}
 json RosEndpoint::diagnostics() {
     return {{"command_age",impl_->command_age.snapshot()},{"forwarded_commands",impl_->forwarded.load()},
         {"stale_commands",impl_->stale.load()},{"rejected_commands",impl_->rejected.load()},

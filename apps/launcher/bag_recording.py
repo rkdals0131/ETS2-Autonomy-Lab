@@ -44,7 +44,7 @@ class BagRecording:
         self.stop_at = None
         self.status = {"phase": "idle"}
 
-    def start(self, profile):
+    def start(self, profile, sensors=None):
         if self.process is not None:
             return  # A repeated start never creates a second recorder.
         if profile not in ("state", "sensors"):
@@ -52,7 +52,7 @@ class BagRecording:
         settings = json.loads(self.config.read_text(encoding="utf-8"))
         selected = settings.get("sensor_recording_root" if profile == "sensors" else "recording_root")
         if profile == "sensors" and not selected:
-            raise ValueError("영상·라이다 기록은 설정의 sensor_recording_root에 저장 폴더를 지정해 주세요.")
+            raise ValueError("센서 포함 기록은 설정의 sensor_recording_root에 저장 폴더를 지정해 주세요.")
         if selected:
             root = Path(selected).expanduser().resolve()
             if not root.is_dir():
@@ -65,12 +65,15 @@ class BagRecording:
         if free < 1024**3:
             raise OSError("기록 저장 공간이 1 GiB 미만입니다: " + str(root))
         topics = list(STATE_TOPICS)
-        if profile == "sensors":
+        # The sensors enabled at the start (all without a choice, as before).
+        sensors = sensors or {"camera": True, "lidar": True}
+        if profile == "sensors" and sensors.get("camera"):
             topics += ["/ets2/frame_info", "/ets2/frame_info/exposure"]
             for camera in ("C_FN", "C_FW", "C_RL", "C_RR"):
                 topics += [f"/ets2/camera/{camera}/preview/image/compressed",
                            f"/ets2/camera/{camera}/preview/camera_info",
                            f"/ets2/ground_truth/{camera}/objects"]
+        if profile == "sensors" and sensors.get("lidar"):
             topics += [f"/ets2/lidar/{name}/points" for name in ("L_F", "L_PL", "L_PR")]
         self.directory = root / (datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8])
         self.directory.mkdir()

@@ -23,6 +23,8 @@ public:
     bool capture_wanted() const;
     // A /ets2/hud/markers (road/*) or /ets2/overlay/path publisher exists, or overlay_enabled is set.
     bool overlay_wanted() const;
+    // camera_enabled / lidar_enabled as the demand last applied them.
+    json sensors_enabled() const;
     // Sender-stamp age of forwarded commands (p50/p95/p99/max ms) and drops.
     json diagnostics();
     // Count and newest records of publishes that took 50 ms or more.

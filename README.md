@@ -36,7 +36,7 @@ ETS2의 FH4에 독립 카메라 4개와 깊이 기반 라이다 3개를 배치�
 
 평상시에는 필요한 인지용 축소 RGB와 JPEG·표시용 라이다를 구독합니다. JPEG 기본 주기는 10 Hz이며 인지용 영상은 카메라 주기를 따릅니다. Foxglove의 기존 점군 패널은 `/ets2/lidar/{name}/preview/points`를 선택해야 표시용 점군을 사용합니다. 원본 RGB·depth는 구독할 때 pack·readback·전송하며, 라이다용 깊이는 GPU에서 사용합니다.
 
-상태 센서 계산·렌더 수집·ROS 직렬화·통신 수명을 분리했습니다. 영상 수집을 꺼도 IMU·휠·GNSS가 유지되고, TCP 재연결에도 오도메트리·가상 GNSS 기준점이 이어집니다. 런처의 **입력·상태만**으로 현재 SDK 바퀴 기준의 상태·입력을 실행할 수 있습니다. 센서 기본 프리셋은 FH4이며 다른 차량에는 해당 외형의 보정이 필요합니다. [런처 GT 자동 주행](bridge/README.md#gt-도로-자동-주행), [현재 구조](docs/03_system_design.md), [진행 이력](docs/legacy/13_game_operating_table.md).
+상태 센서 계산·렌더 수집·ROS 직렬화·통신 수명을 분리했습니다. 영상 수집을 꺼도 IMU·휠·GNSS가 유지되고, TCP 재연결에도 오도메트리·가상 GNSS 기준점이 이어집니다. 런처는 주행 보조와 센서를 함께 띄우고 카메라·라이다 렌더링만 체크로 켭니다. rig 보정이 없는 트럭에서는 센서 없이 SDK 바퀴 기준의 상태·입력으로 돕니다. 보정된 프리셋은 Volvo FH4와 Scania S 2016이며 다른 차량에는 해당 외형의 보정이 필요합니다. [런처 GT 자동 주행](bridge/README.md#gt-도로-자동-주행), [현재 구조](docs/03_system_design.md), [진행 이력](docs/legacy/13_game_operating_table.md).
 
 ## 소스와 실행 위치
 

@@ -139,7 +139,7 @@ core 0.28.0은 카메라와 독립된 `/ets2/ground_truth/traffic`을 SDK frame_
 `drive_speed`는 GT 속도로 throttle/brake를 계산하고 SDK applied steering으로 정규화 조향 위치를 추적합니다. `steering_target`은 **왼쪽 양수 [-1,1]인 applied steering 목표**이며 실제 바퀴 각도(rad)나 토크가 아닙니다. 현재 상대 입력 프로필에서는 PI feedback으로 하위 조향 입력을 계산하므로 사람의 Xbox 설정과 게임의 복귀·차량 물리를 유지합니다. 지도 경로 모드는 ACC·LCC를 연결하며 `acc_enabled`·`lcc_enabled`를 독립 bool 파라미터로 바꿀 수 있습니다.
 
 1. 게임에서 엔진·D 기어·주차브레이크를 주행 가능한 상태로 설정합니다.
-2. 릴레이를 입력·상태만으로 띄웁니다(`pixi run relay bridge/config/bridge.local.json --input-only`, 또는 런처 **주행 보조** 모드 — 이때는 크루즈 대기 노드도 함께 뜹니다). 센서 수집 없이 상태·입력만 연결하며 설정 파일의 slots를 편집할 필요가 없습니다.
+2. 릴레이를 띄웁니다(런처 **시작** — 크루즈 대기 노드도 함께 뜹니다, 또는 `pixi run relay bridge/config/bridge.local.json --input-only`로 센서 없이 상태·입력만). rig 보정과 다른 트럭이면 릴레이가 센서 없이 상태·입력만 연결하므로 설정 파일의 slots를 편집할 필요가 없습니다.
 3. 저장소 루트의 `pixi shell`에서 명시적으로 노드를 실행하고 게임 창으로 돌아갑니다.
 
 ```powershell
@@ -226,7 +226,7 @@ pixi run ros2 run foxglove_bridge foxglove_bridge --ros-args --params-file bridg
 pixi run relay bridge/config/bridge.local.json            # 또는 apps\launch.cmd --host-only
 ```
 
-릴레이는 Ctrl+C로 정상 종료하고 lease를 해제합니다. `/ets2/capture` SetBool 서비스로 렌더 수집을 중지·재개합니다. 상태 센서·SDK·clock은 유지됩니다. 서비스 응답은 요청 접수이고 `/diagnostics`의 `capture_active`가 적용 상태입니다. F11 이후에는 릴레이를 다시 시작합니다.
+릴레이는 Ctrl+C로 정상 종료하고 lease를 해제합니다. `/ets2/capture` SetBool 서비스로 렌더 수집을 중지·재개합니다. 파라미터 `camera_enabled`·`lidar_enabled`(기본 true, 실행 중 변경 가능)를 끄면 카메라(`/ets2/camera/*`, `/ets2/frame_info*`, 카메라 GT 객체·마커)나 라이다(`/ets2/lidar/*`) 토픽의 구독이 렌더 요구가 되지 않습니다. 런처는 둘을 끈 채 시작해 체크로 켭니다. 현재 트럭이 rig 보정과 다르면 릴레이는 끝나지 않고 센서 없이 계속 돌며 1 Hz 줄의 `sensors`(`available`, `reason`, `enabled`)에 알립니다. 상태 센서·SDK·clock은 유지됩니다. 서비스 응답은 요청 접수이고 `/diagnostics`의 `capture_active`가 적용 상태입니다. F11 이후에는 릴레이를 다시 시작합니다.
 
 ### 처리 단계별 성능 진단
 

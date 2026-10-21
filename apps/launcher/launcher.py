@@ -162,16 +162,18 @@ class Controller:
         self.lock = threading.Lock()
         self.logs = deque(maxlen=80)
         self.state = {"phase": "stopped", "message": "중지됨", "game": "확인 중", "relay": {}, "foxglove": False,
-                      "mode": None, "assist": "off", "assist_note": "", "log_dir": "",
+                      "sensors": {"camera": False, "lidar": False}, "assist": "off", "assist_note": "", "log_dir": "",
                       "recording": {"phase": "idle"}, "recording_error": ""}
-        self.relay = self.foxglove = self.drive = self.follow = self.lcc_change = self.job = self.hud = None
+        self.relay = self.foxglove = self.drive = self.follow = self.sensor_change = self.job = self.hud = None
         self.relay_stop = self.drive_stop_event = None
         self.relay_restart = False  # the game session changed: start a new relay once the game is ready
         self.recording = self.session_log = None
         self.readers = []
-        self.desired = self.assist = self.assist_started = False
-        self.lcc = self.lcc_applied = True
-        self.lcc_confirmed = False
+        self.desired = self.assist_started = False
+        # Rendered sensors the relay may run (its camera_enabled / lidar_enabled), and the last
+        # try to set them: the relay's 1 Hz line reports what it applies.
+        self.sensors = {"camera": False, "lidar": False}
+        self.sensor_tries, self.sensor_try_at = 0, 0.0
         self.last_relay = 0.0
         self.layout = None
         self.last_layout = self.last_listen = 0.0
@@ -216,8 +218,9 @@ class Controller:
         self.readers.append(reader)
         return process
 
-    def _start(self, mode="assist", lcc=True):
-        """assist: input and state only, then the cruise-button standby; sensors: the configured rig."""
+    def _start(self, camera=False, lidar=False):
+        """The relay with the configured rig (cameras and LiDAR render only when enabled and
+        subscribed), then the cruise-button standby."""
         if self.desired or self.relay:
             return
         if not shutil.which("ros2"):
@@ -232,12 +235,11 @@ class Controller:
         if foxglove_listening():
             raise RuntimeError(f"127.0.0.1:{FOXGLOVE_PORT}을 이미 다른 프로세스가 쓰고 있습니다. 기존 Foxglove 서버를 먼저 종료해 주세요.")
         self.desired = True
-        self.assist, self.assist_started = mode == "assist", False
-        self.lcc = self.lcc_applied = bool(lcc)
+        self.assist_started = False
+        self.sensors, self.sensor_tries = {"camera": bool(camera), "lidar": bool(lidar)}, 0
         self.started = time.monotonic()
         self.session_log = SessionLog()
-        self.update(mode="assist" if self.assist else "sensors", lcc=self.lcc, assist="off", assist_note="",
-                    log_dir=str(self.session_log.directory))
+        self.update(sensors=dict(self.sensors), assist="off", assist_note="", log_dir=str(self.session_log.directory))
         placement = settings.get("cpu_layout", True)
         plan = None
         if placement:
@@ -267,9 +269,9 @@ class Controller:
         if self.relay_stop:
             self.relay_stop.close()
         self.relay_stop = StopEvent("relay")
-        command = [str(RELAY), str(self.config), self.relay_stop.name]
-        if self.assist:
-            command.append("--input-only")
+        command = [str(RELAY), str(self.config), self.relay_stop.name, "--ros-args",
+                   "-p", f"camera_enabled:={str(self.sensors['camera']).lower()}",
+                   "-p", f"lidar_enabled:={str(self.sensors['lidar']).lower()}"]
         self.relay = self.spawn(command, "relay")
         self.last_relay = time.monotonic()
         self.relay_restart = False
@@ -305,30 +307,31 @@ class Controller:
         game = Path(LoaderClient(timeout=2).status()["module_path"]).parents[4]
         self.follow = self.spawn([str(dotnet), str(provider), "--game", str(game), "--follow", "--out", str(output), "--distance-m", "1000"], "follow")
         self.drive_stop_event = StopEvent("drive")
-        self.lcc_applied = self.lcc
         self.drive = self.spawn(["ros2", "run", "ets2_autonomy", "drive_speed", "--stop-event", self.drive_stop_event.name,
                                  "--ros-args", "-p", "arm:=true", "-p", "engage:=cruise", "-p", "path_file:=" + str(output),
-                                 "-p", "acc_enabled:=true", "-p", "lcc_enabled:=" + str(self.lcc).lower()], "drive")
+                                 "-p", "acc_enabled:=true", "-p", "lcc_enabled:=true"], "drive")
         # HUD marks from the assistance state, apart from the control loop (ends with the job).
         self.hud = self.spawn(["ros2", "run", "ets2_autonomy", "hud", "--ros-args", "-p", "path_file:=" + str(output)], "hud")
         self.update(assist="standby")
 
-    def _apply_lcc(self):
-        """LCC is a runtime parameter of the standby (ACC stays on: the cruise button needs it).
-        One change at a time; the latest choice follows when the previous call ends."""
-        if not self.drive or self.drive.poll() is not None or self.lcc == self.lcc_applied:
+    def _apply_sensors(self, now):
+        """Camera and LiDAR are runtime parameters of the relay. One `ros2 param set` at a time,
+        until the relay's 1 Hz line reports the choice (three tries per choice)."""
+        reported = (self.snapshot()["relay"].get("sensors") or {}).get("enabled")
+        if (not self.relay or self.relay_restart or self.sensor_change or reported is None
+                or now - self.last_relay > 2 or now - self.sensor_try_at < 3):
             return
-        if self.lcc_change:
+        name = next((name for name in ("camera", "lidar") if reported.get(name) != self.sensors[name]), None)
+        if not name:
+            self.sensor_tries = 0
             return
-        self.lcc_applied, self.lcc_confirmed = self.lcc, False
-        self.lcc_change = self.spawn(["ros2", "param", "set", "/ets2_drive_speed", "lcc_enabled", str(self.lcc).lower()], "lcc")
-
-    def _lcc_result(self):
-        """Without "Set parameter successful" the node keeps its previous choice; the window follows."""
-        if self.lcc_change.wait() or not self.lcc_confirmed:
-            self.lcc = self.lcc_applied = not self.lcc_applied
-            self.update(lcc=self.lcc, assist_note="LCC 변경 실패, 이전 선택을 유지합니다. lcc.log를 확인해 주세요.")
-        self.lcc_change = None
+        if self.sensor_tries >= 3:
+            return
+        self.sensor_tries, self.sensor_try_at = self.sensor_tries + 1, now
+        self.sensor_change = self.spawn(["ros2", "param", "set", "/ets2_relay", name + "_enabled",
+                                         str(self.sensors[name]).lower()], "param")
+        if self.sensor_tries == 3:
+            self.log("param: 릴레이가 센서 설정을 반영하지 않습니다. param.log와 relay.log를 확인해 주세요.")
 
     def _record(self, action, profile="state"):
         if action == "record_start":
@@ -337,7 +340,7 @@ class Controller:
                 return
             self.update(recording_error="")
             try:
-                self.recording.start(profile)
+                self.recording.start(profile, self.sensors)
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 self.update(recording_error=str(error))
         elif self.recording:
@@ -371,7 +374,7 @@ class Controller:
         finally:
             if self.job:
                 self.job.close()  # Foxglove, provider and anything left in the job end here.
-            for process in (self.relay, self.foxglove, self.follow, self.lcc_change, self.hud):
+            for process in (self.relay, self.foxglove, self.follow, self.sensor_change, self.hud):
                 if process:
                     try:
                         process.wait(timeout=3)
@@ -379,7 +382,7 @@ class Controller:
                         errors.append(f"PID {process.pid} 종료 확인 실패")
             if self.relay_stop:
                 self.relay_stop.close()
-            self.relay = self.foxglove = self.follow = self.lcc_change = self.job = self.relay_stop = self.hud = None
+            self.relay = self.foxglove = self.follow = self.sensor_change = self.job = self.relay_stop = self.hud = None
         for reader in self.readers:
             reader.join(timeout=2)  # The last lines of each child reach its log file.
         self.readers = []
@@ -396,12 +399,12 @@ class Controller:
         while not self.lines.empty():
             source, pid, line = self.lines.get()
             process = {"relay": self.relay, "foxglove": self.foxglove, "follow": self.follow,
-                       "drive": self.drive, "lcc": self.lcc_change, "hud": self.hud}.get(source)
+                       "drive": self.drive, "param": self.sensor_change, "hud": self.hud}.get(source)
             if not process or process.pid != pid:
                 continue
             if line is None:
-                if source == "lcc":
-                    self._lcc_result()
+                if source == "param":
+                    self.sensor_change = None
                 continue
             if source == "relay":
                 try:
@@ -417,8 +420,6 @@ class Controller:
                 continue
             if source == "drive":
                 self.update(assist_note="drive: " + line)
-            if source == "lcc" and line.startswith("Set parameter successful"):
-                self.lcc_confirmed = True
             self.log(source + ": " + line, persist=False)
         if self.hud and self.hud.poll() is not None:
             self.log(f"hud: HUD 노드 종료 (code={self.hud.returncode}), 게임 화면 표시가 멈춥니다. hud.log를 확인해 주세요.")
@@ -432,7 +433,7 @@ class Controller:
             self._release_drive()
             self._stop_follow()
             self.update(assist=f"exited:{code}")
-        self._apply_lcc()
+        self._apply_sensors(now)
         if self.recording:
             self.update(recording=self.recording.poll())
         if not self.desired:
@@ -457,7 +458,7 @@ class Controller:
                 self.relay, self.relay_restart = None, True
                 return
             message = ("실행이 종료됐습니다. 시작을 누르면 새 세션을 엽니다." if code == 0 else
-                       "현재 차량과 센서 보정이 다릅니다. 설정의 rig를 차량에 맞추거나 주행 보조 모드로 시작해 주세요." if code == 2 else
+                       "현재 차량과 센서 보정이 다릅니다. 설정의 rig를 확인해 주세요." if code == 2 else
                        "릴레이 종료: F11·게임 연결·relay.log를 확인해 주세요. 자동 재시작은 하지 않습니다.")
             self.log(f"relay: 종료 (code={code}) {message}")
             self._stop("stopped" if code == 0 else "error", message)
@@ -473,10 +474,9 @@ class Controller:
         foxglove = self.listening
         relay = self.snapshot()["relay"]
         if now - self.last_relay < 3 and relay:
-            label = "게임 일시정지" if relay.get("paused") else (
-                "센서 구독 대기" if not self.assist and relay.get("demand_topics", 0) <= 2 and relay.get("sent_bundles", 0) == 0 else "연결됨")
+            label = "게임 일시정지" if relay.get("paused") else "연결됨"
             self.update(phase="running", foxglove=foxglove, message=label)
-            if self.assist and not self.assist_started:
+            if not self.assist_started:
                 self.assist_started = True  # Once per start: an exited standby is not respawned.
                 self._drive_cruise()
         else:
@@ -495,10 +495,11 @@ class Controller:
                     if action == "stop":
                         self._stop()
                     elif action == "start":
-                        self._start(values.get("mode", "assist"), values.get("lcc", True))
-                    elif action == "lcc":
-                        self.lcc = bool(values.get("enabled", True))
-                        self.update(lcc=self.lcc)
+                        self._start(values.get("camera", False), values.get("lidar", False))
+                    elif action == "sensors":
+                        self.sensors = {"camera": bool(values.get("camera")), "lidar": bool(values.get("lidar"))}
+                        self.sensor_tries = 0
+                        self.update(sensors=dict(self.sensors))
                     elif action in ("record_start", "record_stop"):
                         self._record(action, values.get("profile", "state"))
                 except queue.Empty:
@@ -582,33 +583,33 @@ def show_window(controller):
         ttk.Separator(frame).grid(row=row, column=0, columnspan=3, sticky="ew", pady=8)
         row += 1
 
-    # Mode and the one start/stop button.
-    mode = tk.StringVar(value="assist")
-    lcc = tk.BooleanVar(value=True)
-    key("모드")
-    modes = ttk.Frame(frame)
-    modes.grid(row=row, column=1, sticky="w")
-    radios = [ttk.Radiobutton(modes, text=text, value=name, variable=mode)
-              for text, name in (("주행 보조", "assist"), ("센서 수집", "sensors"))]
-    for radio in radios:
-        radio.pack(side="left", padx=(0, 16))
+    # The one start/stop button, and the rendered sensors: the only choice that costs (GPU
+    # renders and readback); state, input and the assistance always run.
+    camera, lidar = tk.BooleanVar(value=False), tk.BooleanVar(value=False)
+    key("센서")
+    sensor_frame = ttk.Frame(frame)
+    sensor_frame.grid(row=row, column=1, sticky="w")
+    def sensors_changed():
+        controller.request("sensors", camera=camera.get(), lidar=lidar.get())
+    sensor_checks = [ttk.Checkbutton(sensor_frame, text=text, variable=variable, command=sensors_changed)
+                     for text, variable in (("카메라", camera), ("라이다", lidar))]
+    for check in sensor_checks:
+        check.pack(side="left", padx=(0, 16))
     def toggle():
         if controller.snapshot()["phase"] in ("stopped", "error"):
-            controller.request("start", mode=mode.get(), lcc=lcc.get())
+            controller.request("start", camera=camera.get(), lidar=lidar.get())
         else:
             controller.request("stop")
     start = ttk.Button(frame, text="시작", style="Primary.TButton", command=toggle)
     start.grid(row=row, column=2, rowspan=2, sticky="ne")
     row += 1
-    lcc_check = ttk.Checkbutton(frame, text="LCC(차로 유지)도 함께 · 실행 중 바꾸면 바로 적용", variable=lcc,
-                                command=lambda: controller.request("lcc", enabled=lcc.get()))
-    lcc_check.grid(row=row, column=1, sticky="w", pady=(2, 0))
+    sensor_note = value(style="Note.TLabel", wraplength=520, justify="left")
     row += 1
-    mode_note = value(style="Note.TLabel", wraplength=520, justify="left")
+    assist_note = ("시작하면 크루즈 버튼 대기까지 켭니다. 게임에서 LB+RT로 ACC·LCC를 켜고 다시 누르면 끕니다. "
+                   "브레이크나 3초 넘는 조향은 둘 다 끄고, 짧은 조향에는 LCC가 비켜 줍니다. 방향지시등으로 차로를 바꿉니다.")
+    ttk.Label(frame, text=assist_note, style="Note.TLabel", wraplength=520, justify="left").grid(
+        row=row, column=1, sticky="w", pady=2)
     row += 1
-    notes = {"assist": "시작하면 크루즈 버튼 대기까지 켭니다. 게임에서 LB+RT로 켜고 다시 누르면 끕니다. "
-                       "브레이크나 3초 넘는 조향은 둘 다 끄고, 짧은 조향에는 LCC가 비켜 줍니다. 방향지시등으로 차로를 바꿉니다.",
-             "sensors": "설정 파일의 rig·주기로 카메라·라이다를 수집합니다. 주행 보조는 켜지지 않습니다."}
     rule()
 
     # Live status.
@@ -627,7 +628,7 @@ def show_window(controller):
     record_actions.grid(row=row, column=1, columnspan=2, sticky="w")
     record_state = ttk.Button(record_actions, text="차량 상태 기록",
                               command=lambda: controller.request("record_start", profile="state"))
-    record_sensors = ttk.Button(record_actions, text="영상·라이다 포함 기록",
+    record_sensors = ttk.Button(record_actions, text="센서 포함 기록",
                                 command=lambda: controller.request("record_start", profile="sensors"))
     record_stop = ttk.Button(record_actions, text="기록 종료", command=lambda: controller.request("record_stop"))
     for button in (record_state, record_sensors, record_stop):
@@ -681,7 +682,7 @@ def show_window(controller):
     closing = False
     last_logs = None
     shown = {}
-    settings_seen = last_lcc = None
+    settings_seen = None
     def put(widget, **options):
         """Reconfigure only on change: config calls re-lay out wrapped labels (35% of a core at 4 Hz)."""
         if shown.get(str(widget)) != options:
@@ -693,7 +694,7 @@ def show_window(controller):
         controller.request("close")
     window.protocol("WM_DELETE_WINDOW", close)
     def refresh():
-        nonlocal last_logs, settings_seen, last_lcc
+        nonlocal last_logs, settings_seen
         if controller.closed.is_set():
             window.destroy()
             return
@@ -704,33 +705,37 @@ def show_window(controller):
         state = controller.snapshot()
         phase = state["phase"]
         idle = phase in ("stopped", "error")
-        if not idle and state.get("mode") and mode.get() != state["mode"]:
-            mode.set(state["mode"])
-        session = mode.get()
-        if state.get("lcc") != last_lcc:  # A refused LCC change puts the box back.
-            last_lcc = state.get("lcc")
-            if last_lcc is not None and lcc.get() != last_lcc:
-                lcc.set(last_lcc)
-        put(start, text="시작" if idle else "중지", state="disabled" if closing or phase == "stopping" else "normal")
-        for radio in radios:
-            put(radio, state="normal" if idle and not closing else "disabled")
-        put(lcc_check, state="normal" if session == "assist" and not closing else "disabled")
-        put(mode_note, text=notes[session or "assist"])
         relay = state["relay"]
+        live = phase == "running" and time.monotonic() - controller.last_relay < 3
+        sensors = relay.get("sensors") or {}
+        missing = live and sensors.get("available") is False
+        put(start, text="시작" if idle else "중지", state="disabled" if closing or phase == "stopping" else "normal")
+        for check in sensor_checks:
+            put(check, state="disabled" if closing or missing else "normal")
+        wanted, applied = state["sensors"], sensors.get("enabled")
+        if missing:
+            truck = sensors.get("reason", "").split("current ")[-1].split(";")[0]
+            text = f"이 트럭({truck})에는 센서 보정이 없어 카메라·라이다를 쓸 수 없습니다. 설정의 rig를 확인해 주세요."
+        elif live and applied is not None and applied != wanted:
+            text = "릴레이에 반영하는 중입니다."
+        elif wanted["camera"] or wanted["lidar"]:
+            text = ("Foxglove 패널이나 센서 포함 기록이 구독할 때만 게임에서 렌더링합니다." +
+                    (" 라이다는 미러 뷰의 depth로 만들어 카메라를 꺼도 그 뷰는 렌더링합니다." if wanted["lidar"] and not wanted["camera"] else ""))
+        else:
+            text = "꺼 두면 구독이 있어도 렌더링하지 않습니다. 실행 중에 바꾸면 바로 적용됩니다."
+        put(sensor_note, text=text)
         put(rows["게임"], text=state["game"])
         bridge = state["message"]
-        if phase == "running" and session == "assist":
+        if phase == "running":
             commands = relay.get("drive_commands") or {}
-            bridge += f" · 입력·상태만 · 명령 {commands.get('forwarded_commands', 0):,}개 전달, 지연 폐기 {commands.get('stale_commands', 0)}"
-        elif phase == "running":
-            bridge += (f" · 수집 {'활성' if relay.get('capture_active') else '대기'} · {relay.get('sent_bundles', 0):,} 묶음"
-                       f" · 큐 누락 {relay.get('queue_dropped', 0)} · 50 ms 넘은 발행 {(relay.get('slow_publishes') or {}).get('count', 0)}")
+            bridge += f" · 명령 {commands.get('forwarded_commands', 0):,}개 전달, 지연 폐기 {commands.get('stale_commands', 0)}"
+            if relay.get("capture_active") or relay.get("sent_bundles"):
+                bridge += (f"\n센서 수집 {'활성' if relay.get('capture_active') else '대기'} · {relay.get('sent_bundles', 0):,} 묶음"
+                           f" · 큐 누락 {relay.get('queue_dropped', 0)} · 50 ms 넘은 발행 {(relay.get('slow_publishes') or {}).get('count', 0)}")
         put(rows["브리지"], text=bridge, style="Error.TLabel" if phase == "error" else "TLabel")
         assist = state["assist"]
         mask, reason = observed_drive(relay, time.monotonic() - controller.last_relay)
-        if session != "assist":
-            text = "센서 수집 모드에서는 켜지 않습니다."
-        elif assist == "standby":
+        if assist == "standby":
             text = (f"ACC {'켜짐' if mask & 2 else '꺼짐'} · LCC {'켜짐' if mask & 1 else '꺼짐'}" if mask else
                     "크루즈 버튼 대기 중 · 게임에서 LB+RT" + (f" · 마지막 해제 {reason}" if reason else ""))
         elif assist.startswith("exited"):
@@ -738,8 +743,8 @@ def show_window(controller):
         else:
             text = "브리지가 연결되면 크루즈 버튼 대기를 켭니다." if not idle else "꺼짐"
         put(rows["주행 보조"], text=text, style="Error.TLabel" if assist.startswith("exited") else
-            "Strong.TLabel" if session == "assist" and assist == "standby" else "TLabel")
-        note = state["assist_note"] if session == "assist" else ""
+            "Strong.TLabel" if assist == "standby" else "TLabel")
+        note = state["assist_note"]
         put(rows[""], text=note)
         for label in note_labels:  # No empty line under the assist state.
             if bool(note) != bool(label.winfo_manager()):
@@ -751,13 +756,13 @@ def show_window(controller):
         writing = record_phase in ("starting", "recording", "stopping")
         can_start = phase == "running" and not writing and not closing
         put(record_state, state="normal" if can_start else "disabled")
-        put(record_sensors, state="normal" if can_start and session == "sensors" else "disabled")
+        put(record_sensors, state="normal" if can_start and not missing and (wanted["camera"] or wanted["lidar"]) else "disabled")
         put(record_stop, state="normal" if writing and record_phase != "stopping" and not closing else "disabled")
         labels = {"idle": "기록 안 함", "starting": "기록 준비", "recording": "기록 중", "stopping": "파일 마무리 중",
                   "saved": "저장 완료", "error": "기록 오류"}
         record_label = labels.get(record_phase, record_phase)
         if recording.get("path"):
-            record_label += {"state": " · 차량 상태", "sensors": " · 영상·라이다 포함"}.get(recording.get("profile"), "")
+            record_label += {"state": " · 차량 상태", "sensors": " · 센서 포함"}.get(recording.get("profile"), "")
             record_label += f" · {recording.get('bytes', 0) / 1024**2:.1f} MiB"
             if record_phase in ("saved", "error"):
                 record_label += f" · {recording.get('message_count', 0):,}개 메시지"

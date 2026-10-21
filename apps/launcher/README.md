@@ -4,22 +4,22 @@
 
 ## 화면
 
-모드 하나를 고르고 **시작**을 누릅니다. 같은 버튼이 실행 중에는 **중지**입니다.
+**시작**을 누릅니다. 같은 버튼이 실행 중에는 **중지**입니다. 릴레이는 설정의 rig로 뜨고, 주행 보조와 센서는 함께 쓸 수 있습니다(2026-10-21 전에는 주행 보조와 센서 수집이 서로 배제되는 모드였습니다).
 
-- **주행 보조:** 릴레이를 입력·상태만(`--input-only`)으로 띄우고, 연결되면 크루즈 버튼 대기를 자동으로 켭니다. provider `--follow`(`bridge/recordings/gt-path/follow-lane.json`)와 `drive_speed engage:=cruise`를 함께 띄워 두고, 게임 크루즈(LB+RT)를 켜면 그 속도로 ACC(트럭이 차로 위면 LCC도)를 잡고 다시 누르면 끕니다. 브레이크나 3 s 넘게 이어진 조향은 ACC와 LCC를 함께 끄고(LB+RT로 다시 켬), 짧은 조향에는 LCC가 비켜 주며, 방향지시등을 켜면 옆 차로가 빌 때 차로를 바꿉니다([브리지 문서](../../bridge/README.md#게임-크루즈-버튼으로-켜기-engagecruise)). 대기는 축을 잡지 않으므로 켜 두어도 직접 운전에 영향이 없습니다. 대기 노드가 끝나면 다시 띄우지 않으며, 중지 후 시작으로 새로 엽니다.
-- **센서 수집:** 설정 파일의 rig·슬롯·주기로 카메라·라이다를 수집합니다. 주행 보조는 켜지 않습니다. 현재 차량과 rig 보정이 다르면 릴레이가 이유를 표시하고 끝납니다.
+- **주행 보조(늘 켜짐):** 연결되면 크루즈 버튼 대기를 자동으로 켭니다. provider `--follow`(`bridge/recordings/gt-path/follow-lane.json`)와 `drive_speed engage:=cruise`를 함께 띄워 두고, 게임 크루즈(LB+RT)를 켜면 그 속도로 ACC와 LCC(트럭이 지도 차로 위일 때)를 잡고 다시 누르면 끕니다. 브레이크나 3 s 넘게 이어진 조향은 ACC와 LCC를 함께 끄고(LB+RT로 다시 켬), 짧은 조향에는 LCC가 비켜 주며, 방향지시등을 켜면 옆 차로가 빌 때 차로를 바꿉니다([브리지 문서](../../bridge/README.md#게임-크루즈-버튼으로-켜기-engagecruise)). 대기는 축을 잡지 않으므로 켜 두어도 직접 운전에 영향이 없습니다. 대기 노드가 끝나면 다시 띄우지 않으며, 중지 후 시작으로 새로 엽니다.
+- **센서(카메라·라이다 체크, 기본 꺼짐):** 비용이 드는 선택은 게임 안 렌더링과 readback뿐이라 이것만 고릅니다. 켜 둔 센서는 Foxglove 패널이나 센서 포함 기록이 구독할 때만 렌더링하고, 꺼 둔 센서는 구독이 있어도 렌더링하지 않습니다. 실행 중에 바꾸면 `ros2 param set /ets2_relay camera_enabled|lidar_enabled`로 적용하고, 릴레이 1 Hz 줄의 `sensors.enabled`가 같아질 때까지 세 번까지 다시 보냅니다. 라이다는 미러 뷰의 depth로 만들므로 카메라를 꺼도 그 뷰는 렌더링합니다. 현재 트럭이 rig 보정과 다르면 릴레이는 센서 없이 계속 돌고(`sensors.available` false), 체크를 막고 이유를 보여 줍니다.
 
-**LCC(차로 유지)도 함께**는 주행 보조에서만 씁니다. 끄면 ACC만 잡고 조향은 운전자에게 남깁니다. 실행 중에 바꾸면 `ros2 param set /ets2_drive_speed lcc_enabled`로 바로 적용하고, 노드가 받지 않으면 체크를 되돌립니다. ACC는 크루즈 버튼이 쓰므로 늘 켜져 있습니다.
+ACC·LCC 선택 체크는 없앴습니다. 시험용으로 LCC만 끄려면 `ros2 param set /ets2_drive_speed lcc_enabled false`를 씁니다.
 
-상태 줄은 게임 SDK 연결, 브리지 단계(주행 보조: 운전 명령 전달·지연 폐기 수, 센서 수집: 수집 여부·발행 묶음·큐 누락·50 ms 넘은 발행 수), 게임이 보고한 실제 ACC/LCC 켜짐(`drive.axes` 1=LCC, 2=ACC)과 `drive_speed`의 마지막 알림, Foxglove 서버(`ws://127.0.0.1:8765`)를 보여 줍니다.
+상태 줄은 게임 SDK 연결, 브리지 단계(운전 명령 전달·지연 폐기 수, 센서를 수집한 적이 있으면 수집 여부·발행 묶음·큐 누락·50 ms 넘은 발행 수), 게임이 보고한 실제 ACC/LCC 켜짐(`drive.axes` 1=LCC, 2=ACC)과 `drive_speed`의 마지막 알림, Foxglove 서버(`ws://127.0.0.1:8765`)를 보여 줍니다.
 
-**기록**은 **차량 상태 기록**과 **영상·라이다 포함 기록**(센서 수집 모드에서만) 중 하나로 시작하고 **기록 종료**로 마무리합니다. bag 경로와 실행 로그 폴더는 각각 **복사**로 클립보드에 넣습니다.
+**기록**은 **차량 상태 기록**과 **센서 포함 기록**(카메라나 라이다를 켰을 때, 시작할 때 켜진 센서의 토픽만) 중 하나로 시작하고 **기록 종료**로 마무리합니다. bag 경로와 실행 로그 폴더는 각각 **복사**로 클립보드에 넣습니다.
 
 실행 시간·카메라·라이다·미리보기 주기·CPU 배치·게임 미러 렌더는 `bridge/config/bridge.local.json`에서만 바꿉니다(**설정 파일 열기**). 창은 다음 시작에 읽을 값을 요약해 보여 주고, 파일을 저장하면 바로 갱신합니다.
 
 ## 실행 로그
 
-시작할 때마다 `bridge/recordings/logs/<YYYYMMDD-HHMMSS>/`를 만들고 자식 출력을 `<source>.log`(`relay`, `foxglove`, `follow`, `drive`, `lcc`)에 줄마다 시각(ms)을 붙여 남깁니다. `drive.log`에는 `drive_speed`의 1 Hz 상태 줄이 모두 남고, `relay.log`의 1 Hz 상태 JSON은 5초에 한 줄만 남깁니다. 런처 자체의 알림과 오류는 `launcher.log`에 남습니다. 창의 로그 칸은 사건만 보여 주며 1 Hz 상태 줄과 provider 진행 줄은 파일에만 있습니다. 기록기 출력은 bag 폴더의 `recorder.log`에 따로 남습니다.
+시작할 때마다 `bridge/recordings/logs/<YYYYMMDD-HHMMSS>/`를 만들고 자식 출력을 `<source>.log`(`relay`, `foxglove`, `follow`, `drive`, `hud`, `param`)에 줄마다 시각(ms)을 붙여 남깁니다. `drive.log`에는 `drive_speed`의 1 Hz 상태 줄이 모두 남고, `relay.log`의 1 Hz 상태 JSON은 5초에 한 줄만 남깁니다. 런처 자체의 알림과 오류는 `launcher.log`에 남습니다. 창의 로그 칸은 사건만 보여 주며 1 Hz 상태 줄과 provider 진행 줄은 파일에만 있습니다. 기록기 출력은 bag 폴더의 `recorder.log`에 따로 남습니다.
 
 ## 종료
 

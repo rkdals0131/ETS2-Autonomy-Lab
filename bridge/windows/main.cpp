@@ -50,7 +50,17 @@ int main(int argc,char** argv) {
         if(!selected.empty()) (void)rig.at("truck_id").get<std::string>();
         const auto core_version=require_core_version();
         const auto truck=command({{"cmd","truck_config"}});
-        const auto vehicle=resolve_vehicle(rig,truck,selected);
+        // A truck the rig was not calibrated for runs without rendered sensors (state, input and
+        // the HUD stay); the 1 Hz line says why.
+        std::string sensors_missing=input_only?"input-only":"";
+        const auto vehicle=[&] {
+            try {return resolve_vehicle(rig,truck,selected);}
+            catch(const SensorMountMismatch& e) {
+                std::cerr<<e.what()<<"; continuing without cameras and LiDAR"<<std::endl;
+                sensors_missing=e.what();
+                return resolve_vehicle(rig,truck,json::array());
+            }
+        }();
         rig=vehicle.rig;
         rig["ego_full_model"]=true;
         const auto base=rig.at("base_origin").get<std::array<double,3>>();
@@ -186,7 +196,8 @@ int main(int argc,char** argv) {
                 }
                 std::cout<<json{{"elapsed_ms",ticks()-start},{"sent_bundles",sent.load()},{"bytes",bytes_sent.load()},
                 {"session",session},{"capture_active",capture_active.load()},{"demand_topics",requested->size()},{"paused",paused},{"drive",drive},
-                {"diagnostic_sensor_stage",sensor_stage},{"consumed_bundles",consumed.load()},
+                {"diagnostic_sensor_stage",sensor_stage},
+                {"sensors",{{"available",sensors_missing.empty()},{"reason",sensors_missing},{"enabled",ros.sensors_enabled()}}},{"consumed_bundles",consumed.load()},
                 {"overlay",{{"active",capture.overlay_active()},{"writer",overlay_writer.status()},
                     {"last_reason",[&]{std::lock_guard lock(overlay_mutex);return overlay_reason;}()}}},
                 {"encoded_bundles",encoded.load()},{"encoded_bytes",encoded_bytes.load()},
