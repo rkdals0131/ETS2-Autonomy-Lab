@@ -5,12 +5,12 @@
       "samples": 3289,
       "max_abs_diff_closedloop_vs_normal": [
         8.6736173798840355E-17,
-        3.2088914858618978E-14,
+        3.3879149485827043E-14,
         0
       ],
       "max_abs_diff_normal_vs_sil": [
         0,
-        4.1179212817432642E-13,
+        3.4662550607578169E-13,
         0
       ],
       "outputs": [
@@ -18,10 +18,18 @@
         "wheel_rate_cmd_rad_s",
         "status"
       ],
+      "max_abs_diff_normal_vs_sil_prediction": [
+        5.7245787971060835E-13,
+        4.8149635320515749E-14
+      ],
+      "prediction_outputs": [
+        "predicted_offset_m",
+        "predicted_heading_rad"
+      ],
       "step_time_us": {
         "section": "step [0.02 0]",
-        "mean_us": 3693.8613560352692,
-        "max_us": 7355.3,
+        "mean_us": 4746.3535421100642,
+        "max_us": 48701.3,
         "calls": 3289
       }
     },
@@ -30,12 +38,12 @@
       "samples": 3643,
       "max_abs_diff_closedloop_vs_normal": [
         2.2768245622195593E-16,
-        4.7285092508175808E-14,
+        4.3846870578789776E-14,
         0
       ],
       "max_abs_diff_normal_vs_sil": [
         0,
-        2.1423141038923177E-13,
+        1.5739839986927961E-13,
         0
       ],
       "outputs": [
@@ -43,10 +51,18 @@
         "wheel_rate_cmd_rad_s",
         "status"
       ],
+      "max_abs_diff_normal_vs_sil_prediction": [
+        1.6838544447672632E-12,
+        1.3905369911082488E-13
+      ],
+      "prediction_outputs": [
+        "predicted_offset_m",
+        "predicted_heading_rad"
+      ],
       "step_time_us": {
         "section": "step [0.02 0]",
-        "mean_us": 3815.7797968707114,
-        "max_us": 9720.5,
+        "mean_us": 6025.1211364260225,
+        "max_us": 158339.1,
         "calls": 3643
       }
     },
@@ -55,12 +71,12 @@
       "samples": 2266,
       "max_abs_diff_closedloop_vs_normal": [
         5.6545549686242126E-27,
-        9.7929218017685373E-23,
+        1.1236691243971688E-22,
         0
       ],
       "max_abs_diff_normal_vs_sil": [
         0,
-        1.7899570714519086E-13,
+        1.7993939671612225E-13,
         0
       ],
       "outputs": [
@@ -68,10 +84,18 @@
         "wheel_rate_cmd_rad_s",
         "status"
       ],
+      "max_abs_diff_normal_vs_sil_prediction": [
+        4.2917336351422364E-12,
+        4.5596859621355179E-13
+      ],
+      "prediction_outputs": [
+        "predicted_offset_m",
+        "predicted_heading_rad"
+      ],
       "step_time_us": {
         "section": "step [0.02 0]",
-        "mean_us": 3669.3785525154462,
-        "max_us": 6028.7,
+        "mean_us": 3979.7934686672556,
+        "max_us": 9422,
         "calls": 2266
       }
     },
@@ -80,12 +104,12 @@
       "samples": 2734,
       "max_abs_diff_closedloop_vs_normal": [
         1.1553258350005535E-15,
-        9.4507734971216451E-15,
+        1.0068335054569388E-14,
         0
       ],
       "max_abs_diff_normal_vs_sil": [
         0,
-        2.4807933485249123E-13,
+        2.2017804246488026E-13,
         0
       ],
       "outputs": [
@@ -93,10 +117,18 @@
         "wheel_rate_cmd_rad_s",
         "status"
       ],
+      "max_abs_diff_normal_vs_sil_prediction": [
+        6.31873026124552E-15,
+        4.6742124060195067E-15
+      ],
+      "prediction_outputs": [
+        "predicted_offset_m",
+        "predicted_heading_rad"
+      ],
       "step_time_us": {
         "section": "step [0.02 0]",
-        "mean_us": 3562.3747256766642,
-        "max_us": 14939.300000000001,
+        "mean_us": 4022.8027066569125,
+        "max_us": 24985.8,
         "calls": 2734
       }
     }

@@ -695,3 +695,70 @@ TEST(LateralSim,CorneringRackMismatch) {
         EXPECT_LT(m.peak,.1)<<r.name;EXPECT_LT(m.yaw_jitter,.006)<<r.name;
     }
 }
+
+// The MPC's plan (LccMpc::Output predicted_*): sample 0 is the measured state, the plan of a
+// 1 m offset engagement decays toward the lane and the truck then follows it; on a steady curve
+// it stays on the lane. Same measured truck plant as ModelPredictive with the game's 3 frames.
+TEST(LateralSim,ModelPredictivePlan) {
+    struct Tick {double offset,heading;LccMpc::Output out;};
+    const auto planning=[](std::shared_ptr<std::vector<Tick>> log) -> Controller {
+        return [mpc=std::make_shared<LccMpc>(),eps=VirtualEps{},log](LanePath& lane,double x,double y,double yaw,double v,double applied) mutable {
+            const auto goal=LateralController::update(lane,x,y,yaw,v,wheelbase,{});
+            LccMpc::Input in;in.enable=true;in.speed_mps=v;in.lateral_error_m=goal.offset;in.heading_error_rad=goal.heading_error;
+            for(int i=0;i<LccMpc::preview_points;++i) in.curvature_preview[i]=lane.curvature(goal.s+i*LccMpc::preview_step_m,6);
+            in.wheel_angle_rad=angle_per_unit*applied;in.wheelbase_m=wheelbase;
+            const auto& out=mpc->update(in);
+            log->push_back({in.lateral_error_m,in.heading_error_rad,out});
+            return eps.command(std::clamp(out.wheel_angle_rad/angle_per_unit,-1.0,1.0),out.wheel_rate_rad_s/angle_per_unit,applied,v,control_dt,{});
+        };
+    };
+    const auto speed=80/3.6;
+    constexpr int n=LccMpc::predicted_points,ticks_per_sample=5; // 0.1 s per sample, 20 ms ticks
+    {   // engaging 1 m left of the centre, no merge reference
+        auto log=std::make_shared<std::vector<Tick>>();
+        Scenario s{"plan: 1 m offset, 80 km/h",PathBuilder{}.add(speed*20+200,0).points,speed,1,20,10};s.delay_frames=3;
+        const auto m=simulate(s,planning(log));
+        ASSERT_GT(log->size(),size_t(n*ticks_per_sample));
+        const auto& first=log->front();
+        ASSERT_EQ(first.out.status,LccMpc::Mpc);
+        EXPECT_DOUBLE_EQ(first.out.predicted_dt_s,.1);
+        EXPECT_NEAR(first.out.predicted_offset_m[0],first.offset,1e-9);
+        EXPECT_NEAR(first.out.predicted_heading_rad[0],first.heading,1e-9);
+        std::printf("  plan at engagement (t s: offset m, heading mrad, then the truck's offset):");
+        for(int i=0;i<n;++i) std::printf(" %.1f: %.3f %.1f %.3f |",i*.1,first.out.predicted_offset_m[i],1000*first.out.predicted_heading_rad[i],m.offsets[size_t(i*ticks_per_sample)]);
+        std::printf("\n");
+        // the plan heads back to the lane (left of it: toward negative heading), steadily over the
+        // first 1.2 s, and ends near it; it holds the MPC's own small overshoot of a hard
+        // engagement (README: 76-78 mm without a merge reference)
+        EXPECT_LT(std::abs(first.out.predicted_offset_m[n-1]),.1);
+        for(int i=1;i<=12;++i) EXPECT_LE(first.out.predicted_offset_m[i],first.out.predicted_offset_m[i-1]+1e-6)<<i;
+        for(int i=0;i<n;++i) EXPECT_GT(first.out.predicted_offset_m[i],-.1)<<i;
+        EXPECT_LT(*std::min_element(first.out.predicted_heading_rad.begin(),first.out.predicted_heading_rad.end()),-.005);
+        // the truck follows the plan over its first second (receding horizon: replanned every tick)
+        for(int i=0;i<=10;++i) EXPECT_NEAR(m.offsets[size_t(i*ticks_per_sample)],first.out.predicted_offset_m[i],.05)<<i*.1<<" s";
+        // every plan starts at its own measured state
+        for(const auto& t:*log) if(t.out.status==LccMpc::Mpc) {EXPECT_NEAR(t.out.predicted_offset_m[0],t.offset,1e-9);EXPECT_NEAR(t.out.predicted_heading_rad[0],t.heading,1e-9);}
+    }
+    {   // steady R400: the plan stays on the lane
+        auto log=std::make_shared<std::vector<Tick>>();
+        auto s=arc(400,speed);s.delay_frames=3;s.duration=40;
+        simulate(s,planning(log));
+        double worst_offset=0,worst_heading=0;
+        for(size_t k=size_t(s.settle_s/control_dt);k<log->size();++k) {
+            const auto& t=(*log)[k];
+            ASSERT_EQ(t.out.status,LccMpc::Mpc);
+            for(int i=0;i<n;++i) {
+                worst_offset=std::max(worst_offset,std::abs(t.out.predicted_offset_m[i]));
+                worst_heading=std::max(worst_heading,std::abs(t.out.predicted_heading_rad[i]-t.heading));
+            }
+        }
+        std::printf("  steady R400 80 km/h: max |planned offset| %.4f m, max |planned - measured heading error| %.5f rad\n",worst_offset,worst_heading);
+        EXPECT_LT(worst_offset,.01);EXPECT_LT(worst_heading,.002);
+    }
+    {   // not steering: no plan
+        LccMpc mpc;LccMpc::Input in;in.enable=false;in.speed_mps=speed;in.lateral_error_m=1;in.wheelbase_m=wheelbase;
+        const auto& out=mpc.update(in);
+        EXPECT_EQ(out.status,LccMpc::Off);EXPECT_DOUBLE_EQ(out.predicted_dt_s,.1);
+        for(int i=0;i<n;++i) {EXPECT_EQ(out.predicted_offset_m[i],0);EXPECT_EQ(out.predicted_heading_rad[i],0);}
+    }
+}

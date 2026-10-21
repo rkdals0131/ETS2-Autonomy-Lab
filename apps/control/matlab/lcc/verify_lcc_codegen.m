@@ -5,9 +5,11 @@ function V = verify_lcc_codegen(opts)
 %   It then replays those inputs into LCC_Controller.slx as a top model twice: Normal mode and
 %   Software-in-the-loop (the ERT C++ code built by Embedded Coder, compiled with the host
 %   compiler in its default debug build, with execution-time profiling) and compares the three
-%   outputs:
+%   contract outputs:
 %     closed loop vs Normal replay  (the replay is faithful)
 %     Normal replay vs SIL          (the generated code matches the model)
+%   and the predicted trajectory (predicted_offset_m, predicted_heading_rad: max over the samples)
+%   Normal replay vs SIL.
 %   Results: results/codegen_verification.json.
 arguments
     opts.Cases (:,2) string = ["R400_80" "trailer"; "S300_80" "trailer"; "offset3m_60" "truck"; "R40_15" "trailer"]
@@ -44,12 +46,17 @@ for c = 1:size(opts.Cases, 1)
     set_param(model, "SimulationMode", "normal");
     r.name = s.name + "_" + config;
     r.samples = numel(t);
-    r.max_abs_diff_closedloop_vs_normal = max(abs(ycl - yN), [], 1);
-    r.max_abs_diff_normal_vs_sil = max(abs(yN - yS), [], 1);
+    r.max_abs_diff_closedloop_vs_normal = max(abs(ycl - yN(:, 1:3)), [], 1);
+    r.max_abs_diff_normal_vs_sil = max(abs(yN(:, 1:3) - yS(:, 1:3)), [], 1);
     r.outputs = outNames;
+    np = (size(yN, 2) - 3) / 2;
+    r.max_abs_diff_normal_vs_sil_prediction = [max(abs(yN(:, 4:3+np) - yS(:, 4:3+np)), [], "all"), ...
+        max(abs(yN(:, 4+np:end) - yS(:, 4+np:end)), [], "all")];
+    r.prediction_outputs = ["predicted_offset_m", "predicted_heading_rad"];
     r.step_time_us = prof;
-    fprintf("%-22s %d samples\n  closed loop vs Normal replay: %s\n  Normal replay vs SIL:         %s\n", r.name, numel(t), ...
-        mat2str(r.max_abs_diff_closedloop_vs_normal, 3), mat2str(r.max_abs_diff_normal_vs_sil, 3));
+    fprintf("%-22s %d samples\n  closed loop vs Normal replay: %s\n  Normal replay vs SIL:         %s\n  prediction Normal vs SIL:     %s\n", ...
+        r.name, numel(t), mat2str(r.max_abs_diff_closedloop_vs_normal, 3), mat2str(r.max_abs_diff_normal_vs_sil, 3), ...
+        mat2str(r.max_abs_diff_normal_vs_sil_prediction, 3));
     if isfield(prof, "mean_us")
         fprintf("  SIL step time (debug build): mean %.0f us, max %.0f us\n", prof.mean_us, prof.max_us);
     end
@@ -58,7 +65,8 @@ end
 close_system(model, 0);
 close_system("lcc_closed_loop", 0);
 V.tolerance = 1e-9;
-V.pass = all(arrayfun(@(r) all(r.max_abs_diff_normal_vs_sil <= V.tolerance), V.scenarios));
+V.pass = all(arrayfun(@(r) all(r.max_abs_diff_normal_vs_sil <= V.tolerance) && ...
+    all(r.max_abs_diff_normal_vs_sil_prediction <= V.tolerance), V.scenarios));
 fid = fopen(fullfile(here, "results", "codegen_verification.json"), "w");
 fwrite(fid, jsonencode(V, PrettyPrint=true)); fclose(fid);
 fprintf("SIL equivalence (|diff| <= %g): %d\n", V.tolerance, V.pass);
@@ -89,12 +97,15 @@ if profile
         "CodeExecutionProfileVariable", "executionProfile");
 end
 out = sim(in);
-y = zeros(numel(t), 3);
-for i = 1:3
+% columns: wheel_angle_cmd_rad, wheel_rate_cmd_rad_s, status, predicted_offset_m (n),
+% predicted_heading_rad (n)
+y = zeros(numel(t), 0);
+for i = 1:5
     ts = out.yout{i}.Values;
-    d = double(squeeze(ts.Data)); tt = ts.Time;
+    d = double(ts.Data); tt = ts.Time;
+    if ~(ismatrix(d) && size(d, 1) == numel(tt)), d = reshape(d, [], numel(tt)).'; end
     idx = discretize(t + 1e-9, [tt; inf]);
-    y(:, i) = d(idx);
+    y = [y d(idx, :)]; %#ok<AGROW>
 end
 if profile
     try

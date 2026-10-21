@@ -8,6 +8,10 @@ C.Ts = 0.02;                 % s, drive_speed node rate (50 Hz)
 % ---------------- MPC horizon ------------------------------------------------------------------
 C.p = 75;                    % prediction steps (1.5 s): 42 m at 100 km/h, inside the 60 m preview
 C.blocks = [2 3 5 5 10 10 15 25];   % move blocking: 8 free steering-rate moves over the horizon
+% predicted trajectory output (lcc_mpc_pred.m): ey, epsi of the optimal state sequence every
+% C.pred.every steps from the current state (t = 0) to the end of the horizon (t = p*Ts)
+C.pred.every = 5;            % steps between samples (0.1 s)
+C.pred.n = C.p / C.pred.every + 1;   % samples (16: t = 0, 0.1, ... 1.5 s)
 
 % ---------------- contract ------------------------------------------------------------------------
 C.n_preview = 61;            % curvature_preview points

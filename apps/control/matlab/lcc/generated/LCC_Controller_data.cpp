@@ -9,7 +9,7 @@
 //
 // Model version                  : 1.1
 // Simulink Coder version         : 26.2 (R2026b) 22-May-2026
-// C/C++ source code generated on : Wed Oct 21 17:53:43 2026
+// C/C++ source code generated on : Wed Oct 21 21:25:50 2026
 //
 // Target selection: ert.tlc
 // Embedded hardware selection: Intel->x86-64 (Windows64)
@@ -33,11 +33,11 @@ const ets2::LccController::ConstB_LCC_Controller_T LCC_Controller_ConstB{
     ,
     0.0
   }
-  ,                                    // '<S5>/Math Function'
+  ,                                    // '<S6>/Math Function'
   0.0
-  ,                                    // '<S5>/Math Function1'
+  ,                                    // '<S6>/Math Function1'
   0.0
-  ,                                    // '<S5>/Math Function2'
+  ,                                    // '<S6>/Math Function2'
 
   {
     0.0
@@ -52,11 +52,11 @@ const ets2::LccController::ConstB_LCC_Controller_T LCC_Controller_ConstB{
     ,
     0.0
   }
-  ,                                    // '<S5>/Reshape3'
+  ,                                    // '<S6>/Reshape3'
   0.0
-  ,                                    // '<S5>/Reshape4'
+  ,                                    // '<S6>/Reshape4'
   0.0
-  // '<S5>/Reshape5'
+  // '<S6>/Reshape5'
 };
 
 //

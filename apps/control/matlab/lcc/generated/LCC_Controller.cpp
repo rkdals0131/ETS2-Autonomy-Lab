@@ -9,7 +9,7 @@
 //
 // Model version                  : 1.1
 // Simulink Coder version         : 26.2 (R2026b) 22-May-2026
-// C/C++ source code generated on : Wed Oct 21 17:53:43 2026
+// C/C++ source code generated on : Wed Oct 21 21:25:50 2026
 //
 // Target selection: ert.tlc
 // Embedded hardware selection: Intel->x86-64 (Windows64)
@@ -24,7 +24,7 @@
 #include <cstring>
 #include "LCC_Controller_private.h"
 
-// Named constants for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+// Named constants for MATLAB Function: '<S34>/FixedHorizonOptimizer'
 const double LCC_Controller_RMDscale{ 100.0 };
 
 const double LCC_Controller_RMVscale{ 5.0 };
@@ -48,7 +48,7 @@ int32_t div_nde_s32_floor(int32_t numerator, int32_t denominator)
 namespace ets2
 {
   // Function for MATLAB Function: '<S1>/MPC_Prep'
-  double LccController::LCC_Controller_norm_a(const double x[25])
+  double LccController::LCC_Controller_norm_j(const double x[25])
   {
     double y;
     int32_t j;
@@ -1112,7 +1112,7 @@ namespace ets2
   }
 
   // Function for MATLAB Function: '<S1>/MPC_Prep'
-  double LccController::LCC_Controller_xnrm2_e(int32_t n, const double x[25],
+  double LccController::LCC_Controller_xnrm2_l(int32_t n, const double x[25],
     int32_t ix0)
   {
     double y;
@@ -1218,7 +1218,7 @@ namespace ets2
 
       ix0 = i * 5 + j;
       taui = 0.0;
-      xnorm = LCC_Controller_xnrm2_e(3 - i, A, ix0);
+      xnorm = LCC_Controller_xnrm2_l(3 - i, A, ix0);
       if (xnorm != 0.0) {
         xnorm = rt_hypotd_snf(A[alpha_tmp_tmp + 1], xnorm);
         if (temp2 >= 0.0) {
@@ -1238,7 +1238,7 @@ namespace ets2
             temp2 *= 9.9792015476736E+291;
           } while ((std::abs(xnorm) < 1.0020841800044864E-292) && (knt < 20));
 
-          xnorm = rt_hypotd_snf(temp2, LCC_Controller_xnrm2_e(3 - i, A, ix0));
+          xnorm = rt_hypotd_snf(temp2, LCC_Controller_xnrm2_l(3 - i, A, ix0));
           if (temp2 >= 0.0) {
             xnorm = -xnorm;
           }
@@ -1372,7 +1372,7 @@ namespace ets2
   }
 
   // Function for MATLAB Function: '<S1>/MPC_Prep'
-  void LccController::LCC_Controller_xzlascl_o(double cfrom, double cto, int32_t
+  void LccController::LCC_Controller_xzlascl_p(double cfrom, double cto, int32_t
     m, int32_t n, double A[4], int32_t iA0, int32_t lda)
   {
     double cfromc;
@@ -1457,7 +1457,7 @@ namespace ets2
   }
 
   // Function for MATLAB Function: '<S1>/MPC_Prep'
-  void LccController::LCC_Controller_rotateRight_j(int32_t m, int32_t n, double
+  void LccController::LCC_Controller_rotateRight_k(int32_t m, int32_t n, double
     z[25], int32_t iz0, int32_t ldz, const double cs[8], int32_t ic0, int32_t
     is0)
   {
@@ -1729,13 +1729,13 @@ namespace ets2
               iscale = 1;
               LCC_Controller_xzlascl(tst, 2.2346346549904327E+153, n_tmp, 1, d,
                 l + 1, 5);
-              LCC_Controller_xzlascl_o(tst, 2.2346346549904327E+153, n_tmp - 1,
+              LCC_Controller_xzlascl_p(tst, 2.2346346549904327E+153, n_tmp - 1,
                 1, e, l + 1, 5);
             } else if (tst < 3.02546243347603E-123) {
               iscale = 2;
               LCC_Controller_xzlascl(tst, 3.02546243347603E-123, n_tmp, 1, d, l
                 + 1, 5);
-              LCC_Controller_xzlascl_o(tst, 3.02546243347603E-123, n_tmp - 1, 1,
+              LCC_Controller_xzlascl_p(tst, 3.02546243347603E-123, n_tmp - 1, 1,
                 e, l + 1, 5);
             }
 
@@ -1854,7 +1854,7 @@ namespace ets2
                     &b_anorm, &work[m - 1], &p);
                   d[l] = b_anorm;
                   work[m + 3] = p;
-                  LCC_Controller_rotateRight_j(5, 2, z, (l - 1) * 5 + 1, 5, work,
+                  LCC_Controller_rotateRight_k(5, 2, z, (l - 1) * 5 + 1, 5, work,
                     m, m + 4);
                   e[l - 1] = 0.0;
                   l -= 2;
@@ -1894,7 +1894,7 @@ namespace ets2
                     work[n_tmp + 3] = b_s;
                   }
 
-                  LCC_Controller_rotateRight_j(5, (l - m) + 2, z, (m - 1) * 5 +
+                  LCC_Controller_rotateRight_k(5, (l - m) + 2, z, (m - 1) * 5 +
                     1, 5, work, m, m + 4);
                   d[l] -= p;
                   e[l - 1] = b_anorm;
@@ -1907,7 +1907,7 @@ namespace ets2
               m = lendsv - lsv;
               LCC_Controller_xzlascl(2.2346346549904327E+153, tst, m + 1, 1, d,
                 lsv, 5);
-              LCC_Controller_xzlascl_o(2.2346346549904327E+153, tst, m, 1, e,
+              LCC_Controller_xzlascl_p(2.2346346549904327E+153, tst, m, 1, e,
                 lsv, 5);
               break;
 
@@ -1915,7 +1915,7 @@ namespace ets2
               m = lendsv - lsv;
               LCC_Controller_xzlascl(3.02546243347603E-123, tst, m + 1, 1, d,
                 lsv, 5);
-              LCC_Controller_xzlascl_o(3.02546243347603E-123, tst, m, 1, e, lsv,
+              LCC_Controller_xzlascl_p(3.02546243347603E-123, tst, m, 1, e, lsv,
                 5);
               break;
             }
@@ -2396,8 +2396,8 @@ namespace ets2
             }
           }
 
-          d6 = rt_powd_snf(LCC_Controller_norm_a(A6), 0.16666666666666666);
-          eta1 = std::fmax(rt_powd_snf(LCC_Controller_norm_a(A4), 0.25), d6);
+          d6 = rt_powd_snf(LCC_Controller_norm_j(A6), 0.16666666666666666);
+          eta1 = std::fmax(rt_powd_snf(LCC_Controller_norm_j(A4), 0.25), d6);
           guard1 = false;
           guard2 = false;
           guard3 = false;
@@ -2408,8 +2408,8 @@ namespace ets2
             }
 
             LCC_Controller_mpower(A4_0, 7.0, tmp);
-            if (std::fmax(std::ceil(LCC_Controller_log2(LCC_Controller_norm_a
-                   (tmp) / LCC_Controller_norm_a(A) * 2.0 /
+            if (std::fmax(std::ceil(LCC_Controller_log2(LCC_Controller_norm_j
+                   (tmp) / LCC_Controller_norm_j(A) * 2.0 /
                    2.220446049250313E-16) / 6.0), 0.0) == 0.0) {
               b_s = 3;
             } else {
@@ -2426,8 +2426,8 @@ namespace ets2
               }
 
               LCC_Controller_mpower(A4_0, 11.0, tmp);
-              if (std::fmax(std::ceil(LCC_Controller_log2(LCC_Controller_norm_a
-                     (tmp) / LCC_Controller_norm_a(A) * 2.0 /
+              if (std::fmax(std::ceil(LCC_Controller_log2(LCC_Controller_norm_j
+                     (tmp) / LCC_Controller_norm_j(A) * 2.0 /
                      2.220446049250313E-16) / 10.0), 0.0) == 0.0) {
                 b_s = 5;
               } else {
@@ -2440,7 +2440,7 @@ namespace ets2
 
           if (guard3) {
             LCC_Controller_mpower(A4, 2.0, tmp);
-            eta1 = rt_powd_snf(LCC_Controller_norm_a(tmp), 0.125);
+            eta1 = rt_powd_snf(LCC_Controller_norm_j(tmp), 0.125);
             eta3 = std::fmax(d6, eta1);
             if (eta3 <= 0.9504178996162932) {
               for (e_j = 0; e_j < 25; e_j++) {
@@ -2448,8 +2448,8 @@ namespace ets2
               }
 
               LCC_Controller_mpower(A4_0, 15.0, tmp);
-              if (std::fmax(std::ceil(LCC_Controller_log2(LCC_Controller_norm_a
-                     (tmp) / LCC_Controller_norm_a(A) * 2.0 /
+              if (std::fmax(std::ceil(LCC_Controller_log2(LCC_Controller_norm_j
+                     (tmp) / LCC_Controller_norm_j(A) * 2.0 /
                      2.220446049250313E-16) / 14.0), 0.0) == 0.0) {
                 b_s = 7;
               } else {
@@ -2467,8 +2467,8 @@ namespace ets2
               }
 
               LCC_Controller_mpower(A4_0, 19.0, tmp);
-              if (std::fmax(std::ceil(LCC_Controller_log2(LCC_Controller_norm_a
-                     (tmp) / LCC_Controller_norm_a(A) * 2.0 /
+              if (std::fmax(std::ceil(LCC_Controller_log2(LCC_Controller_norm_j
+                     (tmp) / LCC_Controller_norm_j(A) * 2.0 /
                      2.220446049250313E-16) / 18.0), 0.0) == 0.0) {
                 b_s = 9;
               } else {
@@ -2495,7 +2495,7 @@ namespace ets2
             }
 
             exptj = std::fmax(std::ceil(LCC_Controller_log2(std::fmin(eta3, std::
-              fmax(eta1, rt_powd_snf(LCC_Controller_norm_a(A4_0), 0.1))) /
+              fmax(eta1, rt_powd_snf(LCC_Controller_norm_j(A4_0), 0.1))) /
               5.371920351148152)), 0.0);
             d6 = rt_powd_snf(2.0, exptj);
             for (e_j = 0; e_j < 25; e_j++) {
@@ -2506,10 +2506,10 @@ namespace ets2
 
             LCC_Controller_mpower(A4_0, 27.0, tmp);
             exptj += std::fmax(std::ceil(LCC_Controller_log2
-              (LCC_Controller_norm_a(tmp) / LCC_Controller_norm_a(T) * 2.0 /
+              (LCC_Controller_norm_j(tmp) / LCC_Controller_norm_j(T) * 2.0 /
                2.220446049250313E-16) / 26.0), 0.0);
             if (std::isinf(exptj)) {
-              d6 = LCC_Controller_norm_a(A) / 5.371920351148152;
+              d6 = LCC_Controller_norm_j(A) / 5.371920351148152;
               if (!std::isinf(d6) && !std::isnan(d6)) {
                 d6 = std::frexp(d6, &b_s);
               } else {
@@ -2839,7 +2839,7 @@ namespace ets2
     rack[1] = kmh;
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   int32_t LccController::LCC_Controller_xpotrf(double b_A[81])
   {
     int32_t info;
@@ -2899,7 +2899,7 @@ namespace ets2
     return info;
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   double LccController::LCC_Controller_minimum(const double x[9])
   {
     double ex;
@@ -2936,7 +2936,101 @@ namespace ets2
     return ex;
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
+  void LccController::LCC_Contr_validateHessianMatrix(double b_H[81], double L
+    [81], double *BadH)
+  {
+    double x[9];
+    double normH;
+    double s;
+    int32_t Tries;
+    int32_t j;
+    int8_t b[81];
+    bool guard1;
+    bool guard2;
+    *BadH = 0.0;
+    std::memcpy(&L[0], &b_H[0], 81U * sizeof(double));
+    Tries = LCC_Controller_xpotrf(L);
+    guard1 = false;
+    if (Tries == 0) {
+      for (Tries = 0; Tries < 9; Tries++) {
+        x[Tries] = L[9 * Tries + Tries];
+      }
+
+      if (LCC_Controller_minimum(x) > 1.4901161193847656E-7) {
+      } else {
+        guard1 = true;
+      }
+    } else {
+      guard1 = true;
+    }
+
+    if (guard1) {
+      normH = 0.0;
+      Tries = 0;
+      while (Tries < 9) {
+        s = 0.0;
+        for (j = 0; j < 9; j++) {
+          s += std::abs(b_H[9 * j + Tries]);
+        }
+
+        if (std::isnan(s)) {
+          normH = (rtNaN);
+          break;
+        } else {
+          if (s > normH) {
+            normH = s;
+          }
+
+          Tries++;
+        }
+      }
+
+      if (normH >= 1.0E+10) {
+        *BadH = 2.0;
+      } else {
+        Tries = 0;
+        while (Tries <= 4) {
+          normH = rt_powd_snf(10.0, static_cast<double>(Tries)) *
+            1.4901161193847656E-7;
+          std::memset(&b[0], 0, 81U * sizeof(int8_t));
+          for (j = 0; j < 9; j++) {
+            b[j + 9 * j] = 1;
+          }
+
+          for (j = 0; j < 81; j++) {
+            s = normH * static_cast<double>(b[j]) + b_H[j];
+            b_H[j] = s;
+            L[j] = s;
+          }
+
+          j = LCC_Controller_xpotrf(L);
+          guard2 = false;
+          if (j == 0) {
+            for (j = 0; j < 9; j++) {
+              x[j] = L[9 * j + j];
+            }
+
+            if (LCC_Controller_minimum(x) > 1.4901161193847656E-7) {
+              *BadH = 1.0;
+              break;
+            } else {
+              guard2 = true;
+            }
+          } else {
+            guard2 = true;
+          }
+
+          if (guard2) {
+            *BadH = 3.0;
+            Tries++;
+          }
+        }
+      }
+    }
+  }
+
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   void LccController::LCC_Controller_trisolve(const double b_A[81], double b_B
     [81])
   {
@@ -2962,7 +3056,7 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   void LccController::LCC_Controller_tic(double *tstart_tv_sec, double
     *tstart_tv_nsec)
   {
@@ -2977,7 +3071,7 @@ namespace ets2
     *tstart_tv_nsec = origTimespec.tv_nsec;
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   double LccController::LCC_Controller_norm(const double x[9])
   {
     double scale;
@@ -3022,7 +3116,7 @@ namespace ets2
     return y;
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   double LccController::LCC_Controller_toc(double tstart_tv_sec, double
     tstart_tv_nsec)
   {
@@ -3037,7 +3131,7 @@ namespace ets2
       (origTimespec.tv_sec - tstart_tv_sec);
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   double LccController::LCC_Controller_maximum(const double x[9])
   {
     double ex;
@@ -3074,7 +3168,7 @@ namespace ets2
     return ex;
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   double LccController::LCC_Controller_xnrm2(int32_t n, const double x[81],
     int32_t ix0)
   {
@@ -3128,7 +3222,7 @@ namespace ets2
     return y;
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   void LccController::LCC_Controller_xgemv(int32_t b_m, int32_t n, const double
     b_A[81], int32_t ia0, const double x[81], int32_t ix0, double y[9])
   {
@@ -3155,7 +3249,7 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   void LccController::LCC_Controller_xgerc(int32_t b_m, int32_t n, double alpha1,
     int32_t ix0, const double y[9], double b_A[81], int32_t ia0)
   {
@@ -3179,7 +3273,7 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   double LccController::LCC_Controller_KWIKfactor(const double b_Ac[2844], const
     int32_t iC[316], int32_t nA, const double b_Linv[81], double RLinv[81],
     double b_D[81], double b_H[81], int32_t n)
@@ -3462,7 +3556,7 @@ namespace ets2
     return factorStatus;
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   void LccController::LCC_Controller_DropConstraint(int32_t kDrop, bool iA[316],
     int32_t *nA, int32_t iC[316])
   {
@@ -3479,7 +3573,7 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   void LccController::LCC_Controller_qpkwik(const double b_Linv[81], const
     double b_Hinv[81], const double f[9], const double b_Ac[2844], const double
     b[316], bool iA[316], int32_t maxiter, double FeasTol, double x[9], double
@@ -3891,7 +3985,7 @@ namespace ets2
     }
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   double LccController::LCC_Controll_enforceInputLimits(double uk, double uk1,
     double b_uoff, const double b_Mlim[316], const int32_t b_Mrows[316], int32_t
     b_ny, int32_t b_degrees)
@@ -3943,7 +4037,7 @@ namespace ets2
     return uk_clipped;
   }
 
-  // Function for MATLAB Function: '<S33>/FixedHorizonOptimizer'
+  // Function for MATLAB Function: '<S34>/FixedHorizonOptimizer'
   void LccController::LCC_Controll_mpcblock_optimizer(const double rseq[450],
     const double vseq[152], double umin, double umax, const double x[7], double
     old_u, const bool iA[316], const double b_Mlim[316], double b_Mx[2212],
@@ -3957,31 +4051,31 @@ namespace ets2
     double Bc[316];
     double b_Mlim_0[316];
     double b_Mv_0[316];
-    double L[81];
+    double b_H[81];
     double c_Linv[81];
+    double d_Linv[81];
     double c_SuJm[64];
     double d[64];
     double c_Kx[56];
     double CA[42];
     double CA_0[42];
     double b_C_0[12];
-    double b_x[9];
-    double c_x[9];
+    double f[9];
+    double zopt[9];
     double c_Ku1[8];
     double Sum[6];
     double Bc_0;
     double WuI2Jm;
-    double normH;
-    double s;
+    double umax_incr;
+    double umin_incr;
     int32_t CA_tmp;
-    int32_t Tries;
+    int32_t WySuJm_tmp;
     int32_t c_i;
     int32_t i;
-    int32_t info;
+    int32_t k;
     int16_t rows[6];
     int16_t ixw;
     int16_t rows_0;
-    int8_t b[81];
     bool umax_incr_flag;
     bool umin_incr_flag;
     static const double c[81]{ 3700.8487015258384, 3396.4092393565224,
@@ -4313,76 +4407,71 @@ namespace ets2
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
       0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
-    bool guard1;
-    bool guard2;
-    std::memcpy(&c_Linv[0], &c[0], 81U * sizeof(double));
-    std::memset(&useq[0], 0, 76U * sizeof(double));
+    std::memcpy(&b_H[0], &c[0], 81U * sizeof(double));
     std::memset(&iAout[0], 0, 316U * sizeof(bool));
-    for (info = 0; info < 7; info++) {
+    for (k = 0; k < 7; k++) {
       for (i = 0; i < 6; i++) {
-        CA[i + 6 * info] = 0.0;
+        CA[i + 6 * k] = 0.0;
       }
 
       for (i = 0; i < 7; i++) {
-        normH = b_A[7 * info + i];
-        for (Tries = 0; Tries < 6; Tries++) {
-          CA_tmp = 6 * info + Tries;
-          CA[CA_tmp] += b_C[6 * i + Tries] * normH;
+        umax_incr = b_A[7 * k + i];
+        for (WySuJm_tmp = 0; WySuJm_tmp < 6; WySuJm_tmp++) {
+          CA_tmp = 6 * k + WySuJm_tmp;
+          CA[CA_tmp] += b_C[6 * i + WySuJm_tmp] * umax_incr;
         }
       }
     }
 
-    for (info = 0; info < 6; info++) {
-      Sum[info] = 0.0;
+    for (k = 0; k < 6; k++) {
+      Sum[k] = 0.0;
     }
 
-    for (info = 0; info < 7; info++) {
-      normH = Bu[info];
+    for (k = 0; k < 7; k++) {
+      umax_incr = Bu[k];
       for (i = 0; i < 6; i++) {
-        Sum[i] += b_C[6 * info + i] * normH;
+        Sum[i] += b_C[6 * k + i] * umax_incr;
       }
     }
 
-    for (info = 0; info < 6; info++) {
-      b_C_0[info] = 0.0;
-      b_C_0[info + 6] = 0.0;
+    for (k = 0; k < 6; k++) {
+      b_C_0[k] = 0.0;
+      b_C_0[k + 6] = 0.0;
     }
 
-    for (info = 0; info < 2; info++) {
+    for (k = 0; k < 2; k++) {
       for (i = 0; i < 7; i++) {
-        normH = Bv[7 * info + i];
-        for (Tries = 0; Tries < 6; Tries++) {
-          CA_tmp = 6 * info + Tries;
-          b_C_0[CA_tmp] += b_C[6 * i + Tries] * normH;
+        umax_incr = Bv[7 * k + i];
+        for (WySuJm_tmp = 0; WySuJm_tmp < 6; WySuJm_tmp++) {
+          CA_tmp = 6 * k + WySuJm_tmp;
+          b_C_0[CA_tmp] += b_C[6 * i + WySuJm_tmp] * umax_incr;
         }
       }
     }
 
-    for (info = 0; info < 6; info++) {
-      LCC_Controller_DW.c_Hv[info] = b_C_0[info];
-      LCC_Controller_DW.c_Hv[info + 900] = Dv[info];
-      LCC_Controller_DW.c_Hv[info + 450] = b_C_0[info + 6];
-      LCC_Controller_DW.c_Hv[info + 1350] = Dv[info + 6];
+    for (k = 0; k < 6; k++) {
+      LCC_Controller_DW.c_Hv[k] = b_C_0[k];
+      LCC_Controller_DW.c_Hv[k + 900] = Dv[k];
+      LCC_Controller_DW.c_Hv[k + 450] = b_C_0[k + 6];
+      LCC_Controller_DW.c_Hv[k + 1350] = Dv[k + 6];
     }
 
-    for (info = 0; info < 148; info++) {
+    for (k = 0; k < 148; k++) {
       for (i = 0; i < 6; i++) {
-        LCC_Controller_DW.c_Hv[i + 450 * (info + 4)] = 0.0;
+        LCC_Controller_DW.c_Hv[i + 450 * (k + 4)] = 0.0;
       }
     }
 
-    for (info = 0; info < 152; info++) {
-      std::memset(&LCC_Controller_DW.c_Hv[info * 450 + 6], 0, 444U * sizeof
-                  (double));
+    for (k = 0; k < 152; k++) {
+      std::memset(&LCC_Controller_DW.c_Hv[k * 450 + 6], 0, 444U * sizeof(double));
     }
 
-    for (info = 0; info < 7; info++) {
+    for (k = 0; k < 7; k++) {
       for (i = 0; i < 6; i++) {
-        LCC_Controller_DW.c_Sx[i + 450 * info] = CA[6 * info + i];
+        LCC_Controller_DW.c_Sx[i + 450 * k] = CA[6 * k + i];
       }
 
-      std::memset(&LCC_Controller_DW.c_Sx[info * 450 + 6], 0, 444U * sizeof
-                  (double));
+      std::memset(&LCC_Controller_DW.c_Sx[k * 450 + 6], 0, 444U * sizeof(double));
     }
 
     for (i = 0; i < 6; i++) {
@@ -4390,115 +4479,110 @@ namespace ets2
     }
 
     std::memset(&c_Su1[6], 0, 444U * sizeof(double));
-    for (info = 0; info < 6; info++) {
-      LCC_Controller_DW.Su[info] = Sum[info];
+    for (k = 0; k < 6; k++) {
+      LCC_Controller_DW.Su[k] = Sum[k];
     }
 
-    for (info = 0; info < 74; info++) {
+    for (k = 0; k < 74; k++) {
       for (i = 0; i < 6; i++) {
-        LCC_Controller_DW.Su[i + 450 * (info + 1)] = 0.0;
+        LCC_Controller_DW.Su[i + 450 * (k + 1)] = 0.0;
       }
     }
 
-    for (info = 0; info < 75; info++) {
-      std::memset(&LCC_Controller_DW.Su[info * 450 + 6], 0, 444U * sizeof(double));
+    for (k = 0; k < 75; k++) {
+      std::memset(&LCC_Controller_DW.Su[k * 450 + 6], 0, 444U * sizeof(double));
     }
 
     for (c_i = 0; c_i < 74; c_i++) {
       ixw = static_cast<int16_t>((c_i + 1) * 6 + 1);
-      for (info = 0; info < 6; info++) {
-        rows_0 = static_cast<int16_t>(info + ixw);
-        rows[info] = rows_0;
-        normH = 0.0;
+      for (k = 0; k < 6; k++) {
+        rows_0 = static_cast<int16_t>(k + ixw);
+        rows[k] = rows_0;
+        umax_incr = 0.0;
         for (i = 0; i < 7; i++) {
-          normH += CA[6 * i + info] * Bu[i];
+          umax_incr += CA[6 * i + k] * Bu[i];
         }
 
-        normH += Sum[info];
-        Sum[info] = normH;
-        c_Su1[rows_0 - 1] = normH;
-        Sum_0[info] = normH;
+        umax_incr += Sum[k];
+        Sum[k] = umax_incr;
+        c_Su1[rows_0 - 1] = umax_incr;
+        Sum_0[k] = umax_incr;
       }
 
-      for (info = 0; info < 74; info++) {
+      for (k = 0; k < 74; k++) {
         for (i = 0; i < 6; i++) {
-          Sum_0[i + 6 * (info + 1)] = LCC_Controller_DW.Su[(450 * info + rows[i])
-            - 7];
-        }
-      }
-
-      for (info = 0; info < 75; info++) {
-        for (i = 0; i < 6; i++) {
-          LCC_Controller_DW.Su[(rows[i] + 450 * info) - 1] = Sum_0[6 * info + i];
+          Sum_0[i + 6 * (k + 1)] = LCC_Controller_DW.Su[(450 * k + rows[i]) - 7];
         }
       }
 
-      for (info = 0; info < 2; info++) {
+      for (k = 0; k < 75; k++) {
         for (i = 0; i < 6; i++) {
-          b_C_0[i + 6 * info] = 0.0;
+          LCC_Controller_DW.Su[(rows[i] + 450 * k) - 1] = Sum_0[6 * k + i];
+        }
+      }
+
+      for (k = 0; k < 2; k++) {
+        for (i = 0; i < 6; i++) {
+          b_C_0[i + 6 * k] = 0.0;
         }
 
         for (i = 0; i < 7; i++) {
-          normH = Bv[7 * info + i];
-          for (Tries = 0; Tries < 6; Tries++) {
-            CA_tmp = 6 * info + Tries;
-            b_C_0[CA_tmp] += CA[6 * i + Tries] * normH;
+          umax_incr = Bv[7 * k + i];
+          for (WySuJm_tmp = 0; WySuJm_tmp < 6; WySuJm_tmp++) {
+            CA_tmp = 6 * k + WySuJm_tmp;
+            b_C_0[CA_tmp] += CA[6 * i + WySuJm_tmp] * umax_incr;
           }
         }
 
         for (i = 0; i < 6; i++) {
-          LCC_Controller_DW.CA[i + 6 * info] = b_C_0[6 * info + i];
+          LCC_Controller_DW.CA[i + 6 * k] = b_C_0[6 * k + i];
         }
       }
 
-      for (info = 0; info < 150; info++) {
+      for (k = 0; k < 150; k++) {
         for (i = 0; i < 6; i++) {
-          LCC_Controller_DW.CA[i + 6 * (info + 2)] = LCC_Controller_DW.c_Hv[(450
-            * info + rows[i]) - 7];
+          LCC_Controller_DW.CA[i + 6 * (k + 2)] = LCC_Controller_DW.c_Hv[(450 *
+            k + rows[i]) - 7];
         }
       }
 
-      for (info = 0; info < 152; info++) {
+      for (k = 0; k < 152; k++) {
         for (i = 0; i < 6; i++) {
-          LCC_Controller_DW.c_Hv[(rows[i] + 450 * info) - 1] =
-            LCC_Controller_DW.CA[6 * info + i];
+          LCC_Controller_DW.c_Hv[(rows[i] + 450 * k) - 1] =
+            LCC_Controller_DW.CA[6 * k + i];
         }
       }
 
-      for (info = 0; info < 7; info++) {
+      for (k = 0; k < 7; k++) {
         for (i = 0; i < 6; i++) {
-          CA_0[i + 6 * info] = 0.0;
+          CA_0[i + 6 * k] = 0.0;
         }
 
         for (i = 0; i < 7; i++) {
-          normH = b_A[7 * info + i];
-          for (Tries = 0; Tries < 6; Tries++) {
-            CA_tmp = 6 * info + Tries;
-            CA_0[CA_tmp] += CA[6 * i + Tries] * normH;
+          umax_incr = b_A[7 * k + i];
+          for (WySuJm_tmp = 0; WySuJm_tmp < 6; WySuJm_tmp++) {
+            CA_tmp = 6 * k + WySuJm_tmp;
+            CA_0[CA_tmp] += CA[6 * i + WySuJm_tmp] * umax_incr;
           }
         }
       }
 
       std::memcpy(&CA[0], &CA_0[0], 42U * sizeof(double));
-      for (info = 0; info < 7; info++) {
+      for (k = 0; k < 7; k++) {
         for (i = 0; i < 6; i++) {
-          LCC_Controller_DW.c_Sx[(rows[i] + 450 * info) - 1] = CA[6 * info + i];
+          LCC_Controller_DW.c_Sx[(rows[i] + 450 * k) - 1] = CA[6 * k + i];
         }
       }
     }
 
-    for (info = 0; info < 600; info++) {
-      LCC_Controller_DW.WuI2Jm[info] = c_b[info];
-    }
-
-    for (info = 0; info < 8; info++) {
-      std::memset(&LCC_Controller_DW.c_SuJm[info * 450], 0, 450U * sizeof(double));
+    for (k = 0; k < 8; k++) {
+      std::memset(&LCC_Controller_DW.c_SuJm[k * 450], 0, 450U * sizeof(double));
       for (i = 0; i < 75; i++) {
-        Tries = static_cast<int32_t>(LCC_Controller_DW.WuI2Jm[75 * info + i]);
+        WySuJm_tmp = (&c_b[0])[75 * k + i];
         for (CA_tmp = 0; CA_tmp < 450; CA_tmp++) {
-          c_i = 450 * info + CA_tmp;
+          c_i = 450 * k + CA_tmp;
           LCC_Controller_DW.c_SuJm[c_i] += LCC_Controller_DW.Su[450 * i + CA_tmp]
-            * static_cast<double>(Tries);
+            * static_cast<double>(WySuJm_tmp);
         }
       }
     }
@@ -4506,43 +4590,41 @@ namespace ets2
     i = 0;
     while (i < 316) {
       if (b_Mrows[i] <= 450) {
-        Tries = b_Mrows[i];
-        for (info = 0; info < 8; info++) {
-          b_Ac[i + 316 * info] = -LCC_Controller_DW.c_SuJm[(450 * info + Tries)
-            - 1];
+        WySuJm_tmp = b_Mrows[i];
+        for (k = 0; k < 8; k++) {
+          b_Ac[i + 316 * k] = -LCC_Controller_DW.c_SuJm[(450 * k + WySuJm_tmp) -
+            1];
         }
 
-        Tries = b_Mrows[i];
-        for (info = 0; info < 7; info++) {
-          b_Mx[i + 316 * info] = -LCC_Controller_DW.c_Sx[(450 * info + Tries) -
-            1];
+        WySuJm_tmp = b_Mrows[i];
+        for (k = 0; k < 7; k++) {
+          b_Mx[i + 316 * k] = -LCC_Controller_DW.c_Sx[(450 * k + WySuJm_tmp) - 1];
         }
 
         b_Mu1[i] = -c_Su1[b_Mrows[i] - 1];
-        Tries = b_Mrows[i];
-        for (info = 0; info < 152; info++) {
-          b_Mv[i + 316 * info] = -LCC_Controller_DW.c_Hv[(450 * info + Tries) -
-            1];
+        WySuJm_tmp = b_Mrows[i];
+        for (k = 0; k < 152; k++) {
+          b_Mv[i + 316 * k] = -LCC_Controller_DW.c_Hv[(450 * k + WySuJm_tmp) - 1];
         }
 
         i++;
       } else if (b_Mrows[i] <= 900) {
-        Tries = b_Mrows[i];
-        for (info = 0; info < 8; info++) {
-          b_Ac[i + 316 * info] = LCC_Controller_DW.c_SuJm[(450 * info + Tries) -
+        WySuJm_tmp = b_Mrows[i];
+        for (k = 0; k < 8; k++) {
+          b_Ac[i + 316 * k] = LCC_Controller_DW.c_SuJm[(450 * k + WySuJm_tmp) -
             451];
         }
 
-        Tries = b_Mrows[i];
-        for (info = 0; info < 7; info++) {
-          b_Mx[i + 316 * info] = LCC_Controller_DW.c_Sx[(450 * info + Tries) -
+        WySuJm_tmp = b_Mrows[i];
+        for (k = 0; k < 7; k++) {
+          b_Mx[i + 316 * k] = LCC_Controller_DW.c_Sx[(450 * k + WySuJm_tmp) -
             451];
         }
 
         b_Mu1[i] = c_Su1[b_Mrows[i] - 451];
-        Tries = b_Mrows[i];
-        for (info = 0; info < 152; info++) {
-          b_Mv[i + 316 * info] = LCC_Controller_DW.c_Hv[(450 * info + Tries) -
+        WySuJm_tmp = b_Mrows[i];
+        for (k = 0; k < 152; k++) {
+          b_Mv[i + 316 * k] = LCC_Controller_DW.c_Hv[(450 * k + WySuJm_tmp) -
             451];
         }
 
@@ -4552,25 +4634,25 @@ namespace ets2
       }
     }
 
-    for (info = 0; info < 8; info++) {
-      std::memset(&LCC_Controller_DW.I2Jm[info * 75], 0, 75U * sizeof(double));
+    for (k = 0; k < 8; k++) {
+      std::memset(&LCC_Controller_DW.I2Jm[k * 75], 0, 75U * sizeof(double));
       for (i = 0; i < 75; i++) {
-        Tries = static_cast<int32_t>(LCC_Controller_DW.WuI2Jm[75 * info + i]);
+        WySuJm_tmp = (&c_b[0])[75 * k + i];
         for (CA_tmp = 0; CA_tmp < 75; CA_tmp++) {
-          c_i = 75 * info + CA_tmp;
+          c_i = 75 * k + CA_tmp;
           LCC_Controller_DW.I2Jm[c_i] += static_cast<double>((&c_A[0])[75 * i +
-            CA_tmp] * Tries);
+            CA_tmp] * WySuJm_tmp);
         }
       }
     }
 
     ixw = 1;
     for (i = 0; i < 450; i++) {
-      normH = W[ixw - 1];
-      for (info = 0; info < 8; info++) {
-        Tries = 450 * info + i;
-        LCC_Controller_DW.WySuJm[Tries] = LCC_Controller_DW.c_SuJm[Tries] *
-          normH;
+      umax_incr = W[ixw - 1];
+      for (k = 0; k < 8; k++) {
+        WySuJm_tmp = 450 * k + i;
+        LCC_Controller_DW.WySuJm[WySuJm_tmp] =
+          LCC_Controller_DW.c_SuJm[WySuJm_tmp] * umax_incr;
       }
 
       ixw = static_cast<int16_t>(ixw + 1);
@@ -4579,173 +4661,94 @@ namespace ets2
       }
     }
 
-    for (info = 0; info < 8; info++) {
+    for (k = 0; k < 8; k++) {
       for (i = 0; i < 75; i++) {
-        Tries = 75 * info + i;
-        LCC_Controller_DW.WuI2Jm[Tries] = LCC_Controller_DW.I2Jm[Tries] *
-          LCC_Controller_Wu;
-        LCC_Controller_DW.y[Tries] = static_cast<double>(c_b[Tries]) *
-          LCC_Controller_Wdu;
+        WySuJm_tmp = 75 * k + i;
+        LCC_Controller_DW.WuI2Jm[WySuJm_tmp] = LCC_Controller_DW.I2Jm[WySuJm_tmp]
+          * LCC_Controller_Wu;
+        LCC_Controller_DW.y_m[WySuJm_tmp] = static_cast<double>(c_b[WySuJm_tmp])
+          * LCC_Controller_Wdu;
       }
 
       for (i = 0; i < 8; i++) {
-        normH = 0.0;
-        for (Tries = 0; Tries < 450; Tries++) {
-          normH += LCC_Controller_DW.c_SuJm[450 * i + Tries] *
-            LCC_Controller_DW.WySuJm[450 * info + Tries];
+        umax_incr = 0.0;
+        for (WySuJm_tmp = 0; WySuJm_tmp < 450; WySuJm_tmp++) {
+          umax_incr += LCC_Controller_DW.c_SuJm[450 * i + WySuJm_tmp] *
+            LCC_Controller_DW.WySuJm[450 * k + WySuJm_tmp];
         }
 
-        c_i = (info << 3) + i;
-        c_SuJm[c_i] = normH;
+        c_i = (k << 3) + i;
+        c_SuJm[c_i] = umax_incr;
         d[c_i] = 0.0;
       }
 
       for (i = 0; i < 75; i++) {
-        normH = LCC_Controller_DW.y[75 * info + i];
-        for (Tries = 0; Tries < 8; Tries++) {
-          CA_tmp = (info << 3) + Tries;
-          d[CA_tmp] += static_cast<double>(d_0[(i << 3) + Tries]) * normH;
+        umax_incr = LCC_Controller_DW.y_m[75 * k + i];
+        for (WySuJm_tmp = 0; WySuJm_tmp < 8; WySuJm_tmp++) {
+          CA_tmp = (k << 3) + WySuJm_tmp;
+          d[CA_tmp] += static_cast<double>(d_0[(i << 3) + WySuJm_tmp]) *
+            umax_incr;
         }
       }
     }
 
-    for (info = 0; info < 8; info++) {
+    for (k = 0; k < 8; k++) {
       for (i = 0; i < 8; i++) {
-        normH = 0.0;
-        for (Tries = 0; Tries < 75; Tries++) {
-          normH += LCC_Controller_DW.I2Jm[75 * info + Tries] *
-            LCC_Controller_DW.WuI2Jm[75 * i + Tries];
+        umax_incr = 0.0;
+        for (WySuJm_tmp = 0; WySuJm_tmp < 75; WySuJm_tmp++) {
+          umax_incr += LCC_Controller_DW.I2Jm[75 * k + WySuJm_tmp] *
+            LCC_Controller_DW.WuI2Jm[75 * i + WySuJm_tmp];
         }
 
-        Tries = (i << 3) + info;
-        c_Linv[info + 9 * i] = (c_SuJm[Tries] + d[Tries]) + normH;
+        WySuJm_tmp = (i << 3) + k;
+        b_H[k + 9 * i] = (c_SuJm[WySuJm_tmp] + d[WySuJm_tmp]) + umax_incr;
       }
 
-      s = 0.0;
+      umin_incr = 0.0;
       for (i = 0; i < 450; i++) {
-        s += LCC_Controller_DW.WySuJm[450 * info + i] * c_Su1[i];
+        umin_incr += LCC_Controller_DW.WySuJm[450 * k + i] * c_Su1[i];
       }
 
-      normH = 0.0;
+      umax_incr = 0.0;
       for (i = 0; i < 75; i++) {
-        normH += LCC_Controller_DW.WuI2Jm[75 * info + i];
+        umax_incr += LCC_Controller_DW.WuI2Jm[75 * k + i];
       }
 
-      c_Ku1[info] = s + normH;
+      c_Ku1[k] = umin_incr + umax_incr;
     }
 
-    for (info = 0; info < 600; info++) {
-      LCC_Controller_DW.WuI2Jm[info] = -LCC_Controller_DW.WuI2Jm[info];
+    for (k = 0; k < 600; k++) {
+      LCC_Controller_DW.WuI2Jm[k] = -LCC_Controller_DW.WuI2Jm[k];
     }
 
-    for (info = 0; info < 8; info++) {
+    for (k = 0; k < 8; k++) {
       for (i = 0; i < 7; i++) {
-        normH = 0.0;
-        for (Tries = 0; Tries < 450; Tries++) {
-          normH += LCC_Controller_DW.c_Sx[450 * i + Tries] *
-            LCC_Controller_DW.WySuJm[450 * info + Tries];
+        umax_incr = 0.0;
+        for (WySuJm_tmp = 0; WySuJm_tmp < 450; WySuJm_tmp++) {
+          umax_incr += LCC_Controller_DW.c_Sx[450 * i + WySuJm_tmp] *
+            LCC_Controller_DW.WySuJm[450 * k + WySuJm_tmp];
         }
 
-        c_Kx[i + 7 * info] = normH;
+        c_Kx[i + 7 * k] = umax_incr;
       }
 
       for (i = 0; i < 152; i++) {
-        normH = 0.0;
-        for (Tries = 0; Tries < 450; Tries++) {
-          normH += LCC_Controller_DW.c_Hv[450 * i + Tries] *
-            LCC_Controller_DW.WySuJm[450 * info + Tries];
+        umax_incr = 0.0;
+        for (WySuJm_tmp = 0; WySuJm_tmp < 450; WySuJm_tmp++) {
+          umax_incr += LCC_Controller_DW.c_Hv[450 * i + WySuJm_tmp] *
+            LCC_Controller_DW.WySuJm[450 * k + WySuJm_tmp];
         }
 
-        LCC_Controller_DW.c_Kv[i + 152 * info] = normH;
+        LCC_Controller_DW.c_Kv[i + 152 * k] = umax_incr;
       }
     }
 
-    for (info = 0; info < 3600; info++) {
-      LCC_Controller_DW.WySuJm[info] = -LCC_Controller_DW.WySuJm[info];
+    for (k = 0; k < 3600; k++) {
+      LCC_Controller_DW.WySuJm[k] = -LCC_Controller_DW.WySuJm[k];
     }
 
-    i = 0;
-    std::memcpy(&L[0], &c_Linv[0], 81U * sizeof(double));
-    info = LCC_Controller_xpotrf(L);
-    guard1 = false;
-    if (info == 0) {
-      for (info = 0; info < 9; info++) {
-        b_x[info] = L[9 * info + info];
-      }
-
-      if (LCC_Controller_minimum(b_x) > 1.4901161193847656E-7) {
-      } else {
-        guard1 = true;
-      }
-    } else {
-      guard1 = true;
-    }
-
-    if (guard1) {
-      normH = 0.0;
-      info = 0;
-      while (info < 9) {
-        s = 0.0;
-        for (Tries = 0; Tries < 9; Tries++) {
-          s += std::abs(c_Linv[9 * Tries + info]);
-        }
-
-        if (std::isnan(s)) {
-          normH = (rtNaN);
-          break;
-        } else {
-          if (s > normH) {
-            normH = s;
-          }
-
-          info++;
-        }
-      }
-
-      if (normH >= 1.0E+10) {
-        i = 2;
-      } else {
-        Tries = 0;
-        while (Tries <= 4) {
-          normH = rt_powd_snf(10.0, static_cast<double>(Tries)) *
-            1.4901161193847656E-7;
-          std::memset(&b[0], 0, 81U * sizeof(int8_t));
-          for (info = 0; info < 9; info++) {
-            b[info + 9 * info] = 1;
-          }
-
-          for (info = 0; info < 81; info++) {
-            s = normH * static_cast<double>(b[info]) + c_Linv[info];
-            c_Linv[info] = s;
-            L[info] = s;
-          }
-
-          info = LCC_Controller_xpotrf(L);
-          guard2 = false;
-          if (info == 0) {
-            for (info = 0; info < 9; info++) {
-              c_x[info] = L[9 * info + info];
-            }
-
-            if (LCC_Controller_minimum(c_x) > 1.4901161193847656E-7) {
-              i = 1;
-              break;
-            } else {
-              guard2 = true;
-            }
-          } else {
-            guard2 = true;
-          }
-
-          if (guard2) {
-            i = 3;
-            Tries++;
-          }
-        }
-      }
-    }
-
-    if (i > 1) {
+    LCC_Contr_validateHessianMatrix(b_H, d_Linv, &umax_incr);
+    if (umax_incr > 1.0) {
       *u = old_u + b_uoff;
       for (i = 0; i < 76; i++) {
         useq[i] = *u;
@@ -4753,109 +4756,131 @@ namespace ets2
 
       *status = -2.0;
     } else {
-      std::memset(&b[0], 0, 81U * sizeof(int8_t));
-      for (info = 0; info < 9; info++) {
-        b[info + 9 * info] = 1;
+      std::memset(&b_H[0], 0, 81U * sizeof(double));
+      for (k = 0; k < 9; k++) {
+        b_H[k + 9 * k] = 1.0;
       }
 
-      for (info = 0; info < 81; info++) {
-        c_Linv[info] = b[info];
-      }
-
-      LCC_Controller_trisolve(L, c_Linv);
-      for (info = 0; info < 316; info++) {
-        normH = 0.0;
+      std::memcpy(&c_Linv[0], &b_H[0], 81U * sizeof(double));
+      LCC_Controller_trisolve(d_Linv, c_Linv);
+      for (k = 0; k < 316; k++) {
+        umax_incr = 0.0;
         for (i = 0; i < 7; i++) {
-          normH += b_Mx[316 * i + info] * x[i];
+          umax_incr += b_Mx[316 * i + k] * x[i];
         }
 
-        b_Mlim_0[info] = (b_Mlim[info] + normH) + b_Mu1[info] * old_u;
-        b_Mv_0[info] = 0.0;
+        b_Mlim_0[k] = (b_Mlim[k] + umax_incr) + b_Mu1[k] * old_u;
+        b_Mv_0[k] = 0.0;
       }
 
-      for (info = 0; info < 152; info++) {
-        normH = vseq[info];
+      for (k = 0; k < 152; k++) {
+        umax_incr = vseq[k];
         for (i = 0; i < 316; i++) {
-          b_Mv_0[i] += b_Mv[316 * info + i] * normH;
+          b_Mv_0[i] += b_Mv[316 * k + i] * umax_incr;
         }
       }
 
       umax_incr_flag = false;
-      normH = 0.0;
+      umax_incr = 0.0;
       umin_incr_flag = false;
-      s = 0.0;
-      for (info = 0; info < 316; info++) {
-        Bc_0 = -(b_Mlim_0[info] + b_Mv_0[info]);
-        Bc[info] = Bc_0;
-        Tries = b_Mrows[info];
-        if ((Tries > 450) && (Tries > 900)) {
-          if (Tries <= 975) {
+      umin_incr = 0.0;
+      for (k = 0; k < 316; k++) {
+        Bc_0 = -(b_Mlim_0[k] + b_Mv_0[k]);
+        Bc[k] = Bc_0;
+        WySuJm_tmp = b_Mrows[k];
+        if ((WySuJm_tmp > 450) && (WySuJm_tmp > 900)) {
+          if (WySuJm_tmp <= 975) {
             if (!umax_incr_flag) {
-              normH = -(LCC_Controller_RMVscale * umax - b_uoff) - (-b_Mlim[info]);
+              umax_incr = -(LCC_Controller_RMVscale * umax - b_uoff) -
+                (-b_Mlim[k]);
               umax_incr_flag = true;
             }
 
-            Bc[info] = Bc_0 + normH;
+            Bc[k] = Bc_0 + umax_incr;
           } else {
             if (!umin_incr_flag) {
-              s = (LCC_Controller_RMVscale * umin - b_uoff) - (-b_Mlim[info]);
+              umin_incr = (LCC_Controller_RMVscale * umin - b_uoff) - (-b_Mlim[k]);
               umin_incr_flag = true;
             }
 
-            Bc[info] = Bc_0 + s;
+            Bc[k] = Bc_0 + umin_incr;
           }
         }
       }
 
-      std::memset(&b_x[0], 0, 9U * sizeof(double));
+      std::memset(&f[0], 0, 9U * sizeof(double));
       for (i = 0; i < 8; i++) {
-        normH = 0.0;
-        for (info = 0; info < 7; info++) {
-          normH += c_Kx[7 * i + info] * x[info];
+        umax_incr = 0.0;
+        for (k = 0; k < 7; k++) {
+          umax_incr += c_Kx[7 * i + k] * x[k];
         }
 
-        s = 0.0;
-        for (info = 0; info < 450; info++) {
-          s += LCC_Controller_DW.WySuJm[450 * i + info] * rseq[info];
+        umin_incr = 0.0;
+        for (k = 0; k < 450; k++) {
+          umin_incr += LCC_Controller_DW.WySuJm[450 * i + k] * rseq[k];
         }
 
         Bc_0 = 0.0;
-        for (info = 0; info < 152; info++) {
-          Bc_0 += LCC_Controller_DW.c_Kv[152 * i + info] * vseq[info];
+        for (k = 0; k < 152; k++) {
+          Bc_0 += LCC_Controller_DW.c_Kv[152 * i + k] * vseq[k];
         }
 
         WuI2Jm = 0.0;
-        for (info = 0; info < 75; info++) {
-          WuI2Jm += LCC_Controller_DW.WuI2Jm[75 * i + info] * b_utarget[info];
+        for (k = 0; k < 75; k++) {
+          WuI2Jm += LCC_Controller_DW.WuI2Jm[75 * i + k] * b_utarget[k];
         }
 
-        b_x[i] = (((normH + s) + c_Ku1[i] * old_u) + Bc_0) + WuI2Jm;
+        f[i] = (((umax_incr + umin_incr) + c_Ku1[i] * old_u) + Bc_0) + WuI2Jm;
       }
 
       std::memcpy(&iAout[0], &iA[0], 316U * sizeof(bool));
-      for (info = 0; info < 9; info++) {
+      for (k = 0; k < 9; k++) {
         for (i = 0; i < 9; i++) {
-          normH = 0.0;
-          for (Tries = 0; Tries < 9; Tries++) {
-            normH += c_Linv[9 * i + Tries] * c_Linv[9 * info + Tries];
+          umax_incr = 0.0;
+          for (WySuJm_tmp = 0; WySuJm_tmp < 9; WySuJm_tmp++) {
+            umax_incr += c_Linv[9 * i + WySuJm_tmp] * c_Linv[9 * k + WySuJm_tmp];
           }
 
-          L[i + 9 * info] = normH;
+          b_H[i + 9 * k] = umax_incr;
         }
       }
 
-      LCC_Controller_qpkwik(c_Linv, L, b_x, b_Ac, Bc, iAout, 100, 1.0E-6, c_x,
-                            b_Mlim_0, &info);
-      if (info < 0) {
-        std::memset(&c_x[0], 0, 9U * sizeof(double));
+      LCC_Controller_qpkwik(c_Linv, b_H, f, b_Ac, Bc, iAout, 100, 1.0E-6, zopt,
+                            b_Mlim_0, &k);
+      if (k < 0) {
+        std::memset(&zopt[0], 0, 9U * sizeof(double));
       }
 
-      *status = info;
-      *u = (old_u + c_x[0]) + b_uoff;
-      if (info == 0) {
+      *status = k;
+      *u = (old_u + zopt[0]) + b_uoff;
+      if (k == 0) {
         *u = LCC_Controll_enforceInputLimits(*u, old_u + b_uoff, b_uoff, b_Mlim,
           b_Mrows, LCC_Controller_ny, LCC_Controller_degrees);
       }
+
+      umin_incr = old_u + b_uoff;
+      for (k = 0; k < 8; k++) {
+        std::memset(&LCC_Controller_DW.I2Jm[k * 75], 0, 75U * sizeof(double));
+        for (i = 0; i < 75; i++) {
+          WySuJm_tmp = (&c_b[0])[75 * k + i];
+          for (CA_tmp = 0; CA_tmp < 75; CA_tmp++) {
+            c_i = 75 * k + CA_tmp;
+            LCC_Controller_DW.I2Jm[c_i] += static_cast<double>((&c_A[0])[75 * i
+              + CA_tmp] * WySuJm_tmp);
+          }
+        }
+      }
+
+      for (k = 0; k < 75; k++) {
+        umax_incr = 0.0;
+        for (i = 0; i < 8; i++) {
+          umax_incr += LCC_Controller_DW.I2Jm[75 * i + k] * zopt[i];
+        }
+
+        useq[k] = umax_incr + umin_incr;
+      }
+
+      useq[75] = useq[74];
     }
   }
 }
@@ -4870,28 +4895,30 @@ namespace ets2
     double vseq[152];
     double md[76];
     double useq[76];
-    double tmp[75];
+    double uopt_dim[75];
     double b_B[63];
     double pv[61];
     double b_D[54];
-    double tmp_0[42];
+    double tmp[42];
     double tmp_1[18];
     double b_0[14];
-    double x0_1[9];
+    double x0_0[9];
+    double Bv[7];
+    double tmp_0[7];
     double x0[7];
-    double x0_0[7];
+    double xest[7];
     double rtb_obs[2];
     double Lw;
     double d_i;
     double dnow;
     double ds;
+    double e_i;
     double ec;
     double epsis;
     double eys;
     double kmh;
     double past_idx_1;
     double past_idx_2;
-    double rtb_conv_idx_1;
     double slip;
     double ub;
     double vm;
@@ -4899,34 +4926,35 @@ namespace ets2
     double x;
     int32_t c_k;
     int32_t i;
+    int32_t i_0;
     int32_t k;
     int8_t dL_tmp;
     bool b[61];
     bool c[61];
     bool active;
-    static const double c_0[63]{ 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0,
+    static const double d[63]{ 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0,
       -0.0005555555555555558, -0.0033333333333333344, 0.0, 0.0, 0.0, 0.0, 0.0,
       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
       0.0, 0.0, 0.0, 0.0 };
 
-    static const double d[54]{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    static const double e[54]{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
       -2.777777777777778, -0.3468612050000001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
       1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
       0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
 
-    static const double e[14]{ 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.01, 0.01,
+    static const double f[14]{ 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.01, 0.01,
       0.01, 0.01, 0.01, 0.01, 0.01 };
 
-    static const double g[12]{ 1.0, 0.05, 0.2, 1.0, 1.0, 1.0, 1.0, 0.05, 0.2,
+    static const double l[12]{ 1.0, 0.05, 0.2, 1.0, 1.0, 1.0, 1.0, 0.05, 0.2,
       1.0, 1.0, 1.0 };
 
-    static const double f[12]{ 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.01, 0.01, 0.01,
+    static const double h[12]{ 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.01, 0.01, 0.01,
       0.01, 0.01, 0.01 };
 
-    static const double h[316]{ 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15,
+    static const double n[316]{ 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15,
       3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0,
       3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15,
       3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0, 3.15, 3.0,
@@ -4957,12 +4985,12 @@ namespace ets2
 
     static const int8_t b_RYscale[6]{ 1, 20, 5, 1, 1, 1 };
 
-    static const double ab[42]{ 1.0, 0.05, 0.2, 1.0, 1.0, 1.0, 1.0, 0.05, 0.2,
+    static const double g[42]{ 1.0, 0.05, 0.2, 1.0, 1.0, 1.0, 1.0, 0.05, 0.2,
       1.0, 1.0, 1.0, 1.0, 0.05, 0.2, 1.0, 1.0, 1.0, 1.0, 0.05, 0.2, 1.0, 1.0,
       1.0, 1.0, 0.05, 0.2, 1.0, 1.0, 1.0, 1.0, 0.05, 0.2, 1.0, 1.0, 1.0, 1.0,
       0.05, 0.2, 1.0, 1.0, 1.0 };
 
-    static const double r[2212]{ -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0,
+    static const double u[2212]{ -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0,
       -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0,
       -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0,
       -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0,
@@ -5435,7 +5463,7 @@ namespace ets2
       0.013946554007449546, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
       0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
 
-    static const double s[316]{ -0.0, -0.0, -0.0, -0.0, -0.002779903958043492,
+    static const double v[316]{ -0.0, -0.0, -0.0, -0.0, -0.002779903958043492,
       -0.05045380881417642, -0.008180254174595655, -0.14846735225590144,
       -0.01337475850086721, -0.24274490001210955, -0.018371263192905687,
       -0.33342885754302676, -0.023177315429940136, -0.4206562022204097,
@@ -5536,7 +5564,7 @@ namespace ets2
       2.4651692951635633, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 1.0,
       1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
 
-    static const double t[48032]{ -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0,
+    static const double w[48032]{ -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0,
       -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0,
       -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0,
       -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0, -0.0,
@@ -9152,7 +9180,7 @@ namespace ets2
       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
       0.0 };
 
-    static const double v[2844]{ -0.0, -0.0, -0.0, -0.0, -0.002779903958043492,
+    static const double y[2844]{ -0.0, -0.0, -0.0, -0.0, -0.002779903958043492,
       -0.05045380881417642, -0.008180254174595655, -0.14846735225590144,
       -0.01337475850086721, -0.24274490001210955, -0.018371263192905687,
       -0.33342885754302676, -0.023177315429940136, -0.4206562022204097,
@@ -9832,9 +9860,9 @@ namespace ets2
 
     static const double m[7]{ 0.65, 0.57, 0.489, 0.401, 0.32, 0.284, 0.261 };
 
-    static const double l[7]{ 0.0, 0.939, 1.624, 1.995, 2.108, 2.084, 2.093 };
+    static const double l_0[7]{ 0.0, 0.939, 1.624, 1.995, 2.108, 2.084, 2.093 };
 
-    double s_0[316];
+    double v_0[316];
     bool tmp_2[316];
 
     // Outputs for Atomic SubSystem: '<Root>/LCC_Controller'
@@ -9930,27 +9958,26 @@ namespace ets2
     active = (LCC_Controller_DW.memory_DSTATE[2] > 0.5);
     kmh = vs * 3.6;
     if (kmh <= 0.0) {
-      rtb_conv_idx_1 = 0.65;
+      d_i = 0.65;
       ec = 0.0;
     } else if (kmh >= 96.8) {
-      rtb_conv_idx_1 = 0.261;
+      d_i = 0.261;
       ec = 2.093;
     } else {
       for (d_i = 1.0; kmh > j[static_cast<int32_t>(d_i + 1.0) - 1]; d_i++) {
       }
 
-      past_idx_1 = j[static_cast<int32_t>(d_i) - 1];
-      rtb_conv_idx_1 = m[static_cast<int32_t>(d_i) - 1];
-      rtb_conv_idx_1 += (kmh - past_idx_1) / (j[static_cast<int32_t>(d_i + 1.0)
-        - 1] - past_idx_1) * (m[static_cast<int32_t>(d_i + 1.0) - 1] -
-        rtb_conv_idx_1);
-      for (d_i = 1.0; kmh > j[static_cast<int32_t>(d_i + 1.0) - 1]; d_i++) {
+      e_i = j[static_cast<int32_t>(d_i) - 1];
+      past_idx_1 = m[static_cast<int32_t>(d_i) - 1];
+      d_i = (kmh - e_i) / (j[static_cast<int32_t>(d_i + 1.0) - 1] - e_i) * (m[
+        static_cast<int32_t>(d_i + 1.0) - 1] - past_idx_1) + past_idx_1;
+      for (e_i = 1.0; kmh > j[static_cast<int32_t>(e_i + 1.0) - 1]; e_i++) {
       }
 
-      past_idx_1 = j[static_cast<int32_t>(d_i) - 1];
-      ub = l[static_cast<int32_t>(d_i) - 1];
-      ec = (kmh - past_idx_1) / (j[static_cast<int32_t>(d_i + 1.0) - 1] -
-        past_idx_1) * (l[static_cast<int32_t>(d_i + 1.0) - 1] - ub) + ub;
+      past_idx_1 = j[static_cast<int32_t>(e_i) - 1];
+      ub = l_0[static_cast<int32_t>(e_i) - 1];
+      ec = (kmh - past_idx_1) / (j[static_cast<int32_t>(e_i + 1.0) - 1] -
+        past_idx_1) * (l_0[static_cast<int32_t>(e_i + 1.0) - 1] - ub) + ub;
     }
 
     vm = std::fmax(vs, 2.0);
@@ -9958,13 +9985,13 @@ namespace ets2
       LCC_Controller_DW.A, LCC_Controller_DW.B, LCC_Controller_DW.Cm,
       LCC_Controller_DW.Dm, &slip, rtb_obs);
     if (active) {
-      d_i = LCC_Controller_DW.memory_DSTATE[5];
+      e_i = LCC_Controller_DW.memory_DSTATE[5];
       past_idx_1 = LCC_Controller_DW.memory_DSTATE[6];
       past_idx_2 = LCC_Controller_DW.memory_DSTATE[7];
     } else {
-      d_i = std::fmin(std::fmax(rtb_obs[1] * ds / rtb_obs[0], -0.95), 0.95);
-      past_idx_1 = d_i;
-      past_idx_2 = d_i;
+      e_i = std::fmin(std::fmax(rtb_obs[1] * ds / rtb_obs[0], -0.95), 0.95);
+      past_idx_1 = e_i;
+      past_idx_2 = e_i;
     }
 
     dnow = (rtb_obs[0] * past_idx_2 - rtb_obs[1] * ds) * 0.0 + ds;
@@ -9989,8 +10016,8 @@ namespace ets2
     }
 
     std::memset(&ref[0], 0, 450U * sizeof(double));
-    for (i = 0; i < 75; i++) {
-      ref[i + 75] = md[i + 1] * slip;
+    for (k = 0; k < 75; k++) {
+      ref[k + 75] = md[k + 1] * slip;
     }
 
     vm = vs * 0.7 + 6.0;
@@ -10029,20 +10056,20 @@ namespace ets2
     x0[0] = eys;
     x0[1] = epsis;
     x0[2] = dnow;
-    x0[4] = d_i;
+    x0[4] = e_i;
     x0[5] = past_idx_1;
     x0[6] = past_idx_2;
 
-    // MATLAB Function: '<S33>/FixedHorizonOptimizer' incorporates:
+    // MATLAB Function: '<S34>/FixedHorizonOptimizer' incorporates:
     //   Constant: '<S1>/DX0'
 
     std::memset(&LCC_Controller_DW.Bu[0], 0, 532U * sizeof(double));
     std::memset(&LCC_Controller_DW.Bv[0], 0, 1064U * sizeof(double));
     std::memset(&LCC_Controller_DW.Dv[0], 0, 912U * sizeof(double));
-    std::memcpy(&b_B[0], &c_0[0], 63U * sizeof(double));
-    std::memcpy(&b_D[0], &d[0], 54U * sizeof(double));
+    std::memcpy(&b_B[0], &d[0], 63U * sizeof(double));
+    std::memcpy(&b_D[0], &e[0], 54U * sizeof(double));
     for (i = 0; i < 14; i++) {
-      b_0[i] = LCC_Controller_DW.B[i] * e[i];
+      b_0[i] = LCC_Controller_DW.B[i] * f[i];
     }
 
     for (i = 0; i < 7; i++) {
@@ -10051,7 +10078,7 @@ namespace ets2
     }
 
     for (i = 0; i < 6; i++) {
-      b_D[i + 6] = LCC_Controller_DW.Dm[i + 6] / g[i + 6] * f[i + 6];
+      b_D[i + 6] = LCC_Controller_DW.Dm[i + 6] / l[i + 6] * h[i + 6];
     }
 
     for (i = 0; i < 7; i++) {
@@ -10073,49 +10100,87 @@ namespace ets2
       vseq[(i << 1) + 1] = 1.0;
     }
 
-    for (i = 0; i < 6; i++) {
-      dL_tmp = b_RYscale[i];
-      for (k = 0; k < 75; k++) {
-        rseq[i + k * LCC_Controller_ny] = ref[75 * i + k] * static_cast<double>
+    for (k = 0; k < 6; k++) {
+      dL_tmp = b_RYscale[k];
+      for (i = 0; i < 75; i++) {
+        rseq[k + i * LCC_Controller_ny] = ref[75 * k + i] * static_cast<double>
           (dL_tmp);
       }
     }
 
-    for (i = 0; i < 76; i++) {
-      vseq[i << 1] = LCC_Controller_RMDscale * md[i];
+    for (k = 0; k < 76; k++) {
+      vseq[k << 1] = LCC_Controller_RMDscale * md[k];
     }
 
     for (i = 0; i < 7; i++) {
-      x0_0[i] = x0[i];
+      xest[i] = x0[i];
     }
 
-    std::memset(&tmp[0], 0, 75U * sizeof(double));
+    std::memset(&uopt_dim[0], 0, 75U * sizeof(double));
     for (i = 0; i < 42; i++) {
-      tmp_0[i] = LCC_Controller_DW.Cm[i] / ab[i];
+      tmp[i] = LCC_Controller_DW.Cm[i] / g[i];
     }
 
-    std::memcpy(&LCC_Controller_DW.r[0], &r[0], 2212U * sizeof(double));
-    std::memcpy(&s_0[0], &s[0], 316U * sizeof(double));
-    std::memcpy(&LCC_Controller_DW.t[0], &t[0], 48032U * sizeof(double));
-    std::memcpy(&LCC_Controller_DW.v[0], &v[0], 2844U * sizeof(double));
+    std::memcpy(&LCC_Controller_DW.u[0], &u[0], 2212U * sizeof(double));
+    std::memcpy(&v_0[0], &v[0], 316U * sizeof(double));
+    std::memcpy(&LCC_Controller_DW.w[0], &w[0], 48032U * sizeof(double));
+    std::memcpy(&LCC_Controller_DW.y[0], &y[0], 2844U * sizeof(double));
 
-    // Memory: '<S5>/Memory'
+    // Memory: '<S6>/Memory'
     std::memcpy(&tmp_2[0], &LCC_Controller_DW.Memory_PreviousInput[0], 316U *
                 sizeof(bool));
 
-    // Update for Memory: '<S5>/Memory' incorporates:
-    //   Gain: '<S5>/ext.mv_scale'
+    // Update for Memory: '<S6>/Memory' incorporates:
+    //   Gain: '<S6>/ext.mv_scale'
     //   MATLAB Function: '<S1>/MPC_Prep'
-    //   MATLAB Function: '<S33>/FixedHorizonOptimizer'
+    //   MATLAB Function: '<S34>/FixedHorizonOptimizer'
 
-    LCC_Controll_mpcblock_optimizer(rseq, vseq, -0.95 - ub, 0.95 - ub, x0_0, 5.0
-      * d_i, tmp_2, &h[0], LCC_Controller_DW.r, s_0, LCC_Controller_DW.t, tmp,
-      0.0, LCC_Controller_DW.v, LCC_Controller_DW.A, LCC_Controller_DW.Bu,
-      LCC_Controller_DW.Bv, tmp_0, LCC_Controller_DW.Dv, &eys, useq, &epsis,
-      LCC_Controller_DW.Memory_PreviousInput);
+    LCC_Controll_mpcblock_optimizer(rseq, vseq, -0.95 - ub, 0.95 - ub, xest, 5.0
+      * e_i, tmp_2, &n[0], LCC_Controller_DW.u, v_0, LCC_Controller_DW.w,
+      uopt_dim, 0.0, LCC_Controller_DW.y, LCC_Controller_DW.A,
+      LCC_Controller_DW.Bu, LCC_Controller_DW.Bv, tmp, LCC_Controller_DW.Dv,
+      &epsis, useq, &past_idx_2, LCC_Controller_DW.Memory_PreviousInput);
 
-    // Gain: '<S5>/u_scale'
-    eys *= 0.2;
+    // MATLAB Function: '<S34>/FixedHorizonOptimizer'
+    std::memcpy(&uopt_dim[0], &useq[0], 75U * sizeof(double));
+    for (k = 0; k < 76; k++) {
+      for (i = 0; i < 7; i++) {
+        LCC_Controller_DW.xseq[k + 76 * i] = xest[i];
+      }
+
+      i = k << 1;
+      rtb_obs[0] = vseq[i];
+      rtb_obs[1] = vseq[i + 1];
+      if (k < LCC_Controller_p) {
+        dnow = uopt_dim[k];
+        for (i = 0; i < 7; i++) {
+          eys = 0.0;
+          for (i_0 = 0; i_0 < 7; i_0++) {
+            eys += LCC_Controller_DW.A[7 * i_0 + i] * xest[i_0];
+          }
+
+          tmp_0[i] = LCC_Controller_DW.Bu[i] * dnow + eys;
+          Bv[i] = 0.0;
+        }
+
+        for (i = 0; i < 2; i++) {
+          eys = rtb_obs[i];
+          for (i_0 = 0; i_0 < 7; i_0++) {
+            Bv[i_0] += LCC_Controller_DW.Bv[7 * i + i_0] * eys;
+          }
+        }
+
+        for (i = 0; i < 7; i++) {
+          xest[i] = tmp_0[i] + Bv[i];
+        }
+      }
+    }
+
+    std::memcpy(&LCC_Controller_DW.Bu[0], &LCC_Controller_DW.xseq[0], 532U *
+                sizeof(double));
+
+    // Gain: '<S6>/u_scale'
+    epsis *= 0.2;
 
     // MATLAB Function: '<S1>/MPC_Post' incorporates:
     //   Inport: '<Root>/wheel_angle_rad'
@@ -10132,10 +10197,8 @@ namespace ets2
     if ((c_k == 0) || (c_k == 4)) {
       // Outport: '<Root>/wheel_rate_cmd_rad_s'
       LCC_Controller_Y.wheel_rate_cmd_rad_s = 0.0;
-
-      // Outport: '<Root>/status'
       LCC_Controller_Y.status = static_cast<uint8_t>(c_k);
-    } else if ((c_k == 3) || (epsis < 0.0)) {
+    } else if ((c_k == 3) || (past_idx_2 < 0.0)) {
       // Outport: '<Root>/wheel_angle_cmd_rad'
       LCC_Controller_Y.wheel_angle_cmd_rad = std::fmin(std::fmax(std::atan(kmh),
         -0.63), 0.63);
@@ -10144,53 +10207,77 @@ namespace ets2
       LCC_Controller_Y.wheel_rate_cmd_rad_s = ((pv[7] * 0.0 + pv[6]) - pv[0]) *
         vs / 6.0 * Lw / (kmh * kmh + 1.0);
       if (c_k == 3) {
-        // Outport: '<Root>/status'
         LCC_Controller_Y.status = 3U;
       } else {
-        // Outport: '<Root>/status'
         LCC_Controller_Y.status = 2U;
       }
     } else {
       // Outport: '<Root>/wheel_rate_cmd_rad_s'
-      LCC_Controller_Y.wheel_rate_cmd_rad_s = 0.7 * rtb_conv_idx_1 * std::fmin
-        (std::fmax(eys + ub, -1.0), 1.0) - ec *
-        LCC_Controller_Y.wheel_angle_cmd_rad;
-
-      // Outport: '<Root>/status'
+      LCC_Controller_Y.wheel_rate_cmd_rad_s = 0.7 * d_i * std::fmin(std::fmax
+        (epsis + ub, -1.0), 1.0) - ec * LCC_Controller_Y.wheel_angle_cmd_rad;
       LCC_Controller_Y.status = 1U;
       tmp_1[14] = LCC_Controller_DW.B[1];
       tmp_1[15] = LCC_Controller_DW.B[2];
       tmp_1[16] = LCC_Controller_DW.B[8];
       tmp_1[17] = LCC_Controller_DW.B[9];
       for (i = 0; i < 7; i++) {
-        c_k = i << 1;
-        tmp_1[c_k] = LCC_Controller_DW.A[7 * i + 1];
-        tmp_1[c_k + 1] = LCC_Controller_DW.A[7 * i + 2];
-        x0_1[i] = x0[i];
+        i_0 = i << 1;
+        tmp_1[i_0] = LCC_Controller_DW.A[7 * i + 1];
+        tmp_1[i_0 + 1] = LCC_Controller_DW.A[7 * i + 2];
+        x0_0[i] = x0[i];
       }
 
-      x0_1[7] = eys;
-      x0_1[8] = md[0];
+      x0_0[7] = epsis;
+      x0_0[8] = md[0];
       vs = 0.0;
-      rtb_conv_idx_1 = 0.0;
+      d_i = 0.0;
       for (i = 0; i < 9; i++) {
-        epsis = x0_1[i];
+        eys = x0_0[i];
         c_k = i << 1;
-        vs += tmp_1[c_k] * epsis;
-        rtb_conv_idx_1 += tmp_1[c_k + 1] * epsis;
+        vs += tmp_1[c_k] * eys;
+        d_i += tmp_1[c_k + 1] * eys;
       }
 
       LCC_Controller_DW.memory_DSTATE[0] = vs;
       LCC_Controller_DW.memory_DSTATE[1] = ds;
       LCC_Controller_DW.memory_DSTATE[2] = 1.0;
-      LCC_Controller_DW.memory_DSTATE[3] = rtb_conv_idx_1;
+      LCC_Controller_DW.memory_DSTATE[3] = d_i;
       LCC_Controller_DW.memory_DSTATE[4] = ub;
-      LCC_Controller_DW.memory_DSTATE[5] = eys;
-      LCC_Controller_DW.memory_DSTATE[6] = d_i;
+      LCC_Controller_DW.memory_DSTATE[5] = epsis;
+      LCC_Controller_DW.memory_DSTATE[6] = e_i;
       LCC_Controller_DW.memory_DSTATE[7] = past_idx_1;
     }
 
     // End of MATLAB Function: '<S1>/MPC_Post'
+
+    // Outport: '<Root>/predicted_offset_m' incorporates:
+    //   MATLAB Function: '<S1>/MPC_Pred'
+
+    std::memset(&LCC_Controller_Y.predicted_offset_m[0], 0, sizeof(double) << 4U);
+
+    // Outport: '<Root>/predicted_heading_rad' incorporates:
+    //   MATLAB Function: '<S1>/MPC_Pred'
+
+    std::memset(&LCC_Controller_Y.predicted_heading_rad[0], 0, sizeof(double) <<
+                4U);
+
+    // MATLAB Function: '<S1>/MPC_Pred'
+    if (LCC_Controller_Y.status == 1) {
+      for (i = 0; i < 16; i++) {
+        // Outport: '<Root>/predicted_offset_m'
+        LCC_Controller_Y.predicted_offset_m[i] = LCC_Controller_DW.Bu[5 * i];
+
+        // Outport: '<Root>/predicted_heading_rad'
+        LCC_Controller_Y.predicted_heading_rad[i] = LCC_Controller_DW.Bu[5 * i +
+          76];
+      }
+    }
+
+    // Outport: '<Root>/predicted_dt_s' incorporates:
+    //   MATLAB Function: '<S1>/MPC_Pred'
+
+    LCC_Controller_Y.predicted_dt_s = 0.1;
+
     // End of Outputs for SubSystem: '<Root>/LCC_Controller'
   }
 

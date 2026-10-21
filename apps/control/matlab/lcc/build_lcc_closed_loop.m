@@ -87,6 +87,9 @@ for i = 1:numel(outs), add_block("simulink/Sinks/Out1", cm + "/" + outs(i), "Por
 add_block("simulink/Ports & Subsystems/Model", cm + "/Controller", "ModelName", "LCC_Controller");
 for i = 1:9, ln(cm, ins(i) + "/1", "Controller/" + i); end
 for i = 1:3, ln(cm, "Controller/" + i, outs(i) + "/1"); end
+for i = 4:6   % predicted trajectory (predicted_offset_m, predicted_heading_rad, predicted_dt_s): not used here
+    add_block("simulink/Sinks/Terminator", cm + "/unused_pred" + i); ln(cm, "Controller/" + i, "unused_pred" + i + "/1");
+end
 add_block("simulink/Sinks/Terminator", cm + "/unused_kappa_back"); ln(cm, "kappa_back/1", "unused_kappa_back/1");
 set_param(cm, "VariantControl", "LCC_CTRL == 2");
 set_param(vs, "VariantActivationTime", "update diagram");

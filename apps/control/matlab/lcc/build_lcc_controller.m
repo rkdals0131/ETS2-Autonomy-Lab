@@ -1,13 +1,16 @@
 function model = build_lcc_controller()
 %BUILD_LCC_CONTROLLER Create LCC_Controller.slx (the lateral MPC that is turned into C++).
 %   build_lcc_controller() rebuilds LCC_Controller.slx in this folder. Root I/O follows the
-%   node contract (9 inputs, 3 outputs, README.md "입출력 계약"). Everything sits in the atomic
+%   node contract (9 inputs, 3 outputs, README.md "입출력 계약") plus the predicted trajectory
+%   (predicted_offset_m, predicted_heading_rad, predicted_dt_s). Everything sits in the atomic
 %   subsystem "LCC_Controller":
 %     MPC_Prep   (MATLAB Function -> lcc_mpc_prep.m: model at this speed, state, previewed
 %                 curvature, references, steering-rate bounds, bias observer, fallback law)
 %     MPC        (Adaptive MPC Controller, mpcLcc from lcc_design_mpc.m; the plant model is
 %                 replaced every step through the model bus A, B, C, D, X, U, Y, DX)
 %     MPC_Post   (MATLAB Function -> lcc_mpc_post.m: wheel angle / rate command, status)
+%     MPC_Pred   (MATLAB Function -> lcc_mpc_pred.m: ey, epsi of the optimal state sequence
+%                 x.seq every 0.1 s over the horizon, valid in status 1)
 %     memory     (Unit Delay: [epsi_pred; kb; mpc_active; delta_pred; ub; u(k-1) .. u(k-nd-1)])
 %   The model workspace runs lcc_controller_params(); the InitFcn puts mpcLcc in the base
 %   workspace (lcc_controller_init). Fixed step 0.02 s, ERT / C++ class (lcc_codegen_config).
@@ -36,7 +39,9 @@ ins = {"enable", "boolean", "1"; "speed_mps", "double", "1"; "lateral_error_m", 
        "heading_error_rad", "double", "1"; "curvature_preview", "double", num2str(C.n_preview);
        "wheel_angle_rad", "double", "1"; "wheelbase_m", "double", "1";
        "trailer_connected", "boolean", "1"; "hitch_angle_rad", "double", "1"};
-outs = {"wheel_angle_cmd_rad", "double"; "wheel_rate_cmd_rad_s", "double"; "status", "uint8"};
+outs = {"wheel_angle_cmd_rad", "double", "1"; "wheel_rate_cmd_rad_s", "double", "1"; "status", "uint8", "1";
+        "predicted_offset_m", "double", num2str(C.pred.n); "predicted_heading_rad", "double", num2str(C.pred.n);
+        "predicted_dt_s", "double", "1"};
 for i = 1:size(ins, 1)
     add_block("simulink/Sources/In1", model + "/" + ins{i, 1}, "Port", num2str(i), ...
         "OutDataTypeStr", ins{i, 2}, "PortDimensions", ins{i, 3}, "SampleTime", "C.Ts", ...
@@ -44,7 +49,7 @@ for i = 1:size(ins, 1)
 end
 for i = 1:size(outs, 1)
     add_block("simulink/Sinks/Out1", model + "/" + outs{i, 1}, "Port", num2str(i), ...
-        "OutDataTypeStr", outs{i, 2}, "Position", [900 100+60*i 930 114+60*i]);
+        "OutDataTypeStr", outs{i, 2}, "PortDimensions", outs{i, 3}, "Position", [900 100+60*i 930 114+60*i]);
 end
 sub = model + "/LCC_Controller";
 add_block("simulink/Ports & Subsystems/Subsystem", sub, "Position", [400 80 620 520]);
@@ -90,8 +95,8 @@ mpcb = sub + "/MPC";
 add_block("mpclib/Adaptive MPC Controller", mpcb);
 lcc_controller_init();
 set_param(mpcb, "mpcobj", "mpcLcc", "state_inport", "on", "md_inport", "on", "mv_inport", "on", ...
-    "umin_inport", "on", "umax_inport", "on", "return_qpstatus", "on");
-% ports: 1 model 2 x[k|k] 3 ref 4 md 5 ext.mv 6 umin 7 umax
+    "umin_inport", "on", "umax_inport", "on", "return_qpstatus", "on", "return_xseq", "on");
+% ports: 1 model 2 x[k|k] 3 ref 4 md 5 ext.mv 6 umin 7 umax; out 1 mv, qp.status, x.seq (by name)
 ln(sub, "model_bus/1", "MPC/1"); ln(sub, "MPC_Prep/5", "MPC/2"); ln(sub, "MPC_Prep/7", "MPC/3");
 ln(sub, "MPC_Prep/6", "MPC/4"); ln(sub, "MPC_Prep/10", "MPC/5"); ln(sub, "MPC_Prep/8", "MPC/6");
 ln(sub, "MPC_Prep/9", "MPC/7");
@@ -99,7 +104,8 @@ ln(sub, "MPC_Prep/9", "MPC/7");
 mfun(sub, "MPC_Post", strjoin([
 "function [wheel_angle_cmd, wheel_rate_cmd, status, mem] = MPC_Post(mv, qp_status, mode, fb_angle, fb_rate, x0, md, obs, pred_rows, delta, conv, C)"
 "[wheel_angle_cmd, wheel_rate_cmd, status, mem] = lcc_mpc_post(mv, qp_status, mode, fb_angle, fb_rate, x0, md(1), obs, pred_rows, delta, conv, C);"], newline), rt);
-ln(sub, "MPC/1", "MPC_Post/1"); ln(sub, "MPC/2", "MPC_Post/2"); ln(sub, "MPC_Prep/11", "MPC_Post/3");
+qport = "MPC/" + mpc_outport(mpcb, "qp.status"); xport = "MPC/" + mpc_outport(mpcb, "x.seq");
+ln(sub, "MPC/1", "MPC_Post/1"); ln(sub, qport, "MPC_Post/2"); ln(sub, "MPC_Prep/11", "MPC_Post/3");
 ln(sub, "MPC_Prep/12", "MPC_Post/4"); ln(sub, "MPC_Prep/13", "MPC_Post/5"); ln(sub, "MPC_Prep/5", "MPC_Post/6");
 ln(sub, "MPC_Prep/6", "MPC_Post/7"); ln(sub, "MPC_Prep/14", "MPC_Post/8"); ln(sub, "MPC_Prep/15", "MPC_Post/9");
 ln(sub, "wheel_angle_rad/1", "MPC_Post/10"); ln(sub, "MPC_Prep/16", "MPC_Post/11");
@@ -107,6 +113,23 @@ add_block("simulink/Discrete/Unit Delay", sub + "/memory", "SampleTime", "C.Ts",
 ln(sub, "MPC_Post/4", "memory/1"); ln(sub, "memory/1", "MPC_Prep/10");
 ln(sub, "MPC_Post/1", "wheel_angle_cmd_rad/1"); ln(sub, "MPC_Post/2", "wheel_rate_cmd_rad_s/1");
 ln(sub, "MPC_Post/3", "status/1");
+
+% predicted trajectory (outputs only)
+mfun(sub, "MPC_Pred", strjoin([
+"function [pred_ey, pred_epsi, pred_dt] = MPC_Pred(xseq, status, C)"
+"[pred_ey, pred_epsi, pred_dt] = lcc_mpc_pred(xseq, status, C);"], newline), rt);
+ln(sub, xport, "MPC_Pred/1"); ln(sub, "MPC_Post/3", "MPC_Pred/2");
+ln(sub, "MPC_Pred/1", "predicted_offset_m/1"); ln(sub, "MPC_Pred/2", "predicted_heading_rad/1");
+ln(sub, "MPC_Pred/3", "predicted_dt_s/1");
+end
+
+function n = mpc_outport(mpcb, name)
+% output port number of the MPC block's outport called name (the numbering depends on the options)
+ports = find_system(mpcb, "LookUnderMasks", "all", "FollowLinks", "on", "SearchDepth", 1, "BlockType", "Outport");
+names = string(get_param(ports, "Name"));
+k = find(names == name, 1);
+if isempty(k), error("build_lcc_controller:port", "MPC block has no outport %s (%s)", name, strjoin(names, ", ")); end
+n = string(get_param(ports{k}, "Port"));
 end
 
 function mfun(sub, name, script, rt)

@@ -116,7 +116,7 @@ docs/31의 트레일러 연결 유효 축간거리 3.18 → 3.30 m(언더스티�
 
 ## 제어기: `LCC_Controller.slx` (서브시스템 `LCC_Controller`, 0.02 s, 원자 서브시스템)
 
-`MPC_Prep`(MATLAB Function → `lcc_mpc_prep.m`) → `model_bus`(A, B, C, D, X, U, Y, DX) → `MPC`(Adaptive MPC Controller, `mpcLcc`) → `MPC_Post`(→ `lcc_mpc_post.m`), 마지막 상태 `[예측 헤딩 오차; 곡률 바이어스; MPC 활성; u(k−1); u(k−2); u(k−3)]`은 Unit Delay `memory`로 돌아갑니다.
+`MPC_Prep`(MATLAB Function → `lcc_mpc_prep.m`) → `model_bus`(A, B, C, D, X, U, Y, DX) → `MPC`(Adaptive MPC Controller, `mpcLcc`) → `MPC_Post`(→ `lcc_mpc_post.m`), 그리고 MPC 블록의 최적 상태열 `x.seq` → `MPC_Pred`(→ `lcc_mpc_pred.m`, 예측 궤적 출력, 아래). 마지막 상태 `[예측 헤딩 오차; 곡률 바이어스; MPC 활성; u(k−1); u(k−2); u(k−3)]`은 Unit Delay `memory`로 돌아갑니다.
 
 **왜 Adaptive MPC인가.** 예측 모델은 속도 v에 대해 거의 선형으로 바뀌고(v·e_ψ, v/L·δ, v²·κ), 한 지평선(1.5 s) 안에서는 속도가 거의 일정합니다. 그래서 매 스텝 현재 속도·축간거리·트레일러 여부로 모델 하나를 만들어 넣는 Adaptive MPC가 맞습니다. LTV(지평선의 스텝마다 다른 모델)는 속도 변화가 없으면 같은 결과에 계산만 늘고, 게인 스케줄 MPC는 속도 구간마다 제어기를 따로 둬서 생성 코드가 커지고 축간거리(태그 상태)와 트레일러 조합까지 나눠야 합니다.
 
@@ -155,6 +155,9 @@ docs/31의 트레일러 연결 유효 축간거리 3.18 → 3.30 m(언더스티�
 | `wheel_angle_cmd_rad` | double | VirtualEps 목표 × 0.70. status 1이면 입력 `wheel_angle_rad` 그대로(측정 각: VirtualEps P항 0), 2·3이면 폴백의 목표 각 |
 | `wheel_rate_cmd_rad_s` | double | VirtualEps 피드포워드(`desired_rate = wheel_rate_cmd / 0.70`). status 1이면 0.70·a(v)·s − c(v)·δ_측정(a, c는 virtual_eps.hpp 표, s = 계획한 u + 입력 바이어스 u_b)이라 VirtualEps가 `(rate/0.70 + c·applied)/a` = s를 보냄 |
 | `status` | uint8 | 위 0–4 |
+| `predicted_offset_m` | double[16] | MPC 계획의 예측 횡오차(기준점, 왼쪽 +, m). 점 i = 입력 시각 + i·0.1 s(i = 0..15, 0–1.5 s), 점 0은 입력 `lateral_error_m` 그대로. status 1에서만 유효, 그 밖은 0 |
+| `predicted_heading_rad` | double[16] | 같은 시각의 예측 헤딩 오차(yaw − 기준 헤딩, rad). 점 0은 입력 `heading_error_rad`. status 1에서만 유효 |
+| `predicted_dt_s` | double | 점 간격 0.1 s(상수, `C.pred.every`·`C.Ts`) |
 
 요청한 계약에서 필드는 바꾼 것이 없고, status 3(저속)과 4(입력 이상)을 더했습니다. 2026-10-21 재설계로 status 1의 두 출력은 "계획 각과 그 각속도"가 아니라 "VirtualEps가 계획한 u를 그대로 보내게 하는 값"이 됐습니다. 그래서 노드는 (1) VirtualEps에 이 두 값을 지금처럼 `/0.70`으로 넘기고, (2) VirtualEps의 `applied`에 `wheel_angle_rad / 0.70`과 같은 값(`drive->steering_applied`)을 주고, (3) `steering_rate_limit` 0, (4) `steering_angle_per_unit_rad` 0.70, (5) virtual_eps.hpp 표 = `C.eps`를 지켜야 합니다. VirtualEps의 대역폭(`steering_bandwidth`)은 MPC가 조향하는 동안 쓰이지 않습니다. 계획은 AssistState의 `steering_input`(u)으로 봅니다.
 
@@ -241,6 +244,18 @@ docs/31의 트레일러 연결 유효 축간거리 3.18 → 3.30 m(언더스티�
 - 바퀴 각속도는 곡선에서 MPC가 베이스라인의 0.25–0.75배입니다(재설계 전에는 1.3–3배). 저속 급곡선(R40·R60)만 1.6–2배입니다(0.12–0.17 rad/s).
 - 큰 초기 오차(합류 없이 바로 켬)는 위 표처럼 재설계 전보다 넘침이 큽니다. 노드는 합류 기준을 쓰므로 `SoftEngagement`(최대 횡가속 0.5 m/s², 넘침 6–8 mm)가 실제 경우입니다.
 - 직선 흔들림 같은 느린 외란은 베이스라인(적분 없음)이 RMS 13–36 mm, MPC가 1.1–5.5 mm입니다(재설계 전 0.5–1.8 mm: 저크 가중 때문에 빠른 성분을 덜 누름). 외란 모양을 요레이트 외란으로 가정했으므로 게임에서 이만큼 좋아질지는 모릅니다(추정).
+
+### 예측 궤적 출력 (2026-10-21)
+
+Foxglove에서 "제어기가 무엇을 계획했나"를 그리려고 MPC의 계획을 출력에 더했습니다. 제어 동작은 바뀌지 않습니다(출력만 추가).
+
+- 출처: Adaptive MPC 블록의 최적 상태열 출력(`return_xseq`, `x.seq`, (p+1) × 7, 행 j+1 = x(k+j|k), 행 1 = `lcc_mpc_prep`의 x0)에서 상태 e_y·e_ψ를 5 스텝(0.1 s)마다 16개 뽑습니다(`lcc_mpc_pred.m`, `C.pred.every` 5, `C.pred.n` 16). 지평선 75 스텝 = 1.5 s가 마지막 점입니다. QP를 다시 풀거나 따로 적분하지 않고, 이번 스텝에 보낸 입력을 정한 바로 그 계획입니다(이동 블로킹된 입력열과 지연 중인 입력 3개, 미리보기 곡률 + 곡률 바이어스를 다 포함). 게임에는 u + u_b(입력 바이어스)가 가지만, u_b가 게임 조향을 모델처럼 만들려고 더하는 값이라 계획은 u의 모델 응답 그대로 봅니다.
+- 기준: 입력 `lateral_error_m`·`heading_error_rad`와 같은 기준입니다. 노드가 합류 기준(`LaneMerge`)을 쓰는 동안은 차로가 아니라 합류 기준에 대한 오차입니다. 시각 i·0.1 s의 점을 세계 좌표로 그리려면 대략 s_i = s + v·i·0.1(입력의 차로 거리 s, 속도 v; 곡률·헤딩 오차에 의한 차이는 1.5 s에서 무시할 만함)에서 차로 점을 차로 법선 왼쪽으로 (합류 기준 오프셋(s_i) + predicted_offset_m[i])만큼, 헤딩은 차로 헤딩(s_i) + 합류 기준 헤딩(s_i) + predicted_heading_rad[i]입니다. 점은 MPC 기준점(노드의 뒤 기준점, 태그 올림이면 구동축)의 위치입니다.
+- 유효: status 1에서만 계획이고, 0·2·3·4에서는 0입니다(래퍼도 그 경우 배열을 0으로 둠). `predicted_dt_s`는 항상 0.1입니다.
+- 래퍼: `LccMpc::Output`의 `predicted_offset_m`, `predicted_heading_rad`(`std::array<double, LccMpc::predicted_points>`, 16), `predicted_dt_s`. 기존 필드와 그 뜻은 그대로입니다.
+- 시험: `lateral_sim_test`의 `LateralSim.ModelPredictivePlan`(트럭 단독 측정 조향 플랜트, 게임 3프레임 지연, 80 km/h). 1 m 오프셋에서 바로 켤 때 첫 계획은 1.000 → 0.771(0.5 s) → 0.109(1.0 s) → 최저 −0.089(1.4 s) → −0.066 m(1.5 s)이고 실제 트럭이 첫 1 s 동안 그 계획을 2.4 cm 안으로 따라갑니다(넘침 −67 mm도 계획에 이미 있음). 모든 계획의 점 0은 측정 상태와 1e-9 안으로 같습니다. R400 정상 곡선에서는 계획 횡오차 최대 2.7 mm, 계획 헤딩 오차와 측정값의 차 최대 0.3 mrad입니다.
+- SIL 검증(예측 출력 추가 뒤, 같은 4개 시나리오): 기존 출력 3개 최대 차이 바퀴각 0, 각속도 3.5e-13 rad/s, status 0, 예측 횡오차 4.3e-12 m, 예측 헤딩 오차 4.6e-13 rad로 통과(|차이| ≤ 1e-9, `verify_lcc_codegen`이 이제 예측 출력도 비교). 이때 SIL 디버그 빌드 스텝 평균 4.0–6.0 ms는 다른 MATLAB·시험이 같이 돌 때라 아래 표와 비교할 수 없습니다(추가 계산은 상태열 한 번 복사와 32개 골라내기뿐).
+- 이 출력을 더한 전과 후에 `lateral_sim_test`의 모든 시험 출력(지표 표 134줄)이 같았고, `CorneringWithGameDelay` 72개 실행의 스텝별 기록(`ETS2_CORNER_CSV`: 오프셋, 헤딩 오차, 조향, MPC 각·각속도, 입력)도 같았습니다.
 
 ## 코드 생성 (`generate_lcc_code`, `verify_lcc_codegen`, `compile_generated`)
 

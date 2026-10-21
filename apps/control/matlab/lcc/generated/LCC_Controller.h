@@ -9,7 +9,7 @@
 //
 // Model version                  : 1.1
 // Simulink Coder version         : 26.2 (R2026b) 22-May-2026
-// C/C++ source code generated on : Wed Oct 21 17:53:43 2026
+// C/C++ source code generated on : Wed Oct 21 21:25:50 2026
 //
 // Target selection: ert.tlc
 // Embedded hardware selection: Intel->x86-64 (Windows64)
@@ -57,9 +57,10 @@ namespace ets2
       double Bu[532];
       double Bv[1064];
       double Dv[912];
-      double r[2212];
-      double t[48032];
-      double v[2844];
+      double xseq[532];
+      double u[2212];
+      double w[48032];
+      double y[2844];
       double c_SuJm[3600];
       double c_Sx[3150];
       double c_Hv[68400];
@@ -68,21 +69,21 @@ namespace ets2
       double I2Jm[600];
       double WySuJm[3600];
       double WuI2Jm[600];
-      double y[600];
+      double y_m[600];
       double CA[912];
-      double freq;                     // '<S33>/FixedHorizonOptimizer'
-      bool Memory_PreviousInput[316];  // '<S5>/Memory'
-      bool freq_not_empty;             // '<S33>/FixedHorizonOptimizer'
+      double freq;                     // '<S34>/FixedHorizonOptimizer'
+      bool Memory_PreviousInput[316];  // '<S6>/Memory'
+      bool freq_not_empty;             // '<S34>/FixedHorizonOptimizer'
     };
 
     // Invariant block signals (default storage)
     struct ConstB_LCC_Controller_T {
-      double MathFunction[6];          // '<S5>/Math Function'
-      double MathFunction1;            // '<S5>/Math Function1'
-      double MathFunction2;            // '<S5>/Math Function2'
-      double Reshape3[6];              // '<S5>/Reshape3'
-      double Reshape4;                 // '<S5>/Reshape4'
-      double Reshape5;                 // '<S5>/Reshape5'
+      double MathFunction[6];          // '<S6>/Math Function'
+      double MathFunction1;            // '<S6>/Math Function1'
+      double MathFunction2;            // '<S6>/Math Function2'
+      double Reshape3[6];              // '<S6>/Reshape3'
+      double Reshape4;                 // '<S6>/Reshape4'
+      double Reshape5;                 // '<S6>/Reshape5'
     };
 
     // External inputs (root inport signals with default storage)
@@ -103,6 +104,9 @@ namespace ets2
       double wheel_angle_cmd_rad;      // '<Root>/wheel_angle_cmd_rad'
       double wheel_rate_cmd_rad_s;     // '<Root>/wheel_rate_cmd_rad_s'
       uint8_t status;                  // '<Root>/status'
+      double predicted_offset_m[16];   // '<Root>/predicted_offset_m'
+      double predicted_heading_rad[16];// '<Root>/predicted_heading_rad'
+      double predicted_dt_s;           // '<Root>/predicted_dt_s'
     };
 
     // Real-time Model Data Structure
@@ -166,7 +170,7 @@ namespace ets2
     DW_LCC_Controller_T LCC_Controller_DW;
 
     // private member function(s) for subsystem '<Root>'
-    double LCC_Controller_norm_a(const double x[25]);
+    double LCC_Controller_norm_j(const double x[25]);
     void LCC_Controller_xzgetrf(double A[25], int32_t ipiv[5], int32_t *info);
     void LCC_Controller_xtrsm(const double A[25], double B[25]);
     void LCC_Controller_inv(const double x[25], double y[25]);
@@ -176,16 +180,16 @@ namespace ets2
       const double A4[25], const double A6[25], int32_t m, double F[25]);
     void LCC_Controll_recomputeBlockDiag(const double A[25], double F[25], const
       int32_t blockFormat[4]);
-    double LCC_Controller_xnrm2_e(int32_t n, const double x[25], int32_t ix0);
+    double LCC_Controller_xnrm2_l(int32_t n, const double x[25], int32_t ix0);
     void LCC_Controller_xzsyhetrd(double A[25], double D[5], double E[4], double
       tau[4]);
     void LCC_Controller_xzlascl(double cfrom, double cto, int32_t m, int32_t n,
       double A[5], int32_t iA0, int32_t lda);
-    void LCC_Controller_xzlascl_o(double cfrom, double cto, int32_t m, int32_t n,
+    void LCC_Controller_xzlascl_p(double cfrom, double cto, int32_t m, int32_t n,
       double A[4], int32_t iA0, int32_t lda);
     void LCC_Controller_xzlartg(double f, double g, double *cs, double *sn,
       double *r);
-    void LCC_Controller_rotateRight_j(int32_t m, int32_t n, double z[25],
+    void LCC_Controller_rotateRight_k(int32_t m, int32_t n, double z[25],
       int32_t iz0, int32_t ldz, const double cs[8], int32_t ic0, int32_t is0);
     void LCC_Controller_xdlaev2(double a, double b, double c, double *rt1,
       double *rt2, double *cs1, double *sn1);
@@ -199,6 +203,8 @@ namespace ets2
       *steady_slip, double rack[2]);
     int32_t LCC_Controller_xpotrf(double b_A[81]);
     double LCC_Controller_minimum(const double x[9]);
+    void LCC_Contr_validateHessianMatrix(double b_H[81], double L[81], double
+      *BadH);
     void LCC_Controller_trisolve(const double b_A[81], double b_B[81]);
     void LCC_Controller_tic(double *tstart_tv_sec, double *tstart_tv_nsec);
     double LCC_Controller_norm(const double x[9]);
@@ -239,10 +245,9 @@ extern const ets2::LccController::ConstB_LCC_Controller_T LCC_Controller_ConstB;
 //-
 //  These blocks were eliminated from the model due to optimizations:
 //
-//  Block '<S5>/Constant' : Unused code path elimination
-//  Block '<S5>/Floor' : Unused code path elimination
-//  Block '<S5>/Floor1' : Unused code path elimination
-//  Block '<S6>/Matrix Dimension Check' : Unused code path elimination
+//  Block '<S6>/Constant' : Unused code path elimination
+//  Block '<S6>/Floor' : Unused code path elimination
+//  Block '<S6>/Floor1' : Unused code path elimination
 //  Block '<S7>/Matrix Dimension Check' : Unused code path elimination
 //  Block '<S8>/Matrix Dimension Check' : Unused code path elimination
 //  Block '<S9>/Matrix Dimension Check' : Unused code path elimination
@@ -262,17 +267,18 @@ extern const ets2::LccController::ConstB_LCC_Controller_T LCC_Controller_ConstB;
 //  Block '<S23>/Matrix Dimension Check' : Unused code path elimination
 //  Block '<S24>/Matrix Dimension Check' : Unused code path elimination
 //  Block '<S25>/Matrix Dimension Check' : Unused code path elimination
-//  Block '<S26>/Vector Dimension Check' : Unused code path elimination
+//  Block '<S26>/Matrix Dimension Check' : Unused code path elimination
 //  Block '<S27>/Vector Dimension Check' : Unused code path elimination
 //  Block '<S28>/Vector Dimension Check' : Unused code path elimination
 //  Block '<S29>/Vector Dimension Check' : Unused code path elimination
 //  Block '<S30>/Vector Dimension Check' : Unused code path elimination
 //  Block '<S31>/Vector Dimension Check' : Unused code path elimination
-//  Block '<S5>/Min' : Unused code path elimination
-//  Block '<S5>/last_x' : Unused code path elimination
 //  Block '<S32>/Vector Dimension Check' : Unused code path elimination
-//  Block '<S5>/useq_scale' : Unused code path elimination
-//  Block '<S5>/useq_scale1' : Unused code path elimination
+//  Block '<S6>/Min' : Unused code path elimination
+//  Block '<S6>/last_x' : Unused code path elimination
+//  Block '<S33>/Vector Dimension Check' : Unused code path elimination
+//  Block '<S6>/useq_scale' : Unused code path elimination
+//  Block '<S6>/useq_scale1' : Unused code path elimination
 //  Block '<S2>/m_zero' : Unused code path elimination
 //  Block '<S2>/p_zero' : Unused code path elimination
 
@@ -295,37 +301,38 @@ extern const ets2::LccController::ConstB_LCC_Controller_T LCC_Controller_ConstB;
 //  '<S1>'   : 'LCC_Controller/LCC_Controller'
 //  '<S2>'   : 'LCC_Controller/LCC_Controller/MPC'
 //  '<S3>'   : 'LCC_Controller/LCC_Controller/MPC_Post'
-//  '<S4>'   : 'LCC_Controller/LCC_Controller/MPC_Prep'
-//  '<S5>'   : 'LCC_Controller/LCC_Controller/MPC/MPC'
-//  '<S6>'   : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check'
-//  '<S7>'   : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check A'
-//  '<S8>'   : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check B'
-//  '<S9>'   : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check C'
-//  '<S10>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check D'
-//  '<S11>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check DX'
-//  '<S12>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check U'
-//  '<S13>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check X'
-//  '<S14>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check Y'
-//  '<S15>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check1'
-//  '<S16>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check2'
-//  '<S17>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check'
-//  '<S18>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check1'
-//  '<S19>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check2'
-//  '<S20>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check3'
-//  '<S21>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check4'
-//  '<S22>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check5'
-//  '<S23>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check6'
-//  '<S24>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check7'
-//  '<S25>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check8'
-//  '<S26>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Scalar Signal Check'
-//  '<S27>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Scalar Signal Check1'
-//  '<S28>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Scalar Signal Check2'
-//  '<S29>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Vector Signal Check'
-//  '<S30>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Vector Signal Check1'
-//  '<S31>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Vector Signal Check6'
-//  '<S32>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/moorx'
-//  '<S33>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/optimizer'
-//  '<S34>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/optimizer/FixedHorizonOptimizer'
+//  '<S4>'   : 'LCC_Controller/LCC_Controller/MPC_Pred'
+//  '<S5>'   : 'LCC_Controller/LCC_Controller/MPC_Prep'
+//  '<S6>'   : 'LCC_Controller/LCC_Controller/MPC/MPC'
+//  '<S7>'   : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check'
+//  '<S8>'   : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check A'
+//  '<S9>'   : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check B'
+//  '<S10>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check C'
+//  '<S11>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check D'
+//  '<S12>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check DX'
+//  '<S13>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check U'
+//  '<S14>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check X'
+//  '<S15>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check Y'
+//  '<S16>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check1'
+//  '<S17>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Matrix Signal Check2'
+//  '<S18>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check'
+//  '<S19>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check1'
+//  '<S20>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check2'
+//  '<S21>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check3'
+//  '<S22>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check4'
+//  '<S23>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check5'
+//  '<S24>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check6'
+//  '<S25>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check7'
+//  '<S26>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Preview Signal Check8'
+//  '<S27>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Scalar Signal Check'
+//  '<S28>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Scalar Signal Check1'
+//  '<S29>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Scalar Signal Check2'
+//  '<S30>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Vector Signal Check'
+//  '<S31>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Vector Signal Check1'
+//  '<S32>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/MPC Vector Signal Check6'
+//  '<S33>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/moorx'
+//  '<S34>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/optimizer'
+//  '<S35>'  : 'LCC_Controller/LCC_Controller/MPC/MPC/optimizer/FixedHorizonOptimizer'
 
 #endif                                 // LCC_CONTROLLER_H_
 
