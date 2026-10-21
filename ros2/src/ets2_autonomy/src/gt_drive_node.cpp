@@ -84,7 +84,7 @@ int main(int argc,char** argv) {
     std::map<uint32_t,AxleWheel> axle_wheels;std::map<uint32_t,bool> grounded;
     Clock::time_point pose_time{},traffic_time{};
     builtin_interfaces::msg::Time pose_stamp; // simulation time: the HUD marks' TTL runs on it
-    struct Actor {uint64_t id;double x,y,yaw,speed,length,width;};std::vector<Actor> actors;
+    struct Actor {uint64_t id;double x,y,yaw,speed,length,width,z,height;};std::vector<Actor> actors;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr ps;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr config;
     rclcpp::Subscription<ets2_msgs::msg::WheelState>::SharedPtr ws;
@@ -135,10 +135,11 @@ int main(int argc,char** argv) {
         ts=node->create_subscription<ets2_msgs::msg::TrafficState>("/ets2/ground_truth/traffic",rclcpp::QoS(1),[&](ets2_msgs::msg::TrafficState::SharedPtr msg) {
             if(!msg->available || msg->header.frame_id!="world") throw std::runtime_error("GT traffic unavailable: "+msg->error);
             const auto n=msg->id.size();
-            if(msg->x.size()!=n || msg->y.size()!=n || msg->yaw.size()!=n || msg->speed_mps.size()!=n || msg->length_m.size()!=n || msg->width_m.size()!=n) throw std::runtime_error("Misaligned GT traffic arrays");
+            if(msg->x.size()!=n || msg->y.size()!=n || msg->yaw.size()!=n || msg->speed_mps.size()!=n || msg->length_m.size()!=n || msg->width_m.size()!=n ||
+               msg->z.size()!=n || msg->height_m.size()!=n) throw std::runtime_error("Misaligned GT traffic arrays");
             actors.clear();
             for(size_t i=0;i<n;++i) {
-                Actor a{msg->id[i],msg->x[i],msg->y[i],msg->yaw[i],msg->speed_mps[i],msg->length_m[i],msg->width_m[i]};
+                Actor a{msg->id[i],msg->x[i],msg->y[i],msg->yaw[i],msg->speed_mps[i],msg->length_m[i],msg->width_m[i],msg->z[i],msg->height_m[i]};
                 if(!std::isfinite(a.x)||!std::isfinite(a.y)||!std::isfinite(a.yaw)||!std::isfinite(a.speed)||!std::isfinite(a.length)||!std::isfinite(a.width)||a.length<=0||a.width<=0) throw std::runtime_error("Invalid GT traffic actor");
                 actors.push_back(a);
             }
@@ -256,10 +257,20 @@ int main(int argc,char** argv) {
         // ahead at least 5 m + 0.5 s + 3 s of closing ahead of the front bumper, the one behind
         // at least 5 m + 3 s of its closing behind the rear (trailer included). front and rear
         // are from the lane's reference point at lane distance s.
+        // A vehicle on another level (an overpass, or the road under the truck's bridge) crosses
+        // the lane in plan view: its underside is more than 4 m from the road height expected
+        // there, the truck's height carried along the current grade. Road surfaces of grade-
+        // separated crossings are 6 m or more apart; the grade's error over a crest is about
+        // 1 m at 80 m and 2-3 m at 150 m. Without heights (core before 0.47.1) none is.
+        const auto other_level=[&](const Actor& a,double ahead) {
+            if(!std::isfinite(a.z) || !std::isfinite(a.height)) return false;
+            const double road=ego_z+std::tan(std::isfinite(grade.grade)?grade.grade:0.0)*ahead;
+            return std::abs(a.z-a.height/2-road)>4;
+        };
         const auto gap_problem=[&](const LanePath& target,double s,double front,double rear,double v)->std::pair<std::string,uint64_t> {
             for(const auto& a:actors) {
                 const auto p=target.project(a.x,a.y,std::max(0.0,s-200),s+200);
-                if(!(p.d<=(target.width+a.width)/2)) continue;
+                if(!(p.d<=(target.width+a.width)/2) || other_level(a,p.s-s)) continue;
                 const auto& A=target.points[p.segment];const auto& B=target.points[p.segment+1];
                 if(std::cos(a.yaw-std::atan2(B.y-A.y,B.x-A.x))<=0) continue;
                 const auto ahead=p.s-a.length/2-(s+front),behind=(s-rear)-(p.s+a.length/2);
@@ -511,7 +522,7 @@ int main(int argc,char** argv) {
                     lateral=std::abs(-dx*std::sin(ego_yaw)+dy*std::cos(ego_yaw));heading=ego_yaw;
                 }
                 const auto lane_width=lane?lane->width:3.5;
-                if(ahead<=0 || lateral>(lane_width+actor.width)/2 || std::cos(actor.yaw-heading)<=0) continue;
+                if(ahead<=0 || lateral>(lane_width+actor.width)/2 || std::cos(actor.yaw-heading)<=0 || other_level(actor,ahead)) continue;
                 const auto gap=ahead-actor.length/2;
                 if(!mpc) {
                     const auto desired=front_axle+settings->standstill_gap_m+std::max(0.0,vehicle->speed_mps)*settings->following_time_s;

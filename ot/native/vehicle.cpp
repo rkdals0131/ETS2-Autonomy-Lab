@@ -67,7 +67,8 @@ json read_world_traffic(const json& schema) {
         const auto forward=rotate(q,{0,0,-1});
         result["vehicles"].push_back({{"id",actor},{"x",position[0]+center[0]},
             {"y",-(position[2]+center[2])},{"yaw",std::atan2(-forward[2],forward[0])},
-            {"speed_mps",speed},{"length_m",bounds[5]-bounds[2]},{"width_m",bounds[3]-bounds[0]}});
+            {"speed_mps",speed},{"length_m",bounds[5]-bounds[2]},{"width_m",bounds[3]-bounds[0]},
+            {"z",position[1]+center[1]},{"height_m",bounds[4]-bounds[1]}});
     }
     result["available"]=true;return result;
 }

@@ -134,7 +134,7 @@ arm은 단일 owner에 새 epoch를 발급하고 200 ms 동안 첫 명령을 기
 
 ### 속도 목표와 조향 위치 목표
 
-core 0.28.0은 카메라와 독립된 `/ets2/ground_truth/traffic`을 SDK frame_end에서 요청 시 발행합니다. AI actor 위치·진행방향·속도·차체 크기이며 카메라 가시성 GT와 별개입니다. 릴레이는 트레일러가 연결된 동안 `/ets2/ground_truth/trailer/pose`(world, SDK `trailer.0.world.placement`의 위치와 yaw만, yaw = 2π·heading + π/2)도 발행합니다. LCC MPC의 히치각(트럭 yaw − 트레일러 yaw)에 씁니다. 같은 변환을 트럭 SDK heading에 적용한 값은 GT ego 자세 yaw와 1e-6 rad 안에서 같았습니다(2026-10-21). △ 트레일러를 연결한 상태의 토픽은 아직 게임에서 보지 않았습니다.
+core 0.28.0은 카메라와 독립된 `/ets2/ground_truth/traffic`을 SDK frame_end에서 요청 시 발행합니다. AI actor 위치·진행방향·속도·차체 크기이며 카메라 가시성 GT와 별개입니다. core 0.47.1부터 차체 상자 중심 높이 `z`와 상자 높이 `height_m`도 냅니다(그 전 core에서는 NaN). `drive_speed`는 이것으로 입체교차의 위·아래 도로 차량을 앞차와 차로 변경 간격에서 뺍니다: 차체 바닥이 트럭 높이에 현재 경사를 곱해 그 지점까지 늘린 도로 높이와 4 m 넘게 다르면 다른 층입니다(입체교차 노면은 보통 6 m 넘게 떨어져 있고, 볼록 종단곡선에서 경사 외삽 오차는 80 m에서 약 1 m, 150 m에서 2–3 m). 2026-10-22 전에는 높이가 없어 입체교차를 지날 때 위·아래 도로의 차를 앞차로 잡아 급제동했습니다(사용자 보고). Foxglove `scene/traffic` 상자도 그 높이에 그립니다. △ 게임에서 입체교차 통과는 아직 확인하지 않았습니다. 릴레이는 트레일러가 연결된 동안 `/ets2/ground_truth/trailer/pose`(world, SDK `trailer.0.world.placement`의 위치와 yaw만, yaw = 2π·heading + π/2)도 발행합니다. LCC MPC의 히치각(트럭 yaw − 트레일러 yaw)에 씁니다. 같은 변환을 트럭 SDK heading에 적용한 값은 GT ego 자세 yaw와 1e-6 rad 안에서 같았습니다(2026-10-21). △ 트레일러를 연결한 상태의 토픽은 아직 게임에서 보지 않았습니다.
 
 `drive_speed`는 GT 속도로 throttle/brake를 계산하고 SDK applied steering으로 정규화 조향 위치를 추적합니다. `steering_target`은 **왼쪽 양수 [-1,1]인 applied steering 목표**이며 실제 바퀴 각도(rad)나 토크가 아닙니다. 현재 상대 입력 프로필에서는 PI feedback으로 하위 조향 입력을 계산하므로 사람의 Xbox 설정과 게임의 복귀·차량 물리를 유지합니다. 지도 경로 모드는 ACC·LCC를 연결하며 `acc_enabled`·`lcc_enabled`를 독립 bool 파라미터로 바꿀 수 있습니다.
 

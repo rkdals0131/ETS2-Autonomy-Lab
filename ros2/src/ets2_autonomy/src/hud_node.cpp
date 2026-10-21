@@ -240,6 +240,8 @@ int main(int argc,char** argv) {
                 const auto id=traffic->id[i];
                 const auto c=on && id==assist->lead_id?green:on && id==assist->lane_change_blocker_id?amber:std::array<float,4>{.7f,.7f,.75f,.3f};
                 box("scene/traffic",x,y,traffic->yaw[i],traffic->length_m[i],traffic->width_m[i],3,c);
+                // At its own height (an overpass), from core 0.47.1 on.
+                if(i<traffic->z.size() && std::isfinite(traffic->z[i])) array.markers.back().pose.position.z=traffic->z[i];
             }
             // ACC's gap behind the lead: from its rear bumper back to where the front bumper should be.
             if(on && in.mark==2 && assist->target_gap_m>0) {

@@ -1,6 +1,7 @@
 #include "ros_cdr.hpp"
 #include "telemetry.hpp"
 #include <cmath>
+#include <limits>
 #include <numbers>
 
 namespace bridge {
@@ -144,12 +145,14 @@ Packet state_messages(const json& state,const std::string& session,const V& base
     }
     if(state.contains("engine") && state["engine"].contains("traffic")) {
         const auto& traffic=state["engine"]["traffic"];
-        std::vector<uint64_t> ids;std::array<std::vector<double>,6> values;
+        std::vector<uint64_t> ids;std::array<std::vector<double>,8> values;
         if(traffic.at("available").get<bool>()) for(const auto& actor:traffic.at("vehicles")) {
             ids.push_back(actor.at("id").get<uint64_t>());int i=0;
             for(const auto* key:{"x","y","yaw","speed_mps","length_m","width_m"}) values[i++].push_back(actor.at(key).get<double>());
+            // Heights from core 0.47.1 on.
+            for(const auto* key:{"z","height_m"}) values[i++].push_back(actor.value(key,std::numeric_limits<double>::quiet_NaN()));
         }
-        append_cdr(packet,"/ets2/ground_truth/traffic",256+ids.size()*56,[&](Cdr& c){
+        append_cdr(packet,"/ets2/ground_truth/traffic",256+ids.size()*72,[&](Cdr& c){
             header(c,us,"world");c<<state.at("frame_id").get<uint64_t>()<<traffic.at("available").get<bool>()<<traffic.value("error",std::string{});
             c<<ids;for(const auto& axis:values) c<<axis;
         });
