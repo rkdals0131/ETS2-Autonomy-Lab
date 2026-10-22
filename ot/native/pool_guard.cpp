@@ -34,6 +34,11 @@ constexpr std::array<Site,PoolGuard::hook_count> sites={{
     // manager (+0x87A8) or release it (0x23BAE0). Called directly from the scene
     // path (0x160B8F0) and 0x147AA70; a concurrent run crashed in it (§11.7).
     {"resource_ready 0x32E4D0",0x32E540,{0x40,0x57,0x48,0x83,0xEC,0x20,0x48,0x8B,0xF9,0x48,0x85,0xC9,0x75,0x08,0x32,0xC0,0x48,0x83,0xC4,0x20,0x5F,0xC3,0x8B,0x41,0x44,0xC1,0xE8,0x03,0xA8,0x01,0x74,0x08,0xB0,0x01,0x48,0x83,0xC4,0x20,0x5F,0xC3}},
+    // Draw batch: with a sorting queue it quicksorts the caller's r_item_t array
+    // in place (0x2E65E0) before reading it. A render queue set's item array is
+    // drawn by several passes, so concurrent batches on one array read items
+    // half swapped (2026-10-22 21:16: material id 0xFFFF in 0x2E50B0, §11.11).
+    {"draw_batch 0x2E5FF0",0x2E6060,{0x48,0x89,0x54,0x24,0x10,0x48,0x89,0x4C,0x24,0x08,0x55,0x53,0x56,0x57,0x41,0x56,0x41,0x57,0x48,0x8D,0x6C,0x24,0xE1,0x48,0x81,0xEC,0xF8,0x00,0x00,0x00,0x48,0x8B,0x5D,0x7F,0x45,0x8B,0xF9,0x4C,0x8B,0x35}},
 }};
 
 // The instructions right after the three loads of [device+0xF1490] in 0x2E50B0
@@ -52,7 +57,7 @@ constexpr uint64_t slice_bytes=0x10000;
 struct HookCounters {std::atomic<uint64_t> locked{0},nested{0},wait_ticks{0},hold_ticks{0};};
 std::array<HookCounters,PoolGuard::hook_count> counters;
 HookCounters ring_counters;
-std::array<SRWLOCK,64> object_locks{}; // zero is SRWLOCK_INIT
+std::array<SRWLOCK,64> object_locks{},array_locks{}; // zero is SRWLOCK_INIT
 std::array<std::atomic<uintptr_t>,PoolGuard::hook_count> originals{};
 std::atomic<uintptr_t> base{0};
 SRWLOCK pool_lock=SRWLOCK_INIT;
@@ -117,6 +122,25 @@ uintptr_t bundle(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uin
 // After the first load: make room in this thread's slice for the range
 // (size [rax+0x10] dwords), carving a new slice under the pool lock when it
 // does not fit, so the engine never switches segments for an executor.
+// 0x2E6060(.., .., items, sort, first, count): one batch of a render item
+// array. Serialized per array (locks picked by its address); different arrays
+// run at the same time. Lock order: array lock, object lock (bundle), pool lock.
+uintptr_t draw_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
+    const auto original=reinterpret_cast<Pooled>(originals[12].load(std::memory_order_relaxed));
+    if(!executor || depth) return original(a,b,c,d,e,f,g,h);
+    auto& lock=array_locks[((c>>4)^(c>>12))&(array_locks.size()-1)];
+    auto& count=counters[12];
+    const auto start=qpc_now();
+    AcquireSRWLockExclusive(&lock);
+    const auto entered=qpc_now();
+    const auto result=original(a,b,c,d,e,f,g,h);
+    const auto left=qpc_now();
+    ReleaseSRWLockExclusive(&lock);
+    count.locked.fetch_add(1,std::memory_order_relaxed);
+    count.wait_ticks.fetch_add(entered-start,std::memory_order_relaxed);
+    count.hold_ticks.fetch_add(left-entered,std::memory_order_relaxed);
+    return result;
+}
 // 0x2B9520 (1.61.1.1 0x2B94B0): its hit test only reads the image object, and a
 // miss calls 0x2B8AC0, which only reads it too and creates the view with the
 // free-threaded D3D11 device (1.61.1.9 decompile), then 0x2AE6B0 registers the
@@ -186,7 +210,8 @@ void PoolGuard::install(uintptr_t image) {
     for(size_t i=0;i<hook_count;++i) {
         const auto target=find_target(sites[i].signature,0,sites[i].rva);
         void* detour=i==0?reinterpret_cast<void*>(&frame_allocate):i==1?reinterpret_cast<void*>(&bundle):
-                     i==6?reinterpret_cast<void*>(&srv_cache):i==7?reinterpret_cast<void*>(&sampler_cache):detours[i];
+                     i==6?reinterpret_cast<void*>(&srv_cache):i==7?reinterpret_cast<void*>(&sampler_cache):
+                     i==12?reinterpret_cast<void*>(&draw_batch):detours[i];
         auto hook=safetyhook::InlineHook::create(target,detour,safetyhook::InlineHook::StartDisabled);
         if(!hook) throw std::runtime_error(std::string("SafetyHook could not hook ")+sites[i].name);
         hooks[i]=std::move(*hook);
@@ -264,8 +289,8 @@ json PoolGuard::status() const {
     // lock_wait_ms/lock_hold_ms are the pool lock only; 0x2E50B0 reports its object locks.
     for(size_t i=1;i<hook_count;++i) {
         const auto& c=counters[i];
-        if(i!=1) {wait+=c.wait_ticks.load();hold+=c.hold_ticks.load();}
-        functions.push_back(entry(sites[i].name,c,i==1?"object":"pool"));
+        if(i!=1 && i!=12) {wait+=c.wait_ticks.load();hold+=c.hold_ticks.load();}
+        functions.push_back(entry(sites[i].name,c,i==1?"object":i==12?"array":"pool"));
     }
     wait+=ring_counters.wait_ticks.load();hold+=ring_counters.hold_ticks.load();
     // locked = slices carved under the pool lock, nested = uniform ranges served from slices.

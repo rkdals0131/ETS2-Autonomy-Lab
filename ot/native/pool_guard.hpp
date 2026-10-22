@@ -45,7 +45,7 @@ public:
     static void count_window() noexcept;
     json status() const;
     void clear_counters() noexcept;
-    static constexpr size_t hook_count=12;
+    static constexpr size_t hook_count=13;
 private:
     std::array<safetyhook::InlineHook,hook_count> hooks_;
     std::array<safetyhook::MidHook,3> ring_;
