@@ -523,7 +523,9 @@ json RenderProbe::proxy_coexistence(const json& request,bool allowed) {
             if(!allowed) throw std::runtime_error("The proxy interval setting needs allow_proxy_sensor_coexistence in ot_config.json, Tier 1, matching EXE and allow_render_probe");
             if(!accepting_.load() || !hook_.enabled() || (mode_!="observe" && mode_!="overlay"))
                 throw std::runtime_error("The proxy interval setting needs render_probe in observe or overlay mode");
-            if(gate_.arm(proxy_environment(),proxy_access)) log("Proxy sensor interval setting armed (static-analysis hypothesis)");
+            const bool trace=request.value("trace",false);
+            if(gate_.arm(proxy_environment(),proxy_access,trace))
+                log(trace?"Proxy trace armed (read-only)":"Proxy sensor interval setting armed (static-analysis hypothesis)");
             else log("Proxy sensor interval setting refused: "+gate_.reason());
         } else {
             gate_.stop();
@@ -532,12 +534,26 @@ json RenderProbe::proxy_coexistence(const json& request,bool allowed) {
             gate_.restore();
         }
     }
+    if(request.contains("rows")) {
+        // Trace rows for the CLI, a page at a time: [frame, sensor, cursor, count, record,
+        // width, height, binds, x, y, z, last_x, last_y, last_z].
+        const auto offset=request.at("rows").get<size_t>(),limit=std::min<size_t>(request.value("limit",size_t{2000}),2000);
+        std::vector<proxy::Gate::TraceRow> rows(proxy::Gate::trace_capacity);
+        rows.resize(gate_.trace_rows(rows.data(),rows.size()));
+        json page=json::array();
+        for(size_t i=offset;i<rows.size() && i<offset+limit;++i) {
+            const auto& t=rows[i];
+            page.push_back({t.frame,t.owner,t.cursor,t.count,t.record,t.width,t.height,t.binds,
+                t.position[0],t.position[1],t.position[2],t.last[0],t.last[1],t.last[2]});
+        }
+        return {{"total",rows.size()},{"offset",offset},{"rows",std::move(page)}};
+    }
     return proxy_json();
 }
 json RenderProbe::proxy_json() {
     const auto& c=gate_.counters();
     const auto reason=gate_.armed()?json(nullptr):json(gate_.reason().empty()?std::string("disabled"):gate_.reason());
-    return {{"enabled",gate_.armed()},{"reason",reason},{"in_sensor_interval",gate_.in_sensor()},
+    return {{"enabled",gate_.armed()},{"trace",gate_.tracing()},{"reason",reason},{"in_sensor_interval",gate_.in_sensor()},
         {"sensor_mask",rig_.sensor_mask()},
         {"basis","static analysis only; not verified in a game session (research/snowymoon/sensor_coexistence.md)"},
         {"expected_sha256",proxy::Layout::sha256},

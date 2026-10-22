@@ -135,12 +135,38 @@ void state_change_trips_the_gate() {
     CHECK(!gate.armed());CHECK(!gate.in_sensor());CHECK(image.get<uint32_t>(L::aa_copy)==2);CHECK(!gate.reason().empty());
     gate.bind(Owner::sensor,1,false);CHECK(image.get<uint32_t>(L::aa_copy)==2);
 }
+void trace_reads_only() {
+    Image image;Gate gate;CHECK(gate.arm(image.environment(),allow,true));CHECK(gate.tracing());
+    image.set<int32_t>(L::ring_count,3);image.set<int32_t>(L::ring_cursor,1);
+    for(int i=0;i<3;++i) image.set<float>(L::ring_position+i*L::ring_stride,10.0f*i);
+    const uint32_t record=L::records+2*L::record_stride;
+    image.set<uint64_t>(L::current_record,reinterpret_cast<uint64_t>(image.memory.data()+record));
+    image.set<uint32_t>(record+0x24,1280);image.set<uint32_t>(record+0x28,720);
+    const auto before=image.memory;
+    gate.bind(Owner::sensor,0x1000,false);gate.bind(Owner::sensor,0x1000,false); // one row: same owner, same frame
+    gate.bind(Owner::main,0,true);
+    image.set<uint32_t>(L::frame_source,11);image.set<int32_t>(L::ring_cursor,-1);image.set<uint64_t>(L::current_record,0);
+    const auto changed=image.memory;
+    gate.bind(Owner::main,0,true); // frame change: a row
+    CHECK(image.memory==changed);CHECK(!gate.in_sensor());
+    std::vector<Gate::TraceRow> rows(Gate::trace_capacity);
+    rows.resize(gate.trace_rows(rows.data(),rows.size()));
+    CHECK(rows.size()==3);
+    if(rows.size()==3) {
+        CHECK(rows[0].owner==1 && rows[0].cursor==1 && rows[0].count==3 && rows[0].record==2);
+        CHECK(rows[0].width==1280 && rows[0].height==720 && rows[0].position[0]==10.0f && rows[0].last[0]==20.0f);
+        CHECK(rows[1].owner==0 && rows[1].binds==2 && rows[1].frame==10);
+        CHECK(rows[2].frame==11 && rows[2].cursor==-1 && rows[2].record==-1 && rows[2].position[0]==0.0f);
+    }
+    CHECK(gate.counters().binds_sensor==2 && gate.counters().enters==0);
+    (void)before;
+}
 }
 
 int main() {
     precheck_branches();unarmed_is_inert();zero_then_restore_configured_value();
     recopy_first_so_the_proxy_does_not_overwrite();ring_flags();nonidle_state_counted();
-    disarm_restores_open_span();state_change_trips_the_gate();
+    disarm_restores_open_span();state_change_trips_the_gate();trace_reads_only();
     std::puts(failures?"proxy gate test FAILED":"proxy gate test passed");
     return failures?1:0;
 }

@@ -64,7 +64,10 @@ def main():
     probe.add_argument("--frames", action="store_true", help="With rig mode: also observe Present intervals")
     proxy = sub.add_parser("proxy_coexistence", help="snowymoon proxy and sensor cameras (research/snowymoon/sensor_coexistence.md): "
                            "off by default, needs allow_proxy_sensor_coexistence and render_probe observe; static-analysis hypothesis")
-    proxy.add_argument("mode", choices=("on", "off", "status"), default="status", nargs="?")
+    proxy.add_argument("mode", choices=("on", "off", "status", "trace", "dump"), default="status", nargs="?",
+                       help="trace: read-only recording of the proxy ring cursor and history record at each owner change; "
+                       "dump: save the rows (--out)")
+    proxy.add_argument("--out", help="With dump: JSON file for the trace rows")
     passes = sub.add_parser("parallel_passes", help="docs/28: postpone type 1 render passes to the end of the pass loop and record them "
                             "there in order on the main thread (serial), record them on engine workers (parallel) or alternate the two per "
                             "frame (alternate); F11 returns to off")
@@ -284,7 +287,24 @@ def main():
                 options["vehicle_metadata"] = True
             result = client.request("render_probe", **options)
         elif args.command == "proxy_coexistence":
-            result = client.request("proxy_sensor_coexistence", **({} if args.mode == "status" else {"enabled": args.mode == "on"}))
+            if args.mode == "dump":
+                if not args.out:
+                    parser.error("proxy_coexistence dump requires --out")
+                rows, offset = [], 0
+                while True:
+                    page = client.request("proxy_sensor_coexistence", rows=offset)
+                    rows += page["rows"]
+                    offset += len(page["rows"])
+                    if not page["rows"] or offset >= page["total"]:
+                        break
+                fields = ["frame", "sensor", "cursor", "count", "record", "width", "height", "binds", "x", "y", "z", "last_x", "last_y", "last_z"]
+                with open(args.out, "w", encoding="utf-8") as sink:
+                    json.dump({"fields": fields, "rows": rows}, sink)
+                result = {"rows": len(rows), "out": args.out}
+            elif args.mode == "status":
+                result = client.request("proxy_sensor_coexistence")
+            else:
+                result = client.request("proxy_sensor_coexistence", enabled=args.mode != "off", trace=args.mode == "trace")
         elif args.command == "parallel_passes":
             options = {} if args.mode == "status" else {"mode": args.mode}
             if args.mode in ("parallel", "alternate"):

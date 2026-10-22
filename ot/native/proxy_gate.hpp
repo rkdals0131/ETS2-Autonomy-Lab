@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 
 namespace ot::proxy {
@@ -25,11 +26,18 @@ struct Layout {
     static constexpr uint32_t flag_a_source=0xC7307F, flag_a=0xC7367D; // u8, copied with the re-copy
     static constexpr uint32_t flag_b_source=0xC730B6, flag_b=0xC7367E; // u8, copied with the re-copy
     // Section 3.3 item 5 and 4.1: the scene-pass ring the render thread consumes in order.
-    static constexpr uint32_t ring_keys=0xC73848;    // u64 key per entry (assumed to equal the pass pointer, unverified)
+    static constexpr uint32_t ring_keys=0xC73848;    // u64 key per entry: a per-frame address, not our pass pointer (game run 2026-10-22)
+    static constexpr uint32_t ring_position=0xC73850;// 3 x f32 camera position per entry (0x84460 param 2)
     static constexpr uint32_t ring_skip=0xC7392C;    // u8 skip flag per entry (1 = consumer skips)
     static constexpr uint32_t ring_stride=0xF0;
     static constexpr uint32_t ring_capacity=20;
     static constexpr uint32_t ring_count=0xC7673C;   // i32 entries recorded this frame
+    static constexpr uint32_t ring_cursor=0xB0C17C;  // i32 last entry 0x951F0 consumed (-1 at frame start)
+    // Section 2.2: temporal history records keyed by (RT0 width, height, used last frame).
+    static constexpr uint32_t current_record=0xC76748; // u64 pointer to the record 0x951F0 chose
+    static constexpr uint32_t records=0xC785F0;      // 20 records; +0x24 width, +0x28 height, +0x2C last frame
+    static constexpr uint32_t record_stride=0x4190;
+    static constexpr uint32_t record_count=20;
     // Section 4.2 item 4: values that must hold.
     static constexpr uint32_t installed=0xC737AC;    // u32 == 1
     static constexpr uint32_t version=0xC7381C;      // u32 == 0x3D (1.61)
@@ -63,7 +71,8 @@ public:
             ring_flagged{0},ring_invalid{0},ring_max{0},nonidle_entries{0},recopies{0};
     };
     // Control thread. On failure nothing is written and reason() says why.
-    bool arm(const Environment& environment,const AccessCheck& access);
+    // trace: read-only; bind() records owner changes and frame changes instead of writing.
+    bool arm(const Environment& environment,const AccessCheck& access,bool trace=false);
     // Stop accepting binds. The caller must have waited for the render thread to
     // leave bind() before restore().
     void stop() noexcept {armed_.store(false);}
@@ -76,7 +85,18 @@ public:
     const Counters& counters() const noexcept {return counters_;}
     std::string reason() const {return tripped_.load()?"proxy state changed during the run; gate stopped":reason_;}
     bool in_sensor() const noexcept {return in_sensor_.load();}
+    bool tracing() const noexcept {return trace_;}
+    // One row per owner change or frame change while tracing. cursor/count/record are the
+    // proxy's values at that bind; position is the entry at the cursor, last the newest entry.
+    struct TraceRow {
+        uint32_t frame;uint8_t owner;int8_t cursor,count,record;uint16_t width,height;uint32_t binds;
+        float position[3],last[3];
+    };
+    static constexpr size_t trace_capacity=16384;
+    // Control thread: rows recorded so far (the render thread appends until full).
+    size_t trace_rows(TraceRow* out,size_t capacity) const noexcept;
 private:
+    void trace(Owner owner) noexcept;
     void enter(uintptr_t pass) noexcept;
     void leave() noexcept;
     void flag_ring(uintptr_t pass,uint32_t frame) noexcept;
@@ -88,5 +108,10 @@ private:
     // Render thread only: the last ring scan, to scan again only when something changed.
     uintptr_t last_pass_=0;uint32_t last_frame_=0;int32_t last_count_=-1;
     Counters counters_;
+    bool trace_=false;
+    // Render thread only while tracing.
+    Owner trace_owner_=Owner::main;uint32_t trace_frame_=0,trace_binds_=0;
+    std::atomic<size_t> trace_size_{0};
+    std::unique_ptr<TraceRow[]> trace_buffer_; // allocated by arm(trace)
 };
 }
