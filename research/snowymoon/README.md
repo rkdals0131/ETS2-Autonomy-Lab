@@ -1,0 +1,107 @@
+# snowymoon 프록시 dxgi.dll 정적 분석: 렌더 패스 병렬 기록과의 공존
+
+2026-10-22. [28 렌더 패스 병렬화](../../docs/28_render_pass_parallel_prototype.md)의 M3b~M3d가 snowymoon 프록시와 함께 돌 수 있는지 판단하려고 프록시 DLL을 정적으로 읽은 결과입니다. 표시는 ✔ 코드로 확인, △ 추정입니다. DLL 주소는 `dxgi+RVA`(이미지 베이스 `0x180000000`), 게임 주소는 1.61.1.9 RVA(28 §11 M3b `foreign` 목록과 같음)입니다. DLL은 로드·실행하지 않았고 게임도 켜지 않았습니다. 게임 폴더 원본은 건드리지 않고 복사본으로만 분석했습니다.
+
+## 결론 (3줄)
+
+1. **AA(TAA)를 꺼도 `order=free`(패스 본체 동시 기록)와 공존 불가.** closure 안 세 훅의 핸들러(`0x1A890`·`0x1A440`·`0x1A8C0`)는 "고정 전역에 값 저장 → 원본 호출 → 전역 clear"로 중첩 호출에 상태를 넘기며, 락·원자 연산·TLS가 **하나도 없습니다**(✔). AA 검사는 D3D 그리기 디스패치에만 있고(`0x9FE10`), 패스 기록 중계 핸들러는 AA와 무관하게 같은 전역을 씁니다(✔).
+2. **`accepted_text_patches` 화이트리스트로도 못 풉니다.** 가장 위험한 공유 상태(락 없는 리소스 `std::map` `DAT_c76810`)는 D3D11 장치·컨텍스트 **COM 인스턴스 vtable 포인터 교체** 훅(`0x17B70`·`0x17C90`)에 있어 `scan_text`의 `.text` 비교에 **보이지 않습니다**(✔).
+3. 공존이 성립하는 유일한 모드는 **패스 본체 전체를 한 락 아래 두는 경우**(M3b-1 티켓, M3b-2 전체 락)뿐입니다 — 이는 스레드만 바뀌는 직렬 실행이라 성능 이득이 없습니다. M3c(락 축소)·M3d는 프록시를 뺀 세션에서만 켜야 합니다(§7).
+
+남은 불확실성: 비-closure 훅 일부의 (게임 RVA ↔ 핸들러) 정확한 바인딩은 핸들러 동작으로 추정만 했습니다(△, 결정에는 영향 없음). `0x6BD80`의 패턴 스캔이 버전별로 오프셋을 **어떻게** 고르는지(서명 바이트열 vs 고정 표)는 핵심 분기만 읽었습니다(§3). closure 세 훅과 COM-vtable 불가시성은 모두 ✔입니다.
+
+## 1. 대상과 방법
+
+| 항목 | 값 |
+| --- | --- |
+| 파일 | 게임 폴더 `bin/win_x64/dxgi.dll.off`(원래 `dxgi.dll`), 18,304,568 bytes, sha256 `d819c16805a9a0ca17f34ef46cc445c5847f32308d10e69bf08f3c1b4779f4dc`. 분석은 `work/snowymoon_dxgi.bin` 복사본 |
+| PDB·내보내기 | 디버그 디렉터리 `C:\Pdb\TAA\TAA.pdb`. 내보내기 `CreateDXGIFactory{,1,2}`와 `NVSDK_NGX_D3D11_*`(DLSS 중계) |
+| 게임 | eurotrucks2.exe 1.61.1.9 |
+| 도구 | Ghidra 12.1.4 headless 전용 프로젝트(`ghidra/`, Git 제외), capstone·pefile |
+
+재현:
+
+```
+py -3 -I research/snowymoon/ghidra.py import               # 복사·해시 확인·전용 프로젝트 import + 자동 분석
+py -3 -I research/snowymoon/ghidra.py decompile 1A890 1A440 # ghidra/out/decomp/<entry>.c
+py -3 -I research/snowymoon/ghidra.py refs C780E8           # ghidra/out/refs.csv
+py -3 research/snowymoon/sm.py func 1B090                   # capstone 역어셈블(.pdata 함수 단위)
+py -3 research/snowymoon/log_sites.py                       # snowymoon_logs.txt 64줄 → 호출 지점
+```
+
+`sm.py`·`log_sites.py`는 capstone이 사용자 site-packages에 있어 `-I` 없이 돌립니다(스크립트 폴더에서 실행, DLL은 데이터로만 읽음). 기존 `research/live/2026-10-15-snowymoon/hook_owner.py`의 점프 체인 추적과 상호 검증했습니다.
+
+## 2. 패킹·난독화 (분석을 막지 않음)
+
+| 관찰 | 판정 |
+| --- | --- |
+| 섹션 `.vlizer` `0x4DAA00` 바이트, RWX(`0xE0000060`), 엔트로피 6.44 | **Oreans Code Virtualizer**의 가상화 코드(✔ 섹션 이름) |
+| `.text` 4 MB 엔트로피 6.50, 진입점 `dxgi+0x141DF0`(MSVC CRT), import 정상(KERNEL32 182·USER32 204·gdiplus 등, wxWidgets·ImGui·zlib·libpng 정적 링크) | 전체 패킹 아님(✔) |
+| `.text`→`.vlizer` 진입 | 매크로 단위 부분 가상화. 이 분석에 걸린 곳은 장면 패스 트램펄린 설치(`dxgi+0x76510` → `dxgi+0x11BA8BD`) 한 곳뿐(✔) |
+| 문자열·서명 | 전부 평문. IDA식 바이트 서명 문자열·원본 프롤로그 바이트 배열 **0건**(✔ → 훅 대상은 서명 스캔이 아니라 버전 표로 찾음, §3) |
+
+핸들러·D3D 훅·MinHook 본체는 모두 평문이라 끝까지 읽혔습니다. 분석을 막는 것은 장면-패스 트램펄린 설치 코드와 그 중계 스텁 내용뿐입니다.
+
+## 3. 훅 라이브러리와 대상 찾기 (답 1)
+
+- **훅 엔진은 MinHook입니다**(✔). HDE64 길이 디코더 표가 `dxgi+0xA3D3A0`·`0xA3D5C0`·`0xA3D950`에 있고, `MH_CreateHook` 상당 `0x21170`(트램펄린 생성 + `VirtualProtect`), 활성화 `0x213F0→0x21330→0x20FF0`, 등록 래퍼 `0x79760`(rel32 E9)·`0x79990`(14바이트 FF25)·`0x796F0`(rel32 call 치환) 구조가 전형적입니다.
+- **트램펄린은 대상 ±2 GB 안에 둡니다**(✔). `0x76510`이 `VirtualQuery`로 대상 근처 빈 페이지를 찾아 `VirtualAlloc(0x20000, PAGE_EXECUTE_READWRITE)`하고, 이 영역에 XOR로 가린 스텁을 씁니다. 28이 본 "익명 메모리 중계 스텁"이 이것입니다.
+- **대상 주소는 버전별 오프셋 표 + 패턴 검증으로 찾습니다**(✔, 서명 바이트열 아님). `0x1B090`(초기화)이 게임 버전 dword `DAT_c7381c`를 읽어 `0x35..0x3D`(1.53~1.61)만 허용하고, 각 훅의 게임 RVA를 `GetModuleHandleW 베이스(DAT_c73670) + 오프셋 전역`으로 만듭니다. 오프셋 전역(`DAT_c78010` 등)은 `0x6BD80`이 채우는데, 일부는 게임 함수 테이블을 훑어 `[+0xC]==5 && [+8]==0x3E`인 항목을 찾고 그 시작 바이트가 `0xE8`(call)인지 확인하는 패턴 검증을 거칩니다(✔). 버전별 분기(`cmp 0x36/0x37/0x3B/0x3C`)로 오프셋이 갈립니다. 지원 밖 버전이면 `0x1AEC0`이 "unsupported game version" MessageBox를 띄웁니다.
+
+## 4. 훅별 표 (답 1·2·3·4)
+
+게임 RVA는 1.61.1.9(28 §11 `foreign`), 핸들러는 `dxgi+RVA`. "AA 끔"은 cfg `taa=0`일 때 핸들러 동작입니다.
+
+### 4.1 기록 경로(closure) 안 — 결정 대상
+
+| 게임 RVA | 역할 | 핸들러 | 하는 일 | AA 끔 동작 | 공유 쓰기 | 스레드 안전 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `0x1475C90` | 장면 패스 콜백(FF25, 내부 vtable slot1) | `0x1A890` | `DAT_c780e8 = 패스; (*DAT_c73630)(); DAT_c780e8 = 0` | **동일**(무조건 전역 기록) | 고정 전역 `DAT_c780e8` | ✗ 락·원자·TLS 0(✔) |
+| `0x3EB300` | uniform composer 잎(`0x2E5040` 아래) | `0x1A440` | `DAT_c780e8`(미룬 패스) 읽어 비 반사 투영 행렬 합성, 결과를 링에 push | 효과만 no-op, **전역 기록은 그대로** | 링 `DAT_c73848[20]` + 비원자 카운터 `DAT_c7673c`, `DAT_ccc788`(via `0x84460/0x84670`) | ✗ 락·원자·TLS 0(✔) |
+| `0x2B5FE0` | 장치 `[0x158]` 버퍼 업로드 | `0x1A8C0` | `DAT_c735bc = 업로드크기(R9D); (*DAT_c73628)(); DAT_c735bc = 0` | **동일** | 고정 전역 `DAT_c735bc`(읽기 `0x17890` = 장치 vtable `[0xF]` Map 훅) | ✗ 락·원자·TLS 0(✔) |
+
+세 핸들러 본문 전체를 `LOCK` 접두·`xchg`·`cmpxchg`·`xadd`·`gs:`로 스캔해 **0건**임을 확인했습니다(✔ `0x1A440`·`0x84460` 본문 240·177 명령 포함). 동작 패턴은 "값을 고정 전역에 넣고 원본을 부른 뒤 지움"이라, **임의 시점에 이 중첩에 스레드가 하나만 있다**는 것을 전제합니다. 중첩은 `0x1475C90`(장면) → 안쪽에서 `0x3EB300`(합성)·`0x2B5FE0`(업로드)으로 한 스레드에서 일어납니다.
+
+### 4.2 기록 경로 밖 (참고, RVA↔핸들러 바인딩 일부 △)
+
+| 게임 RVA(28 1.61.1.1) | 핸들러 | 역할 | 공유 쓰기 |
+| --- | --- | --- | --- |
+| `0x2BFEF0`(`0x2BFE80`) | `0x1AEC0` | 프레임 브래킷: 버전 불일치 MessageBox, `0xA6900`(프레임 시작)·`0xA69C0`(끝, `0x8EC20` 프레임 상태 스왑)로 원본 감쌈 | 프레임 상태 전역 `0xC288D8` 등(메인 스레드) |
+| `0x405070` 안 call 3곳 | — | `0x1565EF0` 호출을 모듈 앞 익명 스텁으로 돌림 | △ 밖 |
+| (FF25 3곳) | `0x1AB20/40/60` | CreateSRV 컨텍스트 플래그 설정 | `DAT_c7307a/7307b/73079`(set→호출→clear) |
+| (rel32) | `0x1AB80` | 현재 객체 포인터 저장 | `DAT_c735b0`+카운터 `DAT_c735b8`(set→호출→clear) |
+| (rel32) | `0x1AD50` | `0x1AC80`로 게임 cvar 강제(`uset r_aa "0"` 등) 후 원본 | cvar(초기화 1회) |
+| (rel32) | `0x1AFF0` | 원본 뒤 `[DAT_c78088+p]`에 마커 `0x3D9DB22D` 기록 | 위치 전역 |
+| (vtable 교체) | `0x1AE30`·`0x1ADD0` | blit 이미지 배열 조회(버전별 stride 0xA8/0xA0), `DAT_c735a0` 저장 | `DAT_c735a0`(set→호출→clear) |
+
+### 4.3 D3D11 장치·컨텍스트 COM vtable 훅 — `.text`에 안 보임 (답 2의 핵심)
+
+`0x17B70`이 D3D11 **장치** vtable 슬롯 3·5·7·8·9·0xA·0xB·0xC·0xF·0x15에, `0x17C90`이 **컨텍스트** vtable 슬롯 여러 곳(8·9·0xB~0xF·0x11·0x14·0x15·0x21·0x23·0x24·0x2C·0x36·0x45·0x77·0x7B)에 핸들러를 심습니다. 심는 방식은 `FUN_180019430`의 `*(vtable + slot*8) = handler`(**힙/.rdata vtable 포인터 교체**)라, `.text` 바이트는 바뀌지 않습니다 → **`scan_text`가 탐지 불가**(✔).
+
+- `CreateBuffer`(`0x16100`)·`CreateTexture2D`/`CreateShaderResourceView`(`0x16200`·`0x16800`)는 리소스를 snowymoon 프록시 객체(`SD3D11Buffer`·`SShaderResourceView`·`STexture2D`)로 감싸고, 포인터→프록시 **`std::map`(RB-tree `DAT_c76810`)에 삽입**합니다. 삽입(`0x18B00`)·조회(`0x17E80`·`0x17F50`)·리밸런스에 **락이 없습니다**(✔). 삽입 카운터 `DAT_ccc8bc`도 비원자.
+- 패스 기록 중 바인딩 패킷 생성(`0x2B6B20` 장치 `[0x278]`)이 SRV/샘플러를 **지연 생성**하므로, worker 스레드가 동시에 기록하면 이 lockless `std::map`에서 경합합니다.
+
+## 5. 왜 AA 끔이 조건이 못 되나 (답 2·4)
+
+AA/TAA 검사는 그리기 디스패치 표(`DAT_c77E00..`, `0x17460`이 채움)의 `0x9FE10`류에 있습니다: 프레임당 한 번 `DAT_c7382c`(= cfg `taa` 값 `DAT_a3d840`의 스냅숏)를 갱신하고, `DAT_c7382c==0 || DAT_c737ac!=1`이면 원본만 호출(효과 생략). 그러나 **패스 기록 중계 핸들러(`0x1A890`·`0x1A8C0`)는 이 검사를 거치지 않고** 무조건 `DAT_c780e8`·`DAT_c735bc`를 씁니다(✔). 그래서 AA를 꺼도 기록 경로의 공유 전역 쓰기는 그대로 남습니다 — 28 §2.10의 "AA 끔은 조건이 못 됨" 실측과 정적으로 일치합니다.
+
+## 6. 공존 판정 (답 5)
+
+snowymoon이 기대하는 불변: **기록 경로 중첩(장면→합성·업로드)에 임의 시점 스레드 1개.**
+
+| 28 모드 | snowymoon 전역에 미치는 영향 | 판정 |
+| --- | --- | --- |
+| M3a defer(합류점 직렬) | 메인 1스레드 | ✔ 안전(실측 완료) |
+| M3b-1 ticket(한 번에 한 패스) | 항상 1스레드 활성 | ✔ 안전(28 §11.2 실측) |
+| **M3b-2 order=free + 전체 락** | 전체 락이 곧 snowymoon의 "1스레드" 불변을 강제 | ✔ **안전**(새 근거). 단 직렬이라 이득 없음 |
+| M3c 락 축소 | 우리 풀 락(`0x2E5040` 등)은 snowymoon 전역(`DAT_c780e8`·`DAT_c76810`)을 **덮지 않음** — 그 전역은 장면/합성 경로와 COM vtable 훅에 있어 풀 함수 밖 | ✗ `DAT_c780e8` 경합, lockless `std::map` 경합 |
+| M3d 링 2단계 | 같음 + composer 잎(`0x3EB300`→`0x1A440`)이 worker에서 동시 실행 | ✗ |
+
+즉 M3b-2까지는 프록시가 있어도 "본체 전체 한 락"이 snowymoon의 단일-스레드 불변을 지켜 안전하지만, **M3c부터 락을 줄이는 순간 깨집니다**. 풀 락을 snowymoon 전역까지 넓히는 것은 불가능합니다 — `DAT_c780e8`는 장면 패스 진입(`0x1A890`)에서 쓰이고 우리가 거는 풀 함수보다 상위이며, `std::map` 삽입은 장치 리소스 생성 경로라 우리 락 밖입니다.
+
+## 7. 28 §5 게이트 권고
+
+1. **M3b-1·M3b-2는 프록시가 있어도 허용**해도 됩니다. 근거를 "실측상 크래시 없음"만이 아니라 "전체 락이 snowymoon의 단일-활성-스레드 불변을 강제"로 문서화하세요(§6). `accept_foreign_hooks: true`의 정당화가 M3b-2로 확장됩니다.
+2. **M3c·M3d는 프록시 제거 세션에서만.** 게이트 조건은 "기록 경로 closure 안 foreign 훅 0"이고, **AA 끔은 이 조건을 완화하지 못합니다**(§5, 증명됨). 게임 폴더 `dxgi.dll` 유무는 진단 메시지일 뿐.
+3. **`scan_text`는 필요하지만 불충분합니다.** D3D11 장치·컨텍스트 COM vtable 훅은 포인터 교체라 `.text` 비교에 안 잡힙니다(§4.3). M3c를 켜기 전 게이트는 **장치·immediate context vtable 포인터가 eurotrucks2.exe 범위를 가리키는지**(dxgi.dll이 아니라)도 확인해야 합니다. 구체적으로 `DAT_143681860` 장치의 vtable과, 그 vtable이 참조하는 컨텍스트 객체 vtable의 각 슬롯이 exe `.rdata`/`.text` 안을 가리키는지 검사하세요.
+4. (선택) snowymoon이 cvar `r_aa`를 강제로 0으로 돌려놓으므로(§4.2 `0x1AD50`→`0x1AC80`), 게임 설정에서 AA를 바꿔도 프록시가 있는 한 되돌려집니다. 프록시를 뺀 세션 판정 때 이 cvar 상태를 함께 기록하세요.

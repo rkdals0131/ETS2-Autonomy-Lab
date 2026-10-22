@@ -79,3 +79,7 @@ bash.exe.stackdump
 slprj/
 *.slxc
 *.asv
+
+# snowymoon proxy analysis: the DLL copy, its Ghidra project and outputs (keep the README and scripts)
+/research/snowymoon/work/
+/research/snowymoon/ghidra/
