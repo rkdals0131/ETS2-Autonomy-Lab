@@ -86,7 +86,7 @@ public:
     std::string reason() const {return tripped_.load()?"proxy state changed during the run; gate stopped":reason_;}
     bool in_sensor() const noexcept {return in_sensor_.load();}
     bool tracing() const noexcept {return trace_;}
-    // One row per owner change or frame change while tracing. cursor/count/record are the
+    // One row per change of owner, frame, ring cursor or history record while tracing. cursor/count/record are the
     // proxy's values at that bind; position is the entry at the cursor, last the newest entry.
     struct TraceRow {
         uint32_t frame;uint8_t owner;int8_t cursor,count,record;uint16_t width,height;uint32_t binds;
@@ -110,7 +110,7 @@ private:
     Counters counters_;
     bool trace_=false;
     // Render thread only while tracing.
-    Owner trace_owner_=Owner::main;uint32_t trace_frame_=0,trace_binds_=0;
+    Owner trace_owner_=Owner::main;uint32_t trace_frame_=0,trace_binds_=0;int32_t trace_cursor_=-2;uint64_t trace_record_=0;
     std::atomic<size_t> trace_size_{0};
     std::unique_ptr<TraceRow[]> trace_buffer_; // allocated by arm(trace)
 };

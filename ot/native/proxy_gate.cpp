@@ -43,7 +43,7 @@ bool Gate::arm(const Environment& environment,const AccessCheck& access,bool tra
     if(!why.empty()) {reason_=std::move(why);tripped_=false;base_=nullptr;return false;}
     base_=environment.base;reason_.clear();tripped_=false;
     in_sensor_=false;last_pass_=0;last_frame_=0;last_count_=-1;
-    trace_=trace;trace_owner_=Owner::main;trace_frame_=0;trace_binds_=0;trace_size_.store(0);
+    trace_=trace;trace_owner_=Owner::main;trace_frame_=0;trace_cursor_=-2;trace_record_=0;trace_binds_=0;trace_size_.store(0);
     if(trace && !trace_buffer_) trace_buffer_=std::make_unique<TraceRow[]>(trace_capacity);
     for(auto* c:{&counters_.enters,&counters_.exits,&counters_.binds_sensor,&counters_.binds_main,&counters_.lookup_miss,
                  &counters_.ring_flagged,&counters_.ring_invalid,&counters_.ring_max,&counters_.nonidle_entries,&counters_.recopies})
@@ -102,19 +102,21 @@ void Gate::enter(uintptr_t pass) noexcept {
 void Gate::trace(Owner owner) noexcept {
     ++trace_binds_;
     const auto frame=read<uint32_t>(L::frame_source);
-    if(owner==trace_owner_ && frame==trace_frame_) return;
+    const auto cursor=read<int32_t>(L::ring_cursor);
+    const auto record=read<uint64_t>(L::current_record);
+    if(owner==trace_owner_ && frame==trace_frame_ && cursor==trace_cursor_ && record==trace_record_) return;
     const auto size=trace_size_.load(std::memory_order_relaxed);
     if(size>=trace_capacity) return;
     TraceRow row{};
     row.frame=frame;row.owner=owner==Owner::sensor;row.binds=trace_binds_;
-    const auto count=read<int32_t>(L::ring_count),cursor=read<int32_t>(L::ring_cursor);
+    const auto count=read<int32_t>(L::ring_count);
     row.count=static_cast<int8_t>(std::clamp(count,-1,127));row.cursor=static_cast<int8_t>(std::clamp(cursor,-1,127));
     const auto entry=[&](int32_t i,float* out) {
         if(i>=0 && i<count && i<static_cast<int32_t>(L::ring_capacity))
             for(int k=0;k<3;++k) out[k]=read<float>(L::ring_position+i*L::ring_stride+k*4);
     };
     entry(cursor,row.position);entry(count-1,row.last);
-    const auto record=read<uint64_t>(L::current_record),first=reinterpret_cast<uint64_t>(base_+L::records);
+    const auto first=reinterpret_cast<uint64_t>(base_+L::records);
     row.record=-1;
     if(record>=first && record<first+uint64_t{L::record_stride}*L::record_count && (record-first)%L::record_stride==0) {
         const auto rva=static_cast<uint32_t>(record-reinterpret_cast<uint64_t>(base_));
@@ -123,7 +125,7 @@ void Gate::trace(Owner owner) noexcept {
     }
     trace_buffer_[size]=row;
     trace_size_.store(size+1,std::memory_order_release);
-    trace_owner_=owner;trace_frame_=frame;trace_binds_=0;
+    trace_owner_=owner;trace_frame_=frame;trace_cursor_=cursor;trace_record_=record;trace_binds_=0;
 }
 size_t Gate::trace_rows(TraceRow* out,size_t capacity) const noexcept {
     if(!trace_buffer_) return 0;
