@@ -43,6 +43,9 @@ struct DrivingParameters {
     double lane_change_lateral_acceleration_mps2=.9,lane_change_min_s=4;
     // The driver's steering for this long ends ACC and LCC (shorter: LCC yields).
     double steering_takeover_s=3;
+    // ACC keeps under the road's speed limit (SDK navigation) plus this fraction (the game
+    // tolerates 9 % over), less the margin for overshoot; 0 tolerance and margin: the limit.
+    double speed_limit_tolerance=.09,speed_limit_margin_mps=.3;
     uint8_t axes() const {return (lcc_enabled?1:0)|(acc_enabled?2:0);}
 };
 
@@ -78,6 +81,8 @@ inline constexpr std::array driving_double_parameters{
     DrivingDoubleParameter{"lane_change_lateral_acceleration_mps2",&DrivingParameters::lane_change_lateral_acceleration_mps2,DrivingDoubleParameter::Positive},
     DrivingDoubleParameter{"lane_change_min_s",&DrivingParameters::lane_change_min_s},
     DrivingDoubleParameter{"steering_takeover_s",&DrivingParameters::steering_takeover_s,DrivingDoubleParameter::Positive},
+    DrivingDoubleParameter{"speed_limit_tolerance",&DrivingParameters::speed_limit_tolerance},
+    DrivingDoubleParameter{"speed_limit_margin_mps",&DrivingParameters::speed_limit_margin_mps},
 };
 inline DrivingParameters declare_driving_parameters(rclcpp::Node& node) {
     DrivingParameters result;

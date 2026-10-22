@@ -6,7 +6,7 @@
 2. 차량 물리 메모리(core 0.39.0, Tier 1): SDK에 없는 실제 엔진 토크, 변속기 출력 토크·회전, 바퀴별 브레이크 토크.
 3. def 파일(정적 사양, EC1에 해당): 토크 곡선, 기어비, 리타더 단별 구성, 축하중, 타이어, 전역 물리 상수. [research/truck_spec.py](../research/truck_spec.py)가 세이브의 현재 트럭 부품으로 골라 줍니다.
 
-ROS에는 `/ets2/vehicle/powertrain`(ets2_msgs/PowertrainState, 0.3.0)으로 1과 2를 함께 냅니다. 2는 릴레이가 Tier 1일 때만 채워지고(`drivetrain_available`), 없으면 NaN입니다. sysid 하네스는 실행 동안 Tier 1을 켜고 프레임마다 `dt`에 2를 기록합니다.
+ROS에는 `/ets2/vehicle/powertrain`(ets2_msgs/PowertrainState, 0.3.0)으로 1과 2를 함께 냅니다. 2는 릴레이가 Tier 1일 때만 채워지고(`drivetrain_available`), 없으면 NaN입니다. sysid 하네스는 실행 동안 Tier 1을 켜고 프레임마다 `dt`에 2를 기록합니다. 2026-10-23부터 메시지 끝에 계기판 제한속도 `speed_limit_mps`(SDK `truck.navigation.speed.limit`, 0이면 제한 없음)를 더했습니다. ACC가 이 값으로 설정 속도를 제한합니다([bridge/README.md](../bridge/README.md) "제한속도").
 
 ## 신호 대응
 

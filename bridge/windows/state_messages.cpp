@@ -101,6 +101,7 @@ Packet state_messages(const json& state,const std::string& session,const V& base
             c<<(available?drivetrain->at(key).get<double>():nan);
         c<<(available?drivetrain->at("wheel_brake_torque_nm").get<std::vector<double>>():std::vector<double>{});
         c<<(available?drivetrain->value("trailer_wheel_brake_torque_nm",std::vector<double>{}):std::vector<double>{});
+        c<<channel(state,"truck.navigation.speed.limit");
     });
     if(state.contains("drive")) {
         const auto& drive=state.at("drive");

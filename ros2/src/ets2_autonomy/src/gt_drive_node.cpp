@@ -434,6 +434,10 @@ int main(int argc,char** argv) {
             const auto dt=std::chrono::duration<double>(now-previous).count();
             if(ground_truth) grade.update(ego_x,ego_y,ego_z);
             auto speed_target=cruise_engage?set_speed:settings->target_speed_mps;
+            // The road's speed limit (SDK navigation, 0 none) with the tolerated excess caps the
+            // set speed; a lower limit is reached on the ACC's set-speed ramp after the sign.
+            const double speed_limit=powertrain && now-powertrain_time<=1s && powertrain->speed_limit_mps>0?powertrain->speed_limit_mps:NAN;
+            if(std::isfinite(speed_limit)) speed_target=std::min(speed_target,speed_limit*(1+settings->speed_limit_tolerance)-settings->speed_limit_margin_mps);
             auto steering_target=settings->steering_target;double steering_rate=0;
             double path_error=0,path_offset=0,remaining=0,lead_gap=std::numeric_limits<double>::infinity(),lead_ahead=lead_gap;
             std::optional<uint64_t> lead_id;double lead_speed=0;
@@ -693,7 +697,7 @@ int main(int argc,char** argv) {
                 events.sample(e);
             }
             if(now>=report) {
-                std::cout<<"speed="<<vehicle->speed_mps<<" target="<<speed_target<<" path_error="<<path_error<<" path_offset="<<path_offset<<" remaining="<<remaining<<" lead_gap="<<lead_gap<<" lead_accel="<<lead.accel_mps2
+                std::cout<<"speed="<<vehicle->speed_mps<<" target="<<speed_target<<" speed_limit="<<speed_limit<<" path_error="<<path_error<<" path_offset="<<path_offset<<" remaining="<<remaining<<" lead_gap="<<lead_gap<<" lead_accel="<<lead.accel_mps2
                     <<" steering_target="<<steering_target<<" steering_applied="<<drive->steering_applied<<" steering_input="<<command.steering<<" throttle="<<command.throttle<<" brake="<<command.brake
                     <<" axes="<<unsigned(drive->axes)<<" accepted_sequence="<<drive->sequence
                     <<" driver_throttle="<<drive->throttle_manual<<" driver_steering="<<drive->steering_manual<<(driver_steering?" (LCC yields)":"");

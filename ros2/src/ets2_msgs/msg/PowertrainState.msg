@@ -34,3 +34,7 @@ float64 retarder_level              # 0 .. 1 of the retarder's full torque
 float64 engine_brake_level          # 0 .. 1
 float64[] wheel_brake_torque_nm     # per SDK wheel index; lifted wheels may report torque
 float64[] trailer_wheel_brake_torque_nm  # first trailer, per its SDK wheel index; empty without one
+
+# From the SDK's navigation (the dashboard's speed limit sign): the current road's limit,
+# 0 where none applies, NaN unknown.
+float64 speed_limit_mps
