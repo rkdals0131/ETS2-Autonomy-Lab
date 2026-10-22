@@ -64,6 +64,10 @@ SRWLOCK pool_lock=SRWLOCK_INIT;
 std::atomic<uint64_t> arena_chunks{0},arena_allocations{0},arena_failures{0},windows{0};
 thread_local int depth=0;
 thread_local bool executor=false,arena_thread=false;
+// Set while this thread holds an object or array lock: a nested entry calls
+// through instead of taking a second SRW lock it may already hold (2026-10-22
+// 21:45 hang: one executor waited on its own object lock, §11.12).
+thread_local bool in_bundle=false,in_batch=false;
 thread_local uniform::Segment slice{};
 thread_local bool slice_valid=false,slice_now=false;
 thread_local arena::State arena_state;
@@ -105,13 +109,16 @@ template<size_t I> uintptr_t pooled(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_
 uintptr_t bundle(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
     const auto original=reinterpret_cast<Pooled>(originals[1].load(std::memory_order_relaxed));
     if(!executor || depth) return original(a,b,c,d,e,f,g,h);
+    if(in_bundle) {counters[1].nested.fetch_add(1,std::memory_order_relaxed);return original(a,b,c,d,e,f,g,h);}
     const auto object=*reinterpret_cast<const uintptr_t*>(d+0x10);
     auto& lock=object_locks[((object>>6)^(object>>16))&(object_locks.size()-1)];
     auto& count=counters[1];
     const auto start=qpc_now();
     AcquireSRWLockExclusive(&lock);
     const auto entered=qpc_now();
+    in_bundle=true;
     const auto result=original(a,b,c,d,e,f,g,h);
+    in_bundle=false;
     const auto left=qpc_now();
     ReleaseSRWLockExclusive(&lock);
     count.locked.fetch_add(1,std::memory_order_relaxed);
@@ -128,12 +135,15 @@ uintptr_t bundle(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uin
 uintptr_t draw_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
     const auto original=reinterpret_cast<Pooled>(originals[12].load(std::memory_order_relaxed));
     if(!executor || depth) return original(a,b,c,d,e,f,g,h);
+    if(in_batch) {counters[12].nested.fetch_add(1,std::memory_order_relaxed);return original(a,b,c,d,e,f,g,h);}
     auto& lock=array_locks[((c>>4)^(c>>12))&(array_locks.size()-1)];
     auto& count=counters[12];
     const auto start=qpc_now();
     AcquireSRWLockExclusive(&lock);
     const auto entered=qpc_now();
+    in_batch=true;
     const auto result=original(a,b,c,d,e,f,g,h);
+    in_batch=false;
     const auto left=qpc_now();
     ReleaseSRWLockExclusive(&lock);
     count.locked.fetch_add(1,std::memory_order_relaxed);
@@ -272,7 +282,7 @@ void PoolGuard::count_window() noexcept {windows.fetch_add(1,std::memory_order_r
 // A slice lives one frame: the segment it came from may be retired after it.
 void PoolGuard::executor_begin(bool arena) noexcept {executor=true;arena_thread=arena;slice_valid=false;slice_now=false;}
 void PoolGuard::executor_end() noexcept {
-    executor=false;arena_thread=false;
+    executor=false;arena_thread=false;in_bundle=in_batch=false;
     arena_chunks.fetch_add(arena_state.chunks,std::memory_order_relaxed);
     arena_allocations.fetch_add(arena_state.allocations,std::memory_order_relaxed);
     arena_failures.fetch_add(arena_state.failures,std::memory_order_relaxed);

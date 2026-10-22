@@ -180,7 +180,10 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate,const Options& opti
     if(concurrent) {
         guard_.install(base_);
         if(!guard_.enable()) {(void)guard_.disable();throw std::runtime_error("Cannot enable the M3c pool guard hooks");}
-    } else if(guard_.enabled() && !guard_.disable()) throw std::runtime_error("Cannot disable the M3c pool guard hooks");
+    }
+    // Otherwise the guard stays as it is: its hooks only act on executor threads
+    // of concurrent frames, and patching code while a frame may be recording
+    // hung the game once (§11.12). disable() and close() remove it at a frame boundary.
     if(requested_.load()==0) guard_.clear_counters();
     options_=options;
     reason_.clear();error_.clear();
