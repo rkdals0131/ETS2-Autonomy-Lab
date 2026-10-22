@@ -183,7 +183,7 @@ def counters(client):
               "stream": {k: stream.get(k) for k in ("armed", "completed", "published", "queue_dropped", "gpu_ring_busy",
                                                       "same_frame_skipped", "failed", "canceled") if k in stream},
               # docs/28 M3a: counters difference over the sample; keys are cumulative.
-              "parallel_passes": {k: passes.get(k) for k in ("requested_mode", "frames", "passes", "join", "defer_frame_mean", "parallel", "alternate",
+              "parallel_passes": {k: passes.get(k) for k in ("requested_mode", "frames", "passes", "join", "joined_frame_mean", "parallel", "alternate",
                                                              "keys", "key_count", "off_reason", "error", "game_folder_dxgi")
                                   if k in passes}}
     placement = (snapshot.get("sdk") or {}).get("truck.world.placement")
@@ -369,9 +369,9 @@ def speed_kmh(client):
 
 
 def passes_abab(client, prefix, pairs=2, seconds=30.0, settle=10.0, profile_hz=0.0, min_kmh=None, out=None, report=print,
-                a="off", b="defer", order=None, accept_foreign_hooks=False):
+                a="off", b="serial", order=None, accept_foreign_hooks=False):
     """docs/28 §6: alternate parallel_passes mode a (A) and mode b (B) samples, A first.
-    Labels <prefix>-off-<n>/<prefix>-on-<n> for the default off/defer pair, else
+    Labels <prefix>-off-<n>/<prefix>-on-<n> for the default off/serial pair, else
     <prefix>-<mode>-<n>; parallel/alternate get order and accept_foreign_hooks.
     Returns to off at the end."""
     def request(mode):
@@ -381,7 +381,7 @@ def passes_abab(client, prefix, pairs=2, seconds=30.0, settle=10.0, profile_hz=0
         result = client.request("parallel_passes", **options)
         if result.get("off_reason") or result.get("error"):
             raise RuntimeError(f"parallel_passes {mode}: {result.get('error') or result.get('off_reason')}")
-    tags = ("off", "on") if (a, b) == ("off", "defer") else (a, b)
+    tags = ("off", "on") if (a, b) == ("off", "serial") else (a, b)
     if min_kmh:
         report(f"waiting for {min_kmh} km/h")
         wait_speed(client, min_kmh)

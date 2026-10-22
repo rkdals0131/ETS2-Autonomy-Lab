@@ -16,7 +16,7 @@
 - ✔ 엔진은 이미 스레드를 씁니다. `game.log.txt`: `using 6 worker thread(s)`, IO worker 3, real-time worker 3. PhysX CPU dispatcher 2스레드. 이 worker들이 프레임 중에 얼마나 노는지는 아직 모릅니다.
 - ✔ `eurotrucks2.exe` 1.61.1.1: 53 MB, `.text` 31 MB. `.pdata` 120,236항목 중 53,466개는 다른 함수에 딸린 chained 조각이라, unwind 정보가 있는 함수는 66,770개입니다. leaf 함수는 따로 있습니다.
 - ✔ 기존 훅 주소는 모두 함수 중간입니다. 예: compile begin `0x2B1B40`과 end `0x2B266A`는 함수 `0x2B1A30` 안, rig select `0x538A4E`는 `0x538860` 안.
-- △ 우리 작업에서 가장 유력한 후보는 뷰별 장면 준비(가시성·후보 선택)입니다. 센서 4뷰와 준비 렌더로 뷰 수가 배로 늡니다. 다만 엔진이 뷰마다 이전 프레임 가시성 상태를 쓰는 것으로 보여([26 C1](26_cpu_optimization_plan.md)), 아래 조건 3에 걸릴 수 있습니다.
+- △ 우리 작업에서 가장 유력한 후보는 뷰별 장면 준비(가시성·후보 선택)입니다. 센서 4뷰와 수집 직전 렌더로 뷰 수가 배로 늡니다. 다만 엔진이 뷰마다 이전 프레임 가시성 상태를 쓰는 것으로 보여([26 C1](26_cpu_optimization_plan.md)), 아래 조건 3에 걸릴 수 있습니다.
 
 ## 3. 후보 조건
 

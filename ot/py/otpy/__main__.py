@@ -32,7 +32,7 @@ def main():
     perf.add_argument("--profile-hz", type=float, default=0.0, help="Also sample the main thread at this rate (e.g. 250)")
     perf.add_argument("--profile-depth", type=int, default=48, help="Call-stack frames per main-thread sample; 0 records only RIP")
     perf.add_argument("--out", help="Directory; default research/live/<today>-perf")
-    abab = sub.add_parser("passes_abab", help="docs/28 §6: alternate parallel_passes off/defer perf samples (A first)")
+    abab = sub.add_parser("passes_abab", help="docs/28 §6: alternate parallel_passes off/serial perf samples (A first)")
     abab.add_argument("prefix", help="Labels <prefix>-off-<n> and <prefix>-on-<n>, e.g. pp-drive")
     abab.add_argument("--pairs", type=int, default=2)
     abab.add_argument("--seconds", type=float, default=30.0)
@@ -40,8 +40,8 @@ def main():
     abab.add_argument("--profile-hz", type=float, default=0.0)
     abab.add_argument("--min-kmh", type=float, help="First wait until the truck holds this speed for 10 s (highway set)")
     abab.add_argument("--out", help="Directory; default research/live/<today>-perf")
-    abab.add_argument("--a", choices=("off", "defer", "parallel", "alternate"), default="off", help="Mode of the A samples")
-    abab.add_argument("--b", choices=("off", "defer", "parallel", "alternate"), default="defer", help="Mode of the B samples")
+    abab.add_argument("--a", choices=("off", "serial", "parallel", "alternate"), default="off", help="Mode of the A samples")
+    abab.add_argument("--b", choices=("off", "serial", "parallel", "alternate"), default="serial", help="Mode of the B samples")
     abab.add_argument("--order", choices=("ticket", "free"), help="Required when A or B is parallel/alternate")
     abab.add_argument("--accept-foreign-hooks", action="store_true", help="order=ticket only, as in parallel_passes")
     sub.add_parser("perf_table", help="One line per saved perf sample").add_argument("files", nargs="+")
@@ -62,10 +62,10 @@ def main():
     probe.add_argument("--mode", dest="hook_mode", choices=("observe", "rig"), default="observe",
                        help="observe: capture hooks; rig: only the four camera placement hooks")
     probe.add_argument("--frames", action="store_true", help="With rig mode: also observe Present intervals")
-    passes = sub.add_parser("parallel_passes", help="docs/28: defer type 1 render passes to the end of the pass loop "
-                            "(defer, main thread), record them on engine workers (parallel) or alternate the two per "
+    passes = sub.add_parser("parallel_passes", help="docs/28: postpone type 1 render passes to the end of the pass loop and record them "
+                            "there in order on the main thread (serial), record them on engine workers (parallel) or alternate the two per "
                             "frame (alternate); F11 returns to off")
-    passes.add_argument("mode", choices=("status", "off", "defer", "parallel", "alternate"), default="status", nargs="?")
+    passes.add_argument("mode", choices=("status", "off", "serial", "parallel", "alternate"), default="status", nargs="?")
     passes.add_argument("--order", choices=("ticket", "free"),
                         help="parallel/alternate (required): ticket = one pass at a time in the original order; free = any order under one lock")
     passes.add_argument("--executors", type=int, default=0, help="Executors including the main thread; 0 = engine workers + 1")

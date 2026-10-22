@@ -43,7 +43,7 @@ Windows 런처(pixi 환경) → Job Object로 릴레이·foxglove_bridge·provid
 ## 렌더와 전송
 
 - 캡처 요청 하나를 다음 센서 선택 호출이 가져갑니다. 4뷰 구성에서는 선택된 네 pass의 실제 Present ID를 대조하고 완성된 묶음만 발행합니다. 구독 요구와 라이다 주기에 따라 필요한 뷰·출력을 선택합니다.
-- private 센서는 유휴 뒤 준비 프레임 하나와 바로 다음 수집 프레임을 사용합니다. 준비 없이 요청 프레임만 렌더하면 나무·가로등이 사라집니다([lessons](history/lessons.md#센서-렌더-생략과-정적-물체-깜빡임)).
+- private 센서는 유휴 뒤 수집 직전에 같은 뷰를 한 프레임 더 렌더하고, 바로 다음 프레임에서 수집합니다. 수집 직전 렌더 없이 요청 프레임만 렌더하면 나무·가로등이 사라집니다([lessons](history/lessons.md#센서-렌더-생략과-정적-물체-깜빡임)).
 - 이미지는 공유 D3D11 텍스처에 pack합니다. 게임이 fence를 signal하고 릴레이가 별도 device에서 staging으로 복사해 읽습니다. 소비 완료 전 슬롯은 재사용하지 않고, 혼잡 시 오래된 묶음을 통째로 버립니다.
 - 릴레이는 XCDRv1 little-endian 바이트를 직접 만듭니다. 영상·라이다는 best-effort, 상태는 reliable, 정적 구성은 transient-local입니다. Fast DDS SHM participant 세그먼트 128 MiB, 최대 메시지 8 MiB 설정(`bridge/config/fastdds.xml`)을 pixi activation이 모든 프로세스에 적용합니다(전체 점군 실측은 P1 게임 시험).
 - 센서 계산은 ROS 직렬화·구독 수·소켓 상태를 참조하지 않습니다. `MotionSample`을 만든 뒤 전송 쪽이 구독된 측정만 직렬화합니다.

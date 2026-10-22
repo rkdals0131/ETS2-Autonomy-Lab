@@ -1,6 +1,6 @@
 # ot — 게임 DLL과 개발 도구
 
-저장소의 core·loader는 0.48.0, 설치본 core는 0.47.1(2026-10-22), 상주 loader는 0.44.0입니다(게임 1.61.1.9). 0.48.0은 loader의 `ot_drive` 장치에 semantical `lblinker`·`rblinker`(방향지시등 레버, 게임 mix `lblinker`·`rblinker`가 이미 `semantical.*?0`을 받아 다시 연결할 필요 없음)를 등록하고, 운전 API에 선택적 ABI-1 꼬리 `signal`(무장된 소유자·epoch의 레버 한 번 누르기, 100 ms 누르고 100 ms 쉼, 4개까지 대기, 해제 시 버림)과 core 파이프 `drive` 동작 `signal`(`side` −1/1)을 더합니다. loader가 바뀌므로 게임을 정상 종료하고 설치한 뒤 재시작해야 하며, 예전 loader에서는 core가 `signal`을 "updated resident loader" 오류로 거절합니다(나머지는 그대로). △ 게임 설치·시험 전입니다. 0.47.1은 교통 GT에 차체 상자 중심 높이 `z`와 상자 높이 `height_m`을 더합니다(core만, 2026-10-22 설치). 아래는 그 전 기록입니다. 0.43.0은 HUD 궤적 데칼([docs/24](../docs/24_hud_overlay_design.md): `overlay` 명령, `Local\OT_Overlay`, render_probe `overlay` 모드)을 더합니다. core만 바뀌며(같이 빌드되는 loader는 번호만 0.43.0이고 동작은 0.42.0과 같음) 게임 시험 전입니다([사용법](#hud-궤적-데칼)). 0.42.0은 운전 API에 보조 제동(축 4: 리타더 단 0–5와 엔진브레이크, ABI-1 `request_aux` 꼬리)을 더하고 loader의 `ot_drive` 장치에 semantical `retarder0`–`retarder5`·`motorbrake` 입력을 등록합니다. loader가 바뀌므로 게임을 정상 종료하고 설치한 뒤 재시작해야 하며, 예전 loader와 새 core, 새 loader와 예전 core 조합은 보조 제동 없이 그대로 동작합니다([운전 명령 API](../bridge/README.md#운전-명령-api)). 0.41.0은 Tier 1 `engine.drivetrain`에 첫 트레일러의 바퀴별 브레이크 토크를 더합니다. 0.40.0은 첫 트레일러 채널(`trailer.0.*`, 바퀴별 채널 포함)과 트럭 외 SDK 구성(`configs`: 트레일러, 작업·화물, 조작의 변속 방식 등)을 받습니다. 0.39.0은 Tier 1 `engine.drivetrain`에 실제 엔진 토크·변속기 출력 토크·축 회전·바퀴별 브레이크 토크를 더했습니다([docs/30](../docs/30_can_like_signals.md)). 0.38.0은 설치 후 Tier 1·렌더 훅·카메라 리그·릴레이를 확인했습니다. 0.37.0(실차 CAN에 해당하는 SDK 채널·트럭 구성 값)과 0.38.0도 core만 바뀝니다. 0.31.1(lease 반납을 `panic` 대신 `disconnected`로 기록), 0.32.0(자세만 남은 카메라는 미리보기 주기로만 렌더, `sdk_timing`), 0.33.0(GT 메타데이터도 rider, 리그 `native_mirrors`, `main_profile`·`traffic` 명령), 0.34.0(`main_profile` 호출 스택), 0.34.1(`main_profile`의 `thread_id`로 다른 게임 스레드 샘플), 0.35.0(`parallel_passes` defer), 0.36.0(`parallel`·`alternate`)은 core만 바뀌어 설치된 loader 0.31.0을 그대로 씁니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
+저장소의 core·loader는 0.49.0, 설치본 core는 0.47.1(2026-10-22), 상주 loader는 0.44.0입니다(게임 1.61.1.9). 0.49.0은 `parallel_passes`의 합류점 직렬 실행 모드 이름을 `defer`에서 `serial`로 바꿉니다(core 명령 값, `ot.cmd` 인자, 상태 키 `frames.serial`·`joined_frame_mean`). core만 바뀌며(같이 빌드되는 loader는 번호만 0.49.0이고 동작은 0.48.0과 같음), 0.48.0 이하가 설치된 동안에는 core가 `serial`을 거절하므로 설치 뒤에 새 이름을 씁니다. 0.48.0은 loader의 `ot_drive` 장치에 semantical `lblinker`·`rblinker`(방향지시등 레버, 게임 mix `lblinker`·`rblinker`가 이미 `semantical.*?0`을 받아 다시 연결할 필요 없음)를 등록하고, 운전 API에 선택적 ABI-1 꼬리 `signal`(무장된 소유자·epoch의 레버 한 번 누르기, 100 ms 누르고 100 ms 쉼, 4개까지 대기, 해제 시 버림)과 core 파이프 `drive` 동작 `signal`(`side` −1/1)을 더합니다. loader가 바뀌므로 게임을 정상 종료하고 설치한 뒤 재시작해야 하며, 예전 loader에서는 core가 `signal`을 "updated resident loader" 오류로 거절합니다(나머지는 그대로). △ 게임 설치·시험 전입니다. 0.47.1은 교통 GT에 차체 상자 중심 높이 `z`와 상자 높이 `height_m`을 더합니다(core만, 2026-10-22 설치). 아래는 그 전 기록입니다. 0.43.0은 HUD 궤적 데칼([docs/24](../docs/24_hud_overlay_design.md): `overlay` 명령, `Local\OT_Overlay`, render_probe `overlay` 모드)을 더합니다. core만 바뀌며(같이 빌드되는 loader는 번호만 0.43.0이고 동작은 0.42.0과 같음) 게임 시험 전입니다([사용법](#hud-궤적-데칼)). 0.42.0은 운전 API에 보조 제동(축 4: 리타더 단 0–5와 엔진브레이크, ABI-1 `request_aux` 꼬리)을 더하고 loader의 `ot_drive` 장치에 semantical `retarder0`–`retarder5`·`motorbrake` 입력을 등록합니다. loader가 바뀌므로 게임을 정상 종료하고 설치한 뒤 재시작해야 하며, 예전 loader와 새 core, 새 loader와 예전 core 조합은 보조 제동 없이 그대로 동작합니다([운전 명령 API](../bridge/README.md#운전-명령-api)). 0.41.0은 Tier 1 `engine.drivetrain`에 첫 트레일러의 바퀴별 브레이크 토크를 더합니다. 0.40.0은 첫 트레일러 채널(`trailer.0.*`, 바퀴별 채널 포함)과 트럭 외 SDK 구성(`configs`: 트레일러, 작업·화물, 조작의 변속 방식 등)을 받습니다. 0.39.0은 Tier 1 `engine.drivetrain`에 실제 엔진 토크·변속기 출력 토크·축 회전·바퀴별 브레이크 토크를 더했습니다([docs/30](../docs/30_can_like_signals.md)). 0.38.0은 설치 후 Tier 1·렌더 훅·카메라 리그·릴레이를 확인했습니다. 0.37.0(실차 CAN에 해당하는 SDK 채널·트럭 구성 값)과 0.38.0도 core만 바뀝니다. 0.31.1(lease 반납을 `panic` 대신 `disconnected`로 기록), 0.32.0(자세만 남은 카메라는 미리보기 주기로만 렌더, `sdk_timing`), 0.33.0(GT 메타데이터도 rider, 리그 `native_mirrors`, `main_profile`·`traffic` 명령), 0.34.0(`main_profile` 호출 스택), 0.34.1(`main_profile`의 `thread_id`로 다른 게임 스레드 샘플), 0.35.0(`parallel_passes` 직렬 모드, 당시 이름 `defer`), 0.36.0(`parallel`·`alternate`)은 core만 바뀌어 설치된 loader 0.31.0을 그대로 씁니다. 0.31.0 loader는 custom modifier(`!`·`&`·`joy.bN`·빈 mix)가 있는 controls 프로필도 수동 개입 판정에 읽습니다(loader 교체 후 게임 재시작 필요). 센서와 독립된 운전 명령·AI traffic GT를 연결하며, 선택적 ABI-1 확장으로 ACC·LCC 축 소유권을 분리합니다. 입력 장치는 상주 loader가 공식 Input SDK로 등록합니다. 센서 수집과 독립된 가상 3축 장치이며, 저장소 기본 권한은 꺼져 있습니다. 실제 지도 차로·GT 위치 기반 주행은 core 0.28.0에서 처음 확인했습니다. 구 host prefix는 유지하며, 독립 ACC/LCC 모드에는 새 상주 loader 설치 후 정상 게임 재시작이 필요합니다. [입력 API와 남은 게임 시험](../bridge/README.md#운전-명령-api), [독립 ACC/LCC 사용법](../bridge/README.md#gt-도로-자동-주행).
 
 브리지는 카메라 30 Hz·라이다 10 Hz·표시용 JPEG 10 Hz를 요청합니다. FH4·Scania S private 프리셋은 슬롯 3·4·6·7을 센서 제출에 사용하며 native mirror 배열은 보존합니다. 일반 사용은 [브리지 런처](../bridge/README.md)에서 시작합니다.
 
@@ -42,30 +42,30 @@ x64 MSVC Build Tools, CMake·Ninja, 공식 SCS SDK가 필요합니다. 기계별
 ## 렌더 패스 미루기와 worker 기록 (M3a·M3b)
 
 ```powershell
-.\ot\ot.cmd parallel_passes defer   # 타입 1 패스를 패스 반복 끝(0x227B1F)에서 원래 순서로 기록
+.\ot\ot.cmd parallel_passes serial  # 타입 1 패스를 패스 반복 끝(0x227B1F)에서 원래 순서로 기록
 .\ot\ot.cmd parallel_passes         # 프레임·패스·합류 시간, 패스별(이름/공간) 시간·dword 상위 60
 .\ot\ot.cmd parallel_passes off
 ```
 
-렌더 패스 병렬 기록([docs/28](../docs/28_render_pass_parallel_prototype.md))의 첫 단계입니다. defer는 메인 스레드에서 직렬로 기록하므로 성능 이득은 없고, 미루기·splice·패스별 카운터를 확인하는 용도입니다.
+렌더 패스 병렬 기록([docs/28](../docs/28_render_pass_parallel_prototype.md))의 첫 단계입니다. `serial`은 메인 스레드에서 합류점에 원래 순서대로 기록하므로 성능 이득은 없고, 미루기·splice·패스별 카운터를 확인하는 용도입니다.
 
 M3b는 미룬 패스를 엔진 작업 관리자(`parallel_loop_task_t`)로 worker에 나눕니다. 아직 한 번에 한 패스만 기록하므로 이득은 없고, worker 스레드에서 렌더 기록이 도는지를 확인하는 단계입니다.
 
 ```powershell
 .\ot\ot.cmd parallel_passes parallel --order ticket --accept-foreign-hooks   # 원래 순서로 한 번에 한 패스(스레드 전환만 검증)
-.\ot\ot.cmd parallel_passes alternate --order ticket --accept-foreign-hooks  # 프레임마다 defer와 parallel을 번갈아 키별 명령 요약 비교
+.\ot\ot.cmd parallel_passes alternate --order ticket --accept-foreign-hooks  # 프레임마다 serial과 parallel을 번갈아 키별 명령 요약 비교
 .\ot\ot.cmd parallel_passes parallel --order free                           # 순서 자유 + 락 하나(외부 패치 없는 .text에서만)
 ```
 
 `--order`는 필수입니다. 외부 코드 패치가 기록 경로에 있으면(status `gate.workers_allowed`가 false) worker 모드는 거절되고, `order=ticket`만 `--accept-foreign-hooks`로 예외를 둡니다. 큐에 같은 패스 객체가 두 번 있으면 그 프레임은 직렬로 기록합니다. alternate는 각 패스 본체를 요약해 이웃한 다른 모드 프레임(교차)과 두 프레임 전 같은 모드(기준선)를 비교하고, 교차 불일치율이 기준선의 두 배와 기준선+1%p를 모두 넘으면 꺼집니다. 이 판정은 세 단계 합계, 구조(크기·토큰) 단계만, 토큰 단계만(여유 +0.1%p)에 각각 적용합니다. 게임에서는 내용 단계가 정차 중에도 77% 다르기 때문입니다(저장소 다음 core부터, docs/28 §11.2). status의 `parallel`(순서 대기·패스 보유 시간, 스레드별 패스 수)과 `alternate`(비교 수·불일치율·처음 어긋난 키)가 결과입니다. 설치된 `ot_config.json`에 `allow_parallel_passes`(저장소 기본값 false), `allow_tier1`, `singleplayer_research`가 필요합니다. 브리지 lease와 무관하게 켜고 끄며, F11·lease 종료·권한 재읽기에서 꺼집니다. 끄기는 미룬 패스가 있는 프레임이 합류를 마칠 때까지 기다렸다가 훅을 내립니다. 일시정지 프레임과 장치가 바뀐 프레임은 원래 경로로 기록합니다. `perf` 표본에 이 상태의 증가분이 함께 저장됩니다.
 
-켤 때 게임 `.text`를 exe 파일(현재 베이스로 `.reloc` 적용)과 비교해 다른 구간을 우리 훅, `ot_config.json`의 `accepted_text_patches`(`[{"rva": "0x…", "size": n}]`), 외부로 나눠 status의 `gate`에 냅니다. 기록 경로 함수(`fields.json`의 `render_parallel.closure_rvas`)와 우리 훅 자리의 앞 32바이트는 켜져 있는 동안 1초마다 다시 비교하고, 바뀌면 off로 내려갑니다. 외부 패치가 있어도 defer는 켭니다. 메인 스레드에서 원래 순서로 기록하기 때문이며, snowymoon `dxgi.dll`과 함께 2,200프레임을 확인했습니다. 외부 패치가 있으면 `gate.workers_allowed`가 false가 되고, worker 기록(M3b 이후)은 이 값을 따릅니다.
+켤 때 게임 `.text`를 exe 파일(현재 베이스로 `.reloc` 적용)과 비교해 다른 구간을 우리 훅, `ot_config.json`의 `accepted_text_patches`(`[{"rva": "0x…", "size": n}]`), 외부로 나눠 status의 `gate`에 냅니다. 기록 경로 함수(`fields.json`의 `render_parallel.closure_rvas`)와 우리 훅 자리의 앞 32바이트는 켜져 있는 동안 1초마다 다시 비교하고, 바뀌면 off로 내려갑니다. 외부 패치가 있어도 `serial`은 켭니다. 메인 스레드에서 원래 순서로 기록하기 때문이며, snowymoon `dxgi.dll`과 함께 2,200프레임을 확인했습니다. 외부 패치가 있으면 `gate.workers_allowed`가 false가 되고, worker 기록(M3b 이후)은 이 값을 따릅니다.
 
 ```powershell
-# 주행 판정 세트(docs/28 §6): 20 km/h를 10초 유지하면 off/defer를 30초씩 번갈아 2쌍
+# 주행 판정 세트(docs/28 §6): 20 km/h를 10초 유지하면 off/serial을 30초씩 번갈아 2쌍
 .\ot\ot.cmd passes_abab pp-drive --pairs 2 --min-kmh 20 --profile-hz 250
 # 다른 두 모드: --a/--b, worker 모드는 --order(필요하면 --accept-foreign-hooks)
-.\ot\ot.cmd passes_abab pp-ticket --a defer --b parallel --order ticket --accept-foreign-hooks --min-kmh 20
+.\ot\ot.cmd passes_abab pp-ticket --a serial --b parallel --order ticket --accept-foreign-hooks --min-kmh 20
 ```
 
 티켓 순서(M3b-1)는 정합성 시험용입니다. 2026-10-22 시험에서 worker 기록이 엔진 assert·alien 경고 없이 메인 기록과 같은 명령을 만들었지만, 차례 넘김 때문에 합류가 가끔 50 ms를 넘어 자동으로 꺼지고 주행에서 fps가 떨어졌습니다(docs/28 §11).

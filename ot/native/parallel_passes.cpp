@@ -58,7 +58,7 @@ bool game_folder_dxgi() {
     if(!dxgi) return false;
     return module_path(dxgi).parent_path()==module_path(nullptr).parent_path();
 }
-const char* mode_name(int mode) {return mode==1?"defer":mode==2?"parallel":mode==3?"alternate":"off";}
+const char* mode_name(int mode) {return mode==1?"serial":mode==2?"parallel":mode==3?"alternate":"off";}
 std::string hex(uintptr_t value) {char text[24];std::snprintf(text,sizeof(text),"0x%llX",static_cast<unsigned long long>(value));return text;}
 // Module name and offset of an address, following one anonymous jump stub.
 std::string describe_target(uintptr_t address) {
@@ -329,7 +329,7 @@ void ParallelPasses::execute_detour(uintptr_t builder,uintptr_t value,uintptr_t 
     callbacks.fetch_add(1);
     auto* self=instance.load();
     const auto original=self?self->original_.load():nullptr;
-    if(self && original && self->defer(builder,value,pass,marker)) {callbacks.fetch_sub(1);return;}
+    if(self && original && self->queue_pass(builder,value,pass,marker)) {callbacks.fetch_sub(1);return;}
     callbacks.fetch_sub(1);
     if(original) original(builder,value,pass,marker);
 }
@@ -355,12 +355,12 @@ void ParallelPasses::latch() noexcept {
     else {
         ++frame_index_;
         frame_options_=options_;
-        if(mode==Mode::alternate) {summary_mode_=static_cast<int>(frame_index_&1);mode=summary_mode_?Mode::parallel:Mode::defer;}
+        if(mode==Mode::alternate) {summary_mode_=static_cast<int>(frame_index_&1);mode=summary_mode_?Mode::parallel:Mode::serial;}
     }
     occurrences_.clear();
     frame_mode_=mode;latched_=true;latch_qpc_=qpc_now();
 }
-bool ParallelPasses::defer(uintptr_t builder,uintptr_t value,uintptr_t pass,void* marker) noexcept {
+bool ParallelPasses::queue_pass(uintptr_t builder,uintptr_t value,uintptr_t pass,void* marker) noexcept {
     if(GetCurrentThreadId()!=main_thread_.load()) {++non_main_calls;return false;}
     if(joining_) return false;
     if(latched_ && qpc_now()-latch_qpc_>qpc_frequency()) {
@@ -397,7 +397,7 @@ void ParallelPasses::pass_key(Deferred& item) {
     const auto base_key=fnv(item.space,fnv(item.name)^0x9E3779B97F4A7C15ull);
     item.key=base_key+occurrences_[base_key]++*0x100000001B3ull;
 }
-// Runs on the main thread (defer) or on an engine worker (parallel, one pass
+// Runs on the main thread (serial) or on an engine worker (parallel, one pass
 // at a time). Scratch is thread-local; shared state is under stats_mutex_.
 void ParallelPasses::record(const Deferred& item,uint64_t& frame_dwords,uint64_t& largest,int summary_mode,uint64_t frame) {
     thread_local std::vector<uint32_t> tail,body;
@@ -485,7 +485,7 @@ void ParallelPasses::join() noexcept {
     bool too_long=false,overflow_off=false,suspect=false;
     {
         std::lock_guard stats(stats_mutex_);
-        ++(parallel?counters_.frames_parallel:counters_.frames_defer);
+        ++(parallel?counters_.frames_parallel:counters_.frames_serial);
         if(parallel) counters_.parallel_join_ticks+=ticks;
         counters_.join.add(ticks);
         counters_.frame_dwords+=frame_dwords;counters_.frame_ticks+=ticks;counters_.largest_ticks+=largest;++counters_.frames_measured;
@@ -504,7 +504,7 @@ json ParallelPasses::status() {
         {"game_folder_dxgi",game_folder_dxgi()},{"qpc_frequency",qpc_frequency()},{"non_main_calls",non_main_calls.load()}};
     std::lock_guard stats(stats_mutex_);
     const auto& c=counters_;
-    result["frames"]={{"off",c.frames_off},{"defer",c.frames_defer},{"parallel",c.frames_parallel},{"duplicate_pointer_frames",c.duplicate_frames}};
+    result["frames"]={{"off",c.frames_off},{"serial",c.frames_serial},{"parallel",c.frames_parallel},{"duplicate_pointer_frames",c.duplicate_frames}};
     const auto freq=static_cast<double>(qpc_frequency());
     json threads=json::object();
     for(const auto& [thread,count]:thread_passes_) threads[std::to_string(thread)]=count;
@@ -527,7 +527,7 @@ json ParallelPasses::status() {
         {"front_dwords",{{"0",c.front[0]},{"4",c.front[1]},{"other",c.front[2]}}},
         {"back_dwords",{{"0",c.back[0]},{"4",c.back[1]},{"other",c.back[2]}}}};
     result["join"]=c.join.snapshot();
-    if(c.frames_measured) result["defer_frame_mean"]={{"frames",c.frames_measured},
+    if(c.frames_measured) result["joined_frame_mean"]={{"frames",c.frames_measured},
         {"dwords",c.frame_dwords/c.frames_measured},{"join_ticks",c.frame_ticks/c.frames_measured},
         {"largest_pass_ticks",c.largest_ticks/c.frames_measured}};
     std::vector<const KeyStats*> sorted;sorted.reserve(keys_.size());

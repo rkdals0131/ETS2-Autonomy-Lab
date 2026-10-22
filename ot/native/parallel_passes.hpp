@@ -11,13 +11,13 @@
 namespace ot {
 // docs/28 M3a/M3b: type 1 render passes are deferred from 0x226A00 and recorded
 // at the end of the pass loop in 0x2271E0 (0x227BBF): on the main thread in the
-// original order (defer), or on engine workers through parallel_loop_task_t,
+// original order (serial), or on engine workers through parallel_loop_task_t,
 // one pass at a time (ticket order or one lock). Recording a pass twice is not possible: pass
 // callbacks consume per-pass state (0x151DDB0 asserts on an empty blit pair
 // array the second time), so there is no same-frame shadow recording.
 class ParallelPasses {
 public:
-    enum class Mode : int {off=0,defer=1,parallel=2,alternate=3};
+    enum class Mode : int {off=0,serial=1,parallel=2,alternate=3};
     struct Options {
         bool ticket=true;          // false: free order under one lock (M3b-2)
         unsigned executors=0;      // 0: worker count + 1, as the engine's own loops
@@ -54,7 +54,7 @@ private:
         uint64_t passes=0,ticks=0,max_ticks=0,dwords=0,raw_changes=0;
     };
     struct Counters {
-        uint64_t frames_off=0,frames_defer=0,frames_parallel=0,duplicate_frames=0,deferred=0,marker=0,overflow=0;
+        uint64_t frames_off=0,frames_serial=0,frames_parallel=0,duplicate_frames=0,deferred=0,marker=0,overflow=0;
         uint64_t wait_ticks=0,hold_ticks=0,parallel_join_ticks=0,parallel_pass_ticks=0;
         uint64_t splice_used=0,splice_fallback=0,orphaned=0;
         std::array<uint64_t,4> chunks{};      // storage records at deferral: 0,1,2,3+
@@ -64,7 +64,7 @@ private:
     };
     static void execute_detour(uintptr_t builder,uintptr_t value,uintptr_t pass,void* marker);
     static void join_callback(safetyhook::Context& context) noexcept;
-    bool defer(uintptr_t builder,uintptr_t value,uintptr_t pass,void* marker) noexcept;
+    bool queue_pass(uintptr_t builder,uintptr_t value,uintptr_t pass,void* marker) noexcept;
     void join() noexcept;
     void latch() noexcept;
     struct ParallelFrame;
@@ -92,7 +92,7 @@ private:
     std::atomic<DWORD> main_thread_{0};
     std::atomic<bool> paused_{true};
     // Main thread only (the deferral hook and the join both run there).
-    Mode frame_mode_=Mode::off;     // effective mode of the latched frame (off, defer or parallel)
+    Mode frame_mode_=Mode::off;     // effective mode of the latched frame (off, serial or parallel)
     int summary_mode_=-1;           // alternate: 0 serial frame, 1 parallel frame
     uint64_t frame_index_=0;        // non-off frames latched since enable
     Options options_{},frame_options_{};

@@ -652,13 +652,13 @@ json Runtime::command(const json& request) {
         if(request.contains("mode")) {
             const auto mode=request.at("mode").get<std::string>();
             if(mode=="off") parallel_passes_->disable();
-            else if(mode=="defer" || mode=="parallel" || mode=="alternate") {
+            else if(mode=="serial" || mode=="parallel" || mode=="alternate") {
                 if(!gate_ok_ || !allow_tier1_ || !allow_parallel_passes_)
                     throw std::runtime_error("parallel_passes requires matching EXE, singleplayer_research, allow_tier1 and allow_parallel_passes");
                 ParallelPasses::GateInputs gate{render_probe_->patched_ranges(),accepted_text_patches_,{}};
                 for(const auto& rva:schema_.at("render_parallel").at("closure_rvas")) gate.closure.push_back(rva.get<uintptr_t>());
                 ParallelPasses::Options options;
-                if(mode!="defer") {
+                if(mode!="serial") {
                     // docs/28 §10: the order is always explicit for worker recording.
                     const auto order=request.at("order").get<std::string>();
                     if(order!="ticket" && order!="free") throw std::runtime_error("order must be ticket or free");
@@ -666,10 +666,10 @@ json Runtime::command(const json& request) {
                     options.executors=request.value("executors",0u);
                     options.accept_foreign=request.value("accept_foreign_hooks",false);
                 }
-                parallel_passes_->enable(mode=="defer"?ParallelPasses::Mode::defer:mode=="parallel"?ParallelPasses::Mode::parallel:
+                parallel_passes_->enable(mode=="serial"?ParallelPasses::Mode::serial:mode=="parallel"?ParallelPasses::Mode::parallel:
                     ParallelPasses::Mode::alternate,gate,options);
             } else if(mode=="shadow") throw std::runtime_error("Recording a pass twice crashes: pass callbacks consume their blit pairs (0x151DDB0, docs/28)");
-            else throw std::runtime_error("parallel_passes mode must be off, defer, parallel or alternate");
+            else throw std::runtime_error("parallel_passes mode must be off, serial, parallel or alternate");
         }
         return parallel_passes_->status();
     }
