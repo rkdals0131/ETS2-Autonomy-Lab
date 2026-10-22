@@ -7,6 +7,7 @@
 #include "text_gate.hpp"
 #include "parallel_loop.hpp"
 #include "frame_arena.hpp"
+#include "uniform_slice.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <deque>
@@ -302,6 +303,34 @@ void frame_arena() {
     arena::State big;
     check(!arena::allocate(big,arena::chunk_bytes+1,16,tag,get) && big.failures==1,"more than 2 MB fails like the engine (null)");
 }
+// docs/28 M3d-2: a slice view makes the engine's ring code allocate real,
+// 256-aligned addresses inside the slice and switch exactly at its end.
+void uniform_slice() {
+    namespace u=ot::uniform;
+    u::Segment real{7,0,0x10000000,0x50000000,0x1234};
+    const auto view_engine=[](u::Segment& segment,uint64_t bytes,uintptr_t& gpu,uintptr_t& cpu) {
+        const auto offset=u::offset_of(segment);                        // 0x2E52CC-0x2E52E5
+        if(offset+bytes>u::segment_bytes) return false;                 // 0x2E52EC: would call 0x2E6B60
+        segment.cursor=offset+bytes;                                    // 0x2E530A
+        gpu=segment.gpu+offset;cpu=segment.cpu+offset;                  // 0x2E5317-0x2E5322
+        return true;
+    };
+    auto a=u::carve(real,0x10000);
+    check(real.cursor==0x1300+0x10000 && a.id==7,"carving advances the real cursor by the slice from its aligned offset");
+    bool inside=true,aligned=true;uint64_t used=0;int count=0;
+    uintptr_t gpu{},cpu{};
+    for(const uint64_t bytes:{100,300,64,4096,1000,256}) {
+        if(!view_engine(a,bytes,gpu,cpu)) {inside=false;break;}
+        inside&=gpu>=0x10001300 && gpu+bytes<=0x10011300 && cpu-0x50000000==gpu-0x10000000;
+        aligned&=(gpu&0xFF)==0;used+=bytes;++count;
+    }
+    check(inside && aligned && count==6,"ranges from the view are real, 256-aligned addresses inside the slice");
+    u::Segment b=a;
+    while(view_engine(b,4096,gpu,cpu)) inside&=gpu+4096<=0x10011300;
+    check(inside && !u::fits(b,4096) && u::offset_of(b)<=u::segment_bytes,"the engine's 2 MB test trips at the slice end");
+    auto c=u::carve(real,0x10000);
+    check(c.gpu+u::offset_of(c)==0x10011300,"the next slice starts where the previous one ended");
+}
 int main() {
     splice_order();
     splice_across_chunks();
@@ -311,6 +340,7 @@ int main() {
     text_gate();
     engine_loop();
     frame_arena();
+    uniform_slice();
     alternate();
     names();
     std::printf(failures?"FAILED %d\n":"ALL PASSED\n",failures);

@@ -1,5 +1,6 @@
 #include "pool_guard.hpp"
 #include "frame_arena.hpp"
+#include "uniform_slice.hpp"
 #include <stdexcept>
 
 namespace ot {
@@ -35,13 +36,18 @@ constexpr std::array<Site,PoolGuard::hook_count> sites={{
     {"resource_ready 0x32E4D0",0x32E540,{0x40,0x57,0x48,0x83,0xEC,0x20,0x48,0x8B,0xF9,0x48,0x85,0xC9,0x75,0x08,0x32,0xC0,0x48,0x83,0xC4,0x20,0x5F,0xC3,0x8B,0x41,0x44,0xC1,0xE8,0x03,0xA8,0x01,0x74,0x08,0xB0,0x01,0x48,0x83,0xC4,0x20,0x5F,0xC3}},
 }};
 
-// Ring cursor section of 0x2E50B0: from the first load of [device+0xF1490]
-// to the instruction after the last segment field read (docs/28 §11.9).
-constexpr uintptr_t ring_enter_rva=0x2E52BA,ring_leave_rva=0x2E531F;
-constexpr std::array<uint8_t,40> ring_enter_signature={0x48,0x8B,0x8F,0x90,0x14,0x0F,0x00,0x48,0x8B,0xF0,0x8B,0x58,0x10,0x48,0x85,0xC9,
-    0x74,0x28,0x48,0x8B,0x51,0x08,0x48,0x8B,0x49,0x18,0x4C,0x8D,0x82,0xFF,0x00,0x00,0x00,0x4C,0x03,0xC1,0x49,0x81,0xE0,0x00};
-constexpr std::array<uint8_t,40> ring_leave_signature={0x4D,0x03,0xF8,0x49,0x03,0xC8,0x89,0x45,0x20,0x48,0x83,0x7E,0x28,0x00,0x8B,0x46,
-    0x10,0x48,0x89,0x4D,0xA0,0x48,0x8B,0x8D,0xF0,0x00,0x00,0x00,0x48,0x89,0x45,0x98,0x48,0x8B,0x81,0x08,0x01,0x00,0x00,0x74};
+// The instructions right after the three loads of [device+0xF1490] in 0x2E50B0
+// (docs/28 §11.10): 0x2E52BA mov rcx (range size at [rax+0x10]), 0x2E52FF
+// mov rax (cursor store), 0x2E530E mov rcx (id, GPU and CPU reads). No branch
+// lands inside the patched bytes.
+constexpr std::array<uintptr_t,3> slice_rvas={0x2E52C1,0x2E5306,0x2E5315};
+constexpr std::array<std::array<uint8_t,40>,3> slice_signatures={{
+    {0x48,0x8B,0xF0,0x8B,0x58,0x10,0x48,0x85,0xC9,0x74,0x28,0x48,0x8B,0x51,0x08,0x48,0x8B,0x49,0x18,0x4C,0x8D,0x82,0xFF,0x00,0x00,0x00,0x4C,0x03,0xC1,0x49,0x81,0xE0,0x00,0xFF,0xFF,0xFF,0x4C,0x2B,0xC2,0x49},
+    {0x49,0x8D,0x0C,0x98,0x48,0x89,0x48,0x18,0x48,0x8B,0x8F,0x90,0x14,0x0F,0x00,0x8B,0x01,0x4C,0x8B,0x79,0x08,0x48,0x8B,0x49,0x10,0x4D,0x03,0xF8,0x49,0x03,0xC8,0x89,0x45,0x20,0x48,0x83,0x7E,0x28,0x00,0x8B},
+    {0x8B,0x01,0x4C,0x8B,0x79,0x08,0x48,0x8B,0x49,0x10,0x4D,0x03,0xF8,0x49,0x03,0xC8,0x89,0x45,0x20,0x48,0x83,0x7E,0x28,0x00,0x8B,0x46,0x10,0x48,0x89,0x4D,0xA0,0x48,0x8B,0x8D,0xF0,0x00,0x00,0x00,0x48,0x89},
+}};
+constexpr uintptr_t segment_offset=0xF1490;
+constexpr uint64_t slice_bytes=0x10000;
 
 struct HookCounters {std::atomic<uint64_t> locked{0},nested{0},wait_ticks{0},hold_ticks{0};};
 std::array<HookCounters,PoolGuard::hook_count> counters;
@@ -52,8 +58,9 @@ std::atomic<uintptr_t> base{0};
 SRWLOCK pool_lock=SRWLOCK_INIT;
 std::atomic<uint64_t> arena_chunks{0},arena_allocations{0},arena_failures{0},windows{0};
 thread_local int depth=0;
-thread_local bool executor=false,arena_thread=false,ring_held=false;
-thread_local uint64_t ring_entered=0;
+thread_local bool executor=false,arena_thread=false;
+thread_local uniform::Segment slice{};
+thread_local bool slice_valid=false,slice_now=false;
 thread_local arena::State arena_state;
 
 using Allocate=uintptr_t(*)(uint64_t,uint64_t);
@@ -107,21 +114,41 @@ uintptr_t bundle(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uin
     count.hold_ticks.fetch_add(left-entered,std::memory_order_relaxed);
     return result;
 }
-void ring_enter(safetyhook::Context&) noexcept {
-    if(!executor || depth) return;
-    const auto start=qpc_now();
-    AcquireSRWLockExclusive(&pool_lock);
-    ring_entered=qpc_now();
-    ring_counters.wait_ticks.fetch_add(ring_entered-start,std::memory_order_relaxed);
-    ++depth;ring_held=true;
+// After the first load: make room in this thread's slice for the range
+// (size [rax+0x10] dwords), carving a new slice under the pool lock when it
+// does not fit, so the engine never switches segments for an executor.
+void slice_first(safetyhook::Context& context) noexcept {
+    if(!executor) return;
+    const uint64_t bytes=uint64_t{*reinterpret_cast<const uint32_t*>(context.rax+0x10)}*4;
+    if(!slice_valid || !uniform::fits(slice,bytes)) {
+        const auto want=std::min(std::max(slice_bytes,((bytes+0xFF)&~uint64_t{0xFF})+0x100),uniform::segment_bytes);
+        const auto device=context.rdi;
+        const auto start=qpc_now();
+        AcquireSRWLockExclusive(&pool_lock);
+        const auto entered=qpc_now();
+        ++depth;
+        auto* real=*reinterpret_cast<uniform::Segment**>(device+segment_offset);
+        if(!real || !uniform::fits(*real,want)) {
+            reinterpret_cast<void(*)(uintptr_t)>(originals[2].load(std::memory_order_relaxed))(device);  // 0x2E6B60
+            real=*reinterpret_cast<uniform::Segment**>(device+segment_offset);
+        }
+        slice=uniform::carve(*real,want);slice_valid=true;
+        --depth;
+        const auto left=qpc_now();
+        ReleaseSRWLockExclusive(&pool_lock);
+        ring_counters.locked.fetch_add(1,std::memory_order_relaxed);
+        ring_counters.wait_ticks.fetch_add(entered-start,std::memory_order_relaxed);
+        ring_counters.hold_ticks.fetch_add(left-entered,std::memory_order_relaxed);
+    }
+    ring_counters.nested.fetch_add(1,std::memory_order_relaxed);
+    context.rcx=reinterpret_cast<uintptr_t>(&slice);slice_now=true;
 }
-void ring_leave(safetyhook::Context&) noexcept {
-    if(!ring_held) return;
-    ring_held=false;--depth;
-    const auto left=qpc_now();
-    ReleaseSRWLockExclusive(&pool_lock);
-    ring_counters.locked.fetch_add(1,std::memory_order_relaxed);
-    ring_counters.hold_ticks.fetch_add(left-ring_entered,std::memory_order_relaxed);
+void slice_store(safetyhook::Context& context) noexcept {
+    if(slice_now) context.rax=reinterpret_cast<uintptr_t>(&slice);
+}
+void slice_read(safetyhook::Context& context) noexcept {
+    if(!slice_now) return;
+    context.rcx=reinterpret_cast<uintptr_t>(&slice);slice_now=false;
 }
 template<size_t... I> constexpr std::array<void*,sizeof...(I)> pooled_detours(std::index_sequence<I...>) {
     return {reinterpret_cast<void*>(&pooled<I>)...};
@@ -142,27 +169,28 @@ void PoolGuard::install(uintptr_t image) {
         hooks[i]=std::move(*hook);
         originals[i].store(hooks[i].trampoline().address());
     }
-    auto enter=safetyhook::MidHook::create(find_target(ring_enter_signature,0,ring_enter_rva),&ring_enter,safetyhook::MidHook::StartDisabled);
-    if(!enter) throw std::runtime_error("SafetyHook could not hook the uniform ring entry 0x2E52BA");
-    auto leave=safetyhook::MidHook::create(find_target(ring_leave_signature,0,ring_leave_rva),&ring_leave,safetyhook::MidHook::StartDisabled);
-    if(!leave) throw std::runtime_error("SafetyHook could not hook the uniform ring exit 0x2E531F");
-    ring_[0]=std::move(*enter);ring_[1]=std::move(*leave);
+    constexpr std::array<safetyhook::MidHookFn,3> slice_hooks={&slice_first,&slice_store,&slice_read};
+    std::array<safetyhook::MidHook,3> ring;
+    for(size_t i=0;i<ring.size();++i) {
+        auto hook=safetyhook::MidHook::create(find_target(slice_signatures[i],0,slice_rvas[i]),slice_hooks[i],safetyhook::MidHook::StartDisabled);
+        if(!hook) throw std::runtime_error("SafetyHook could not hook the uniform ring load "+std::to_string(i));
+        ring[i]=std::move(*hook);
+    }
+    ring_=std::move(ring);
     hooks_=std::move(hooks);
     installed_=true;
 }
 bool PoolGuard::enable() noexcept {
     bool ok=true;
-    // The exit before the entry: an entry without its exit would keep the lock.
-    if(ring_[1] && !ring_[1].enabled()) ok&=static_cast<bool>(ring_[1].enable());
-    if(ring_[0] && !ring_[0].enabled()) ok&=static_cast<bool>(ring_[0].enable());
+    // Later loads before the first: the first sets slice_now for the other two.
+    for(size_t i=ring_.size();i-->0;) if(ring_[i] && !ring_[i].enabled()) ok&=static_cast<bool>(ring_[i].enable());
     for(auto& hook:hooks_) if(hook && !hook.enabled()) ok&=static_cast<bool>(hook.enable());
     return ok;
 }
 bool PoolGuard::disable() noexcept {
     bool ok=true;
     for(auto& hook:hooks_) if(hook && hook.enabled()) ok&=static_cast<bool>(hook.disable());
-    if(ring_[0] && ring_[0].enabled()) ok&=static_cast<bool>(ring_[0].disable());
-    if(ring_[1] && ring_[1].enabled()) ok&=static_cast<bool>(ring_[1].disable());
+    for(auto& hook:ring_) if(hook && hook.enabled()) ok&=static_cast<bool>(hook.disable());
     return ok;
 }
 bool PoolGuard::enabled() const noexcept {
@@ -193,7 +221,8 @@ CodeRanges PoolGuard::code() const {
     return ranges;
 }
 void PoolGuard::count_window() noexcept {windows.fetch_add(1,std::memory_order_relaxed);}
-void PoolGuard::executor_begin(bool arena) noexcept {executor=true;arena_thread=arena;}
+// A slice lives one frame: the segment it came from may be retired after it.
+void PoolGuard::executor_begin(bool arena) noexcept {executor=true;arena_thread=arena;slice_valid=false;slice_now=false;}
 void PoolGuard::executor_end() noexcept {
     executor=false;arena_thread=false;
     arena_chunks.fetch_add(arena_state.chunks,std::memory_order_relaxed);
@@ -216,7 +245,8 @@ json PoolGuard::status() const {
         functions.push_back(entry(sites[i].name,c,i==1?"object":"pool"));
     }
     wait+=ring_counters.wait_ticks.load();hold+=ring_counters.hold_ticks.load();
-    functions.push_back(entry("uniform_ring_section 0x2E52BA-0x2E531F",ring_counters,"pool"));
+    // locked = slices carved under the pool lock, nested = uniform ranges served from slices.
+    functions.push_back(entry("uniform_ring_slices 0x2E52BA",ring_counters,"pool"));
     return {{"installed",installed_},{"enabled",enabled()},{"windows",windows.load()},
         {"lock_wait_ms",wait*1000.0/freq},{"lock_hold_ms",hold*1000.0/freq},{"functions",std::move(functions)},
         {"arena",{{"chunks",arena_chunks.load()},{"allocations",arena_allocations.load()},{"failures",arena_failures.load()}}}};

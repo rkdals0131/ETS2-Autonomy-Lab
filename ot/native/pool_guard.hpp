@@ -14,10 +14,12 @@ namespace ot {
 // straight through, so the engine's own locks never wait on ours.
 // M3d-1: 0x2E50B0 (resource_build_bundle) is not under the pool lock as a
 // whole. It runs under a lock picked by its item's material object (item+0x10,
-// whose parameter provider cache 0x150AF70 rewrites per pass), and only its
-// uniform ring cursor section (0x2E52BA-0x2E531F) takes the pool lock, through
-// two mid hooks. Lock order is always object lock, then pool lock: nothing
-// that holds the pool lock calls 0x2E50B0 or its only caller 0x2E6060.
+// whose parameter provider cache 0x150AF70 rewrites per pass). M3d-2: its
+// uniform ring reads go to a per-thread slice of the real segment
+// (uniform_slice.hpp), handed in by three mid hooks after the loads of
+// [device+0xF1490]; only carving a slice takes the pool lock. Lock order is
+// always object lock, then pool lock: nothing that holds the pool lock calls
+// 0x2E50B0 or its only caller 0x2E6060.
 class PoolGuard {
 public:
     PoolGuard()=default;
@@ -46,7 +48,7 @@ public:
     static constexpr size_t hook_count=12;
 private:
     std::array<safetyhook::InlineHook,hook_count> hooks_;
-    std::array<safetyhook::MidHook,2> ring_;
+    std::array<safetyhook::MidHook,3> ring_;
     bool installed_=false;
 };
 }
