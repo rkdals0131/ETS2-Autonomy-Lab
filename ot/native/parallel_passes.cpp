@@ -511,7 +511,7 @@ json ParallelPasses::status() {
     result["parallel"]={{"order",options_.ticket?"ticket":"free"},{"executors_requested",options_.executors},{"workers",workers_},
         {"accept_foreign_hooks",options_.accept_foreign},{"turn_wait_ms",c.wait_ticks*1000.0/freq},{"pass_hold_ms",c.hold_ticks*1000.0/freq},
         {"join_ms",c.parallel_join_ticks*1000.0/freq},{"passes_by_thread",std::move(threads)}};
-    const auto rates=[](const loop::Rates& r){return json{{"compared",r.compared},{"rate",r.rate()},
+    const auto rates=[](const loop::Rates& r){return json{{"compared",r.compared},{"rate",r.rate()},{"structure_rate",r.rate(2)},
         {"level1_size",r.differ[1]},{"level2_tokens",r.differ[2]},{"level3_content",r.differ[3]}};};
     json first=nullptr;
     if(const auto& d=alternate_.first_cross()) {

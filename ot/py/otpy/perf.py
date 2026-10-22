@@ -368,17 +368,28 @@ def speed_kmh(client):
     return round(3.6 * speed, 1) if isinstance(speed, (int, float)) else None
 
 
-def passes_abab(client, prefix, pairs=2, seconds=30.0, settle=10.0, profile_hz=0.0, min_kmh=None, out=None, report=print):
-    """docs/28 §6: alternate parallel_passes off (A) and defer (B) samples, A first.
-    Labels <prefix>-off-<n> and <prefix>-on-<n>; returns to off at the end."""
+def passes_abab(client, prefix, pairs=2, seconds=30.0, settle=10.0, profile_hz=0.0, min_kmh=None, out=None, report=print,
+                a="off", b="defer", order=None, accept_foreign_hooks=False):
+    """docs/28 §6: alternate parallel_passes mode a (A) and mode b (B) samples, A first.
+    Labels <prefix>-off-<n>/<prefix>-on-<n> for the default off/defer pair, else
+    <prefix>-<mode>-<n>; parallel/alternate get order and accept_foreign_hooks.
+    Returns to off at the end."""
+    def request(mode):
+        options = {"mode": mode}
+        if mode in ("parallel", "alternate"):
+            options.update(order=order, accept_foreign_hooks=accept_foreign_hooks)
+        result = client.request("parallel_passes", **options)
+        if result.get("off_reason") or result.get("error"):
+            raise RuntimeError(f"parallel_passes {mode}: {result.get('error') or result.get('off_reason')}")
+    tags = ("off", "on") if (a, b) == ("off", "defer") else (a, b)
     if min_kmh:
         report(f"waiting for {min_kmh} km/h")
         wait_speed(client, min_kmh)
     summaries = []
     try:
         for n in range(1, pairs + 1):
-            for mode, tag in (("off", "off"), ("defer", "on")):
-                client.request("parallel_passes", mode=mode)
+            for mode, tag in ((a, tags[0]), (b, tags[1])):
+                request(mode)
                 time.sleep(settle)
                 before = speed_kmh(client)
                 summary = sample(client, f"{prefix}-{tag}-{n}", seconds, out, profile_hz)

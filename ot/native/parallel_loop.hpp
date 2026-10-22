@@ -86,7 +86,12 @@ template<class Run> void run_items(Loop& loop,Run&& run) {
 struct Rates {
     uint64_t compared=0;
     std::array<uint64_t,4> differ{};   // by passes::compare level 1-3 (index 0 unused)
-    double rate() const noexcept {return compared?static_cast<double>(differ[1]+differ[2]+differ[3])/static_cast<double>(compared):0.0;}
+    // Share of comparisons that differ at `level` or a coarser one (1 size, 2 token counts, 3 content).
+    double rate(int level=3) const noexcept {
+        uint64_t n=0;
+        for(int i=1;i<=level;++i) n+=differ[i];
+        return compared?static_cast<double>(n)/static_cast<double>(compared):0.0;
+    }
 };
 class Alternate {
 public:
@@ -102,11 +107,17 @@ public:
     const Rates& cross() const noexcept {return cross_;}
     const Rates& baseline() const noexcept {return baseline_;}
     const std::optional<Difference>& first_cross() const noexcept {return first_cross_;}
-    // Suspect when cross exceeds both twice the baseline and baseline + 1 point.
+    // Suspect when cross exceeds both twice the baseline and the baseline plus a
+    // margin, judged on all levels, on structure alone (levels 1-2) and on token
+    // counts alone. In game the content level differs in ~77% of comparisons even
+    // at a standstill (per-frame constants), which would hide a structural
+    // difference in the all-levels rate.
     bool suspect(uint64_t minimum=1000) const noexcept {
         if(cross_.compared<minimum || baseline_.compared<minimum) return false;
-        const auto c=cross_.rate(),b=baseline_.rate();
-        return c>2*b && c>b+0.01;
+        const auto exceeds=[](double c,double b,double margin){return c>2*b && c>b+margin;};
+        const auto tokens=[](const Rates& r){return r.compared?static_cast<double>(r.differ[2])/static_cast<double>(r.compared):0.0;};
+        return exceeds(cross_.rate(),baseline_.rate(),0.01) || exceeds(cross_.rate(2),baseline_.rate(2),0.01)
+            || exceeds(tokens(cross_),tokens(baseline_),0.001);
     }
     void clear() {keys_.clear();cross_={};baseline_={};first_cross_.reset();}
 private:

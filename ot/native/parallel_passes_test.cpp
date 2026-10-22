@@ -232,6 +232,15 @@ void alternate() {
     ot::loop::Alternate noisy;                                                  // scene changes every frame: both rates high, not suspect
     for(uint64_t frame=1;frame<=300;++frame) noisy.observe(1,static_cast<int>(frame&1),frame,summary(100+frame,5));
     check(noisy.baseline().rate()==1 && noisy.cross().rate()==1 && !noisy.suspect(100),"scene change alone is not suspect");
+    ot::loop::Alternate hidden;                                                 // content differs every frame, as in game
+    for(uint64_t frame=1;frame<=2000;++frame) {
+        const int mode=static_cast<int>(frame&1);
+        auto s=summary(100,5);s.masked_hash=frame;
+        if(mode) s.histogram[2]=1;                                              // parallel frames count one extra token
+        hidden.observe(1,mode,frame,s);
+    }
+    check(hidden.baseline().rate()==1 && hidden.cross().rate()==1 && hidden.cross().rate(2)==1 && hidden.baseline().rate(2)==0
+          && hidden.suspect(100),"a token difference under per-frame content noise is still flagged");
 }
 void names() {
     check(normalize_name("sun0000029B0FD0B558_cascade4")=="sun#_cascade4","object id becomes #");

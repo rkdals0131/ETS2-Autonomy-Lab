@@ -40,6 +40,10 @@ def main():
     abab.add_argument("--profile-hz", type=float, default=0.0)
     abab.add_argument("--min-kmh", type=float, help="First wait until the truck holds this speed for 10 s (highway set)")
     abab.add_argument("--out", help="Directory; default research/live/<today>-perf")
+    abab.add_argument("--a", choices=("off", "defer", "parallel", "alternate"), default="off", help="Mode of the A samples")
+    abab.add_argument("--b", choices=("off", "defer", "parallel", "alternate"), default="defer", help="Mode of the B samples")
+    abab.add_argument("--order", choices=("ticket", "free"), help="Required when A or B is parallel/alternate")
+    abab.add_argument("--accept-foreign-hooks", action="store_true", help="order=ticket only, as in parallel_passes")
     sub.add_parser("perf_table", help="One line per saved perf sample").add_argument("files", nargs="+")
     spots = sub.add_parser("hotspots", help="Main-thread time per function from saved perf stacks (offline)")
     spots.add_argument("files", nargs="+", help="<label>.json or <label>.stacks.json; several are merged")
@@ -219,8 +223,11 @@ def main():
             return 0
         elif args.command == "passes_abab":
             from .perf import passes_abab
+            if {args.a, args.b} & {"parallel", "alternate"} and not args.order:
+                parser.error("parallel and alternate require --order ticket|free")
             passes_abab(client, args.prefix, args.pairs, args.seconds, args.settle, args.profile_hz, args.min_kmh, args.out,
-                        report=lambda text: print(text, flush=True))
+                        report=lambda text: print(text, flush=True), a=args.a, b=args.b, order=args.order,
+                        accept_foreign_hooks=args.accept_foreign_hooks)
             return 0
         elif args.command == "perf_table":
             from .perf import table

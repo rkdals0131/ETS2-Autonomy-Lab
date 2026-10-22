@@ -57,14 +57,18 @@ M3b는 미룬 패스를 엔진 작업 관리자(`parallel_loop_task_t`)로 worke
 .\ot\ot.cmd parallel_passes parallel --order free                           # 순서 자유 + 락 하나(외부 패치 없는 .text에서만)
 ```
 
-`--order`는 필수입니다. 외부 코드 패치가 기록 경로에 있으면(status `gate.workers_allowed`가 false) worker 모드는 거절되고, `order=ticket`만 `--accept-foreign-hooks`로 예외를 둡니다. 큐에 같은 패스 객체가 두 번 있으면 그 프레임은 직렬로 기록합니다. alternate는 각 패스 본체를 요약해 이웃한 다른 모드 프레임(교차)과 두 프레임 전 같은 모드(기준선)를 비교하고, 교차 불일치율이 기준선의 두 배와 기준선+1%p를 모두 넘으면 꺼집니다. status의 `parallel`(순서 대기·패스 보유 시간, 스레드별 패스 수)과 `alternate`(비교 수·불일치율·처음 어긋난 키)가 결과입니다. 설치된 `ot_config.json`에 `allow_parallel_passes`(저장소 기본값 false), `allow_tier1`, `singleplayer_research`가 필요합니다. 브리지 lease와 무관하게 켜고 끄며, F11·lease 종료·권한 재읽기에서 꺼집니다. 끄기는 미룬 패스가 있는 프레임이 합류를 마칠 때까지 기다렸다가 훅을 내립니다. 일시정지 프레임과 장치가 바뀐 프레임은 원래 경로로 기록합니다. `perf` 표본에 이 상태의 증가분이 함께 저장됩니다.
+`--order`는 필수입니다. 외부 코드 패치가 기록 경로에 있으면(status `gate.workers_allowed`가 false) worker 모드는 거절되고, `order=ticket`만 `--accept-foreign-hooks`로 예외를 둡니다. 큐에 같은 패스 객체가 두 번 있으면 그 프레임은 직렬로 기록합니다. alternate는 각 패스 본체를 요약해 이웃한 다른 모드 프레임(교차)과 두 프레임 전 같은 모드(기준선)를 비교하고, 교차 불일치율이 기준선의 두 배와 기준선+1%p를 모두 넘으면 꺼집니다. 이 판정은 세 단계 합계, 구조(크기·토큰) 단계만, 토큰 단계만(여유 +0.1%p)에 각각 적용합니다. 게임에서는 내용 단계가 정차 중에도 77% 다르기 때문입니다(저장소 다음 core부터, docs/28 §11.2). status의 `parallel`(순서 대기·패스 보유 시간, 스레드별 패스 수)과 `alternate`(비교 수·불일치율·처음 어긋난 키)가 결과입니다. 설치된 `ot_config.json`에 `allow_parallel_passes`(저장소 기본값 false), `allow_tier1`, `singleplayer_research`가 필요합니다. 브리지 lease와 무관하게 켜고 끄며, F11·lease 종료·권한 재읽기에서 꺼집니다. 끄기는 미룬 패스가 있는 프레임이 합류를 마칠 때까지 기다렸다가 훅을 내립니다. 일시정지 프레임과 장치가 바뀐 프레임은 원래 경로로 기록합니다. `perf` 표본에 이 상태의 증가분이 함께 저장됩니다.
 
 켤 때 게임 `.text`를 exe 파일(현재 베이스로 `.reloc` 적용)과 비교해 다른 구간을 우리 훅, `ot_config.json`의 `accepted_text_patches`(`[{"rva": "0x…", "size": n}]`), 외부로 나눠 status의 `gate`에 냅니다. 기록 경로 함수(`fields.json`의 `render_parallel.closure_rvas`)와 우리 훅 자리의 앞 32바이트는 켜져 있는 동안 1초마다 다시 비교하고, 바뀌면 off로 내려갑니다. 외부 패치가 있어도 defer는 켭니다. 메인 스레드에서 원래 순서로 기록하기 때문이며, snowymoon `dxgi.dll`과 함께 2,200프레임을 확인했습니다. 외부 패치가 있으면 `gate.workers_allowed`가 false가 되고, worker 기록(M3b 이후)은 이 값을 따릅니다.
 
 ```powershell
-# 고속도로 판정 세트(docs/28 §6): 60 km/h를 10초 유지하면 off/defer를 30초씩 번갈아 2쌍
-.\ot\ot.cmd passes_abab pp-drive --pairs 2 --min-kmh 60 --profile-hz 250
+# 주행 판정 세트(docs/28 §6): 20 km/h를 10초 유지하면 off/defer를 30초씩 번갈아 2쌍
+.\ot\ot.cmd passes_abab pp-drive --pairs 2 --min-kmh 20 --profile-hz 250
+# 다른 두 모드: --a/--b, worker 모드는 --order(필요하면 --accept-foreign-hooks)
+.\ot\ot.cmd passes_abab pp-ticket --a defer --b parallel --order ticket --accept-foreign-hooks --min-kmh 20
 ```
+
+티켓 순서(M3b-1)는 정합성 시험용입니다. 2026-10-22 시험에서 worker 기록이 엔진 assert·alien 경고 없이 메인 기록과 같은 명령을 만들었지만, 차례 넘김 때문에 합류가 가끔 50 ms를 넘어 자동으로 꺼지고 주행에서 fps가 떨어졌습니다(docs/28 §11).
 
 같은 프레임에서 패스를 두 번 기록해 비교하는 방식은 쓸 수 없습니다. 2026-10-15 시험에서 두 번째 기록이 엔진 assert(`array_t<rg_blit_pair_t>` 인덱스 범위, blit 패스 콜백 `0x151BF80`)로 게임을 종료시켰습니다. 패스 콜백이 기록하면서 자기 패스 객체의 blit 쌍 배열(`pass+0xDB8`)을 소비하기 때문입니다.
 
