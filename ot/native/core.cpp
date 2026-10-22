@@ -671,8 +671,8 @@ json Runtime::command(const json& request) {
                 if(mode!="serial") {
                     // docs/28 §10: the order is always explicit for worker recording.
                     const auto order=request.at("order").get<std::string>();
-                    if(order!="ticket" && order!="free") throw std::runtime_error("order must be ticket or free");
-                    options.ticket=order=="ticket";
+                    if(order!="ticket" && order!="free" && order!="concurrent") throw std::runtime_error("order must be ticket, free or concurrent");
+                    options.order=order=="ticket"?loop::Order::ticket:order=="free"?loop::Order::locked:loop::Order::concurrent;
                     options.executors=request.value("executors",0u);
                     options.accept_foreign=request.value("accept_foreign_hooks",false);
                     options.report_only=request.value("report_only",false);

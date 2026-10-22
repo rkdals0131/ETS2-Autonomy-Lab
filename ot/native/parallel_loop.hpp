@@ -53,10 +53,16 @@ inline void run_parallel_loop(void** table,uintptr_t vtable,uint8_t executors,co
 
 // Items are claimed by fetch_add; in ticket order the claimer of item i waits
 // until item i-1 finished, so items run one at a time in index order whatever
-// thread claimed them. In free order a single lock serializes the items.
+// thread claimed them. In locked (free) order a single lock serializes the
+// items; concurrent order runs them at the same time (M3c: the engine's shared
+// state is guarded below the item, pool_guard.hpp).
+enum class Order {ticket,locked,concurrent};
+inline const char* order_name(Order order) noexcept {
+    return order==Order::ticket?"ticket":order==Order::locked?"free":"concurrent";
+}
 struct Loop {
     size_t count=0;
-    bool ticket=true;
+    Order order=Order::ticket;
     std::atomic<size_t> next{0},done{0};
     SRWLOCK lock=SRWLOCK_INIT;
     std::atomic<uint64_t> wait_ticks{0},hold_ticks{0};
@@ -65,18 +71,18 @@ inline uint64_t ticks() noexcept {LARGE_INTEGER value{};QueryPerformanceCounter(
 template<class Run> void run_items(Loop& loop,Run&& run) {
     for(size_t i;(i=loop.next.fetch_add(1))<loop.count;) {
         const auto start=ticks();
-        if(loop.ticket) {
+        if(loop.order==Order::ticket) {
             for(unsigned spin=0;loop.done.load(std::memory_order_acquire)!=i;++spin) {
                 if(spin<64) YieldProcessor();
                 else SwitchToThread();
             }
-        } else AcquireSRWLockExclusive(&loop.lock);
+        } else if(loop.order==Order::locked) AcquireSRWLockExclusive(&loop.lock);
         const auto entered=ticks();
         loop.wait_ticks+=entered-start;
         run(i);
         loop.hold_ticks+=ticks()-entered;
-        if(loop.ticket) loop.done.store(i+1,std::memory_order_release);
-        else ReleaseSRWLockExclusive(&loop.lock);
+        if(loop.order==Order::ticket) loop.done.store(i+1,std::memory_order_release);
+        else if(loop.order==Order::locked) ReleaseSRWLockExclusive(&loop.lock);
     }
 }
 

@@ -111,7 +111,7 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate,const Options& opti
         if(reinterpret_cast<uintptr_t>(table[0])!=base_+submit_stub_rva || reinterpret_cast<uintptr_t>(table[3])!=base_+wait_stub_rva)
             throw std::runtime_error("Engine task manager table differs from docs/28 §3.3");
         if(count<1 || count>32) throw std::runtime_error("Engine worker count is outside 1-32");
-        if(!options.ticket && options.accept_foreign) throw std::runtime_error("accept_foreign_hooks is allowed only with order=ticket");
+        if(options.order!=loop::Order::ticket && options.accept_foreign) throw std::runtime_error("accept_foreign_hooks is allowed only with order=ticket");
         task_table_=table;workers_=count;
     }
     if(!execute_hook_) {
@@ -152,12 +152,13 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate,const Options& opti
     auto inputs=gate;
     inputs.ours.push_back({execute_hook_.target_address(),execute_hook_.target_address()+execute_hook_.original_bytes().size()});
     inputs.ours.push_back({join_hook_.target_address(),join_hook_.target_address()+join_hook_.original_bytes().size()});
+    for(const auto& range:guard_.patched()) inputs.ours.push_back(range);
     auto scanned=scan_text(inputs);
     const bool allowed=scanned.value("workers_allowed",false);
     if(workers && !allowed) {
         // docs/28 §5: one pass at a time (ticket) may run beside foreign patches
         // only when asked explicitly; free order never does.
-        if(!options.ticket || !options.accept_foreign)
+        if(options.order!=loop::Order::ticket || !options.accept_foreign)
             throw std::runtime_error("Foreign code patches are in the recording path (status gate); worker recording needs a clean .text"
                                      " or order=ticket with accept_foreign_hooks");
         for(const auto& item:scanned.value("foreign",json::array()))
@@ -173,6 +174,14 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate,const Options& opti
         counters_={};keys_.clear();thread_passes_.clear();alternate_.clear();
         non_main_calls=0;
     }
+    // M3c: the pool lock and worker arenas are hooked only for concurrent
+    // order, and before watch_code so their bytes are the watched baseline.
+    const bool concurrent=workers && options.order==loop::Order::concurrent;
+    if(concurrent) {
+        guard_.install(base_);
+        if(!guard_.enable()) {(void)guard_.disable();throw std::runtime_error("Cannot enable the M3c pool guard hooks");}
+    } else if(guard_.enabled() && !guard_.disable()) throw std::runtime_error("Cannot disable the M3c pool guard hooks");
+    if(requested_.load()==0) guard_.clear_counters();
     options_=options;
     reason_.clear();error_.clear();
     // The join must be live before any pass can be deferred.
@@ -203,6 +212,7 @@ void ParallelPasses::disable() noexcept {
         bool changed=false;
         if(execute_hook_.enabled()) {changed=true;if(!execute_hook_.disable()) error_="Pass execution detour disable failed";}
         if(join_hook_.enabled()) {changed=true;if(!join_hook_.disable()) error_="Join hook disable failed";}
+        if(guard_.enabled()) {changed=true;if(!guard_.disable()) error_="Pool guard disable failed";}
         while(callbacks.load() && GetTickCount64()<deadline+2000) Sleep(1);
         if(changed) log("parallel_passes disabled"+(error_.empty()?std::string{}:": "+error_));
     } catch(...) {requested_.store(0);}
@@ -214,18 +224,19 @@ bool ParallelPasses::quiescent() noexcept {
     ranges.push_back({execute_hook_.trampoline().address(),execute_hook_.trampoline().address()+execute_hook_.trampoline().size()});
     ranges.push_back({join_hook_.stub().address(),join_hook_.stub().address()+join_hook_.stub().size()});
     ranges.push_back({join_hook_.trampoline().address(),join_hook_.trampoline().address()+join_hook_.trampoline().size()});
+    for(const auto& range:guard_.code()) ranges.push_back(range);
     return threads_outside(ranges) && callbacks.load()==0;
 }
 bool ParallelPasses::close() noexcept {
     disable();
     if(!execute_hook_ && !join_hook_) return true;
-    if(execute_hook_.enabled() || join_hook_.enabled()) return false;
+    if(execute_hook_.enabled() || join_hook_.enabled() || guard_.enabled()) return false;
     const auto deadline=GetTickCount64()+2000;
     do {
         if(quiescent()) {
             instance.store(nullptr);
             original_.store(nullptr);
-            execute_hook_.reset();join_hook_.reset();
+            execute_hook_.reset();join_hook_.reset();guard_.reset();
             log("parallel_passes drained; trampolines released");
             return true;
         }
@@ -439,15 +450,21 @@ struct ParallelPasses::ParallelFrame {
     int summary_mode;
     uint64_t frame;
     std::atomic<uint64_t> dwords{0},largest{0};
+    DWORD main_thread=0;
 };
 void ParallelPasses::parallel_body(void* capture,void*) {
     auto& frame=*static_cast<ParallelFrame*>(capture);
+    // Executors take the pool lock; workers also take frame memory from their
+    // own arena while the main thread keeps the engine's chunk.
+    const bool concurrent=frame.loop.order==loop::Order::concurrent;
+    if(concurrent) PoolGuard::executor_begin(GetCurrentThreadId()!=frame.main_thread);
     loop::run_items(frame.loop,[&](size_t i) {
         uint64_t dwords=0,largest=0;
         frame.self->record(frame.self->queue_[i],dwords,largest,frame.summary_mode,frame.frame);
         frame.dwords+=dwords;
         for(auto seen=frame.largest.load();largest>seen && !frame.largest.compare_exchange_weak(seen,largest););
     });
+    if(concurrent) PoolGuard::executor_end();
 }
 void ParallelPasses::join() noexcept {
     if(!latched_) return;
@@ -475,8 +492,9 @@ void ParallelPasses::join() noexcept {
     }
     if(parallel) {
         ParallelFrame frame{this,{},summary_mode_,frame_index_};
-        frame.loop.count=queued_;frame.loop.ticket=frame_options_.ticket;
+        frame.loop.count=queued_;frame.loop.order=frame_options_.order;frame.main_thread=GetCurrentThreadId();
         const auto executors=std::clamp<unsigned>(frame_options_.executors?frame_options_.executors:workers_+1,1,std::min(workers_+1,255u));
+        if(frame.loop.order==loop::Order::concurrent) PoolGuard::count_window();
         loop::run_parallel_loop(task_table_,base_+loop_vtable_rva,static_cast<uint8_t>(executors),"ot_parallel_passes",&frame,&parallel_body);
         frame_dwords=frame.dwords.load();largest=frame.largest.load();
         std::lock_guard stats(stats_mutex_);
@@ -513,7 +531,7 @@ json ParallelPasses::status() {
     const auto freq=static_cast<double>(qpc_frequency());
     json threads=json::object();
     for(const auto& [thread,count]:thread_passes_) threads[std::to_string(thread)]=count;
-    result["parallel"]={{"order",options_.ticket?"ticket":"free"},{"executors_requested",options_.executors},{"workers",workers_},
+    result["parallel"]={{"order",loop::order_name(options_.order)},{"pool_guard",guard_.status()},{"executors_requested",options_.executors},{"workers",workers_},
         {"accept_foreign_hooks",options_.accept_foreign},{"turn_wait_ms",c.wait_ticks*1000.0/freq},{"pass_hold_ms",c.hold_ticks*1000.0/freq},
         {"join_ms",c.parallel_join_ticks*1000.0/freq},{"passes_by_thread",std::move(threads)}};
     const auto rates=[](const loop::Rates& r){return json{{"compared",r.compared},{"rate",r.rate()},{"structure_rate",r.rate(2)},

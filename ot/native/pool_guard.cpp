@@ -1,0 +1,143 @@
+#include "pool_guard.hpp"
+#include "frame_arena.hpp"
+#include <stdexcept>
+
+namespace ot {
+namespace {
+// 1.61.1.9 sites carried from the 1.61.1.1 ones in docs/28 §2.3/§2.6 with
+// research/rebase_rvas.py (all "same": only moves, no changed offsets).
+constexpr uintptr_t chunk_get_rva=0x166BD0,frame_tag_rva=0x304E848;
+struct Site {const char* name;uintptr_t rva;std::array<uint8_t,16> signature;};
+constexpr std::array<Site,PoolGuard::hook_count> sites={{
+    {"frame_allocate 0x1E05B0",0x1E0650,{0x48,0x89,0x5C,0x24,0x08,0x57,0x48,0x83,0xEC,0x20,0x44,0x8B,0x0D,0xE7,0xE1,0xE6}},
+    {"resource_build_bundle 0x2E5040",0x2E50B0,{0x4C,0x8B,0xDC,0x4D,0x89,0x4B,0x20,0x4D,0x89,0x43,0x18,0x49,0x89,0x53,0x10,0x49}},
+    {"uniform_segment 0x2E6AF0",0x2E6B60,{0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xEC,0x40,0x48}},
+    {"pool_maintain [0x120] 0x2E8FE0",0x2E9050,{0x48,0x89,0x5C,0x24,0x08,0x57,0x48,0x83,0xEC,0x20,0x48,0x8B,0x91,0x38,0x14,0x0F}},
+    {"buffer_record_acquire 0x2E8090",0x2E8100,{0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x81,0xEC,0x50,0x01,0x00,0x00,0x4C,0x8B,0x35}},
+    {"buffer_record_release 0x2E8440",0x2E84B0,{0x40,0x53,0x48,0x83,0xEC,0x20,0x8B,0xC2,0x8B,0xDA,0xBA,0xFF,0xFF,0xFF,0xFF,0x41}},
+    {"srv_cache 0x2B94B0",0x2B9520,{0x40,0x57,0x48,0x83,0xEC,0x40,0xB8,0xFF,0xFF,0x00,0x00,0x45,0x8B,0xD0,0x66,0x3B}},
+    {"sampler_cache 0x2BEA70",0x2BEAE0,{0x4C,0x8B,0xDC,0x53,0x55,0x57,0x48,0x81,0xEC,0x80,0x00,0x00,0x00,0x0F,0xB6,0xDA}},
+    {"frame_view_register 0x2AE640",0x2AE6B0,{0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xEC,0x20,0x48}},
+}};
+
+struct HookCounters {std::atomic<uint64_t> locked{0},nested{0},wait_ticks{0},hold_ticks{0};};
+std::array<HookCounters,PoolGuard::hook_count> counters;
+std::array<std::atomic<uintptr_t>,PoolGuard::hook_count> originals{};
+std::atomic<uintptr_t> base{0};
+SRWLOCK pool_lock=SRWLOCK_INIT;
+std::atomic<uint64_t> arena_chunks{0},arena_allocations{0},arena_failures{0},windows{0};
+thread_local int depth=0;
+thread_local bool executor=false,arena_thread=false;
+thread_local arena::State arena_state;
+
+using Allocate=uintptr_t(*)(uint64_t,uint64_t);
+using ChunkGet=void*(*)(uint64_t);
+uintptr_t frame_allocate(uint64_t size,uint64_t align) {
+    if(!arena_thread) return reinterpret_cast<Allocate>(originals[0].load(std::memory_order_relaxed))(size,align);
+    const auto b=base.load(std::memory_order_relaxed);
+    const uint64_t tag=*reinterpret_cast<const volatile uint32_t*>(b+frame_tag_rva)|arena::tag_mark;
+    const auto get=reinterpret_cast<ChunkGet>(b+chunk_get_rva);
+    return reinterpret_cast<uintptr_t>(arena::allocate(arena_state,size,align,tag,get));
+}
+// Forwards eight integer arguments: the hooked functions take at most eight
+// (0x2E8090) and no floating-point ones (Ghidra prototypes); a function with
+// fewer simply ignores the extra registers and caller stack slots.
+using Pooled=uintptr_t(*)(uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t);
+template<size_t I> uintptr_t pooled(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
+    const auto original=reinterpret_cast<Pooled>(originals[I].load(std::memory_order_relaxed));
+    if(!executor) return original(a,b,c,d,e,f,g,h);
+    auto& count=counters[I];
+    if(depth) {count.nested.fetch_add(1,std::memory_order_relaxed);return original(a,b,c,d,e,f,g,h);}
+    const auto start=qpc_now();
+    AcquireSRWLockExclusive(&pool_lock);
+    const auto entered=qpc_now();
+    ++depth;
+    const auto result=original(a,b,c,d,e,f,g,h);
+    --depth;
+    const auto left=qpc_now();
+    ReleaseSRWLockExclusive(&pool_lock);
+    count.locked.fetch_add(1,std::memory_order_relaxed);
+    count.wait_ticks.fetch_add(entered-start,std::memory_order_relaxed);
+    count.hold_ticks.fetch_add(left-entered,std::memory_order_relaxed);
+    return result;
+}
+template<size_t... I> constexpr std::array<void*,sizeof...(I)> pooled_detours(std::index_sequence<I...>) {
+    return {reinterpret_cast<void*>(&pooled<I>)...};
+}
+}
+
+PoolGuard::~PoolGuard() {reset();}
+void PoolGuard::install(uintptr_t image) {
+    if(installed_) return;
+    base.store(image);
+    std::array<safetyhook::InlineHook,hook_count> hooks;
+    const auto detours=pooled_detours(std::make_index_sequence<hook_count>{});
+    for(size_t i=0;i<hook_count;++i) {
+        const auto target=find_target(sites[i].signature,0,sites[i].rva);
+        void* detour=i==0?reinterpret_cast<void*>(&frame_allocate):detours[i];
+        auto hook=safetyhook::InlineHook::create(target,detour,safetyhook::InlineHook::StartDisabled);
+        if(!hook) throw std::runtime_error(std::string("SafetyHook could not hook ")+sites[i].name);
+        hooks[i]=std::move(*hook);
+        originals[i].store(hooks[i].trampoline().address());
+    }
+    hooks_=std::move(hooks);
+    installed_=true;
+}
+bool PoolGuard::enable() noexcept {
+    bool ok=true;
+    for(auto& hook:hooks_) if(hook && !hook.enabled()) ok&=static_cast<bool>(hook.enable());
+    return ok;
+}
+bool PoolGuard::disable() noexcept {
+    bool ok=true;
+    for(auto& hook:hooks_) if(hook && hook.enabled()) ok&=static_cast<bool>(hook.disable());
+    return ok;
+}
+bool PoolGuard::enabled() const noexcept {
+    for(const auto& hook:hooks_) if(hook && hook.enabled()) return true;
+    return false;
+}
+void PoolGuard::reset() noexcept {
+    for(auto& hook:hooks_) hook.reset();
+    for(auto& original:originals) original.store(0);
+    installed_=false;
+}
+CodeRanges PoolGuard::patched() const {
+    CodeRanges ranges;
+    for(const auto& hook:hooks_) if(hook) ranges.push_back({hook.target_address(),hook.target_address()+hook.original_bytes().size()});
+    return ranges;
+}
+CodeRanges PoolGuard::code() const {
+    CodeRanges ranges;
+    for(const auto& hook:hooks_)
+        if(hook) ranges.push_back({hook.trampoline().address(),hook.trampoline().address()+hook.trampoline().size()});
+    return ranges;
+}
+void PoolGuard::count_window() noexcept {windows.fetch_add(1,std::memory_order_relaxed);}
+void PoolGuard::executor_begin(bool arena) noexcept {executor=true;arena_thread=arena;}
+void PoolGuard::executor_end() noexcept {
+    executor=false;arena_thread=false;
+    arena_chunks.fetch_add(arena_state.chunks,std::memory_order_relaxed);
+    arena_allocations.fetch_add(arena_state.allocations,std::memory_order_relaxed);
+    arena_failures.fetch_add(arena_state.failures,std::memory_order_relaxed);
+    arena_state.chunks=arena_state.allocations=arena_state.failures=0;
+}
+json PoolGuard::status() const {
+    const auto freq=static_cast<double>(qpc_frequency());
+    json functions=json::array();
+    uint64_t wait=0,hold=0;
+    for(size_t i=1;i<hook_count;++i) {
+        const auto& c=counters[i];
+        wait+=c.wait_ticks.load();hold+=c.hold_ticks.load();
+        functions.push_back({{"name",sites[i].name},{"locked",c.locked.load()},{"nested",c.nested.load()},
+            {"wait_ms",c.wait_ticks.load()*1000.0/freq},{"hold_ms",c.hold_ticks.load()*1000.0/freq}});
+    }
+    return {{"installed",installed_},{"enabled",enabled()},{"windows",windows.load()},
+        {"lock_wait_ms",wait*1000.0/freq},{"lock_hold_ms",hold*1000.0/freq},{"functions",std::move(functions)},
+        {"arena",{{"chunks",arena_chunks.load()},{"allocations",arena_allocations.load()},{"failures",arena_failures.load()}}}};
+}
+void PoolGuard::clear_counters() noexcept {
+    for(auto& c:counters) {c.locked=0;c.nested=0;c.wait_ticks=0;c.hold_ticks=0;}
+    arena_chunks=0;arena_allocations=0;arena_failures=0;windows=0;
+}
+}

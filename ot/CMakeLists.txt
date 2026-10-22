@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(ot_core VERSION 0.51.4 LANGUAGES C CXX)
+project(ot_core VERSION 0.52.0 LANGUAGES C CXX)
 if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "ot_core requires MSVC x64 on Windows")
 endif()
@@ -89,7 +89,7 @@ foreach(stage IN ITEMS vs ps)
       /Fh "${CMAKE_CURRENT_BINARY_DIR}/generated/overlay_${stage}.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/native/overlay_decal.hlsl"
     DEPENDS native/overlay_decal.hlsl VERBATIM)
 endforeach()
-add_library(ot_core SHARED native/core.cpp native/platform.cpp native/transport.cpp native/vehicle.cpp native/render_probe.cpp native/camera_rig.cpp native/gpu_capture.cpp native/gpu_pack.cpp native/capture_stream.cpp native/pass_commands.cpp native/render_sample.cpp native/thread_sampler.cpp native/stack_unwind.cpp native/hook_support.cpp native/parallel_passes.cpp native/proxy_gate.cpp native/overlay_decal.cpp native/ot_core.def
+add_library(ot_core SHARED native/core.cpp native/platform.cpp native/transport.cpp native/vehicle.cpp native/render_probe.cpp native/camera_rig.cpp native/gpu_capture.cpp native/gpu_pack.cpp native/capture_stream.cpp native/pass_commands.cpp native/render_sample.cpp native/thread_sampler.cpp native/stack_unwind.cpp native/hook_support.cpp native/parallel_passes.cpp native/pool_guard.cpp native/proxy_gate.cpp native/overlay_decal.cpp native/ot_core.def
   "${CMAKE_CURRENT_BINARY_DIR}/generated/overlay_vs.hpp" "${CMAKE_CURRENT_BINARY_DIR}/generated/overlay_ps.hpp"
   "${CMAKE_CURRENT_BINARY_DIR}/generated/pack_depth.hpp" "${CMAKE_CURRENT_BINARY_DIR}/generated/pack_color.hpp" "${CMAKE_CURRENT_BINARY_DIR}/generated/gather_lidar.hpp" "${CMAKE_CURRENT_BINARY_DIR}/generated/auto_exposure.hpp")
 target_include_directories(ot_core PRIVATE "${SCS_SDK}" vendor "${CMAKE_CURRENT_BINARY_DIR}/generated")

@@ -6,6 +6,7 @@
 #include "pass_stream.hpp"
 #include "text_gate.hpp"
 #include "parallel_loop.hpp"
+#include "frame_arena.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <deque>
@@ -17,6 +18,7 @@ using namespace ot::passes;
 namespace {
 int failures=0;
 void check(bool ok,const char* what) {std::printf("%s %s\n",ok?"PASS":"FAIL",what);if(!ok) ++failures;}
+void check(bool ok,const std::string& what) {check(ok,what.c_str());}
 
 // A storage with small chunks; allocate() follows 0x28CEC0 (strict "<" bound,
 // a new record starts with used = n).
@@ -165,12 +167,13 @@ void fake_wait(void*,ot::loop::EngineTask* task) {
 void* fake_table[8]={reinterpret_cast<void*>(&fake_submit),nullptr,nullptr,reinterpret_cast<void*>(&fake_wait)};
 struct LoopRun {
     ot::loop::Loop loop;
-    std::vector<size_t> order;          // appended without a lock: only one item may run at a time
+    std::vector<size_t> order;
+    std::mutex order_mutex;
     std::atomic<int> inside{0},most{0};
     std::vector<std::atomic<int>> seen;
     std::mutex threads_mutex;
     std::vector<DWORD> threads;
-    explicit LoopRun(size_t n,bool ticket):seen(n) {loop.count=n;loop.ticket=ticket;}
+    explicit LoopRun(size_t n,ot::loop::Order order):seen(n) {loop.count=n;loop.order=order;}
 };
 void loop_body(void* capture,void*) {
     auto& run=*static_cast<LoopRun*>(capture);
@@ -180,20 +183,22 @@ void loop_body(void* capture,void*) {
         const auto now=++run.inside;
         for(auto most=run.most.load();now>most && !run.most.compare_exchange_weak(most,now););
         if(random()%4==0) std::this_thread::sleep_for(std::chrono::microseconds(50));
-        run.order.push_back(i);
+        {std::lock_guard lock(run.order_mutex);run.order.push_back(i);}
         ++run.seen[i];
         --run.inside;
     });
 }
 void engine_loop() {
-    for(const bool ticket:{true,false}) {
-        LoopRun run(400,ticket);
+    using ot::loop::Order;
+    for(const auto order:{Order::ticket,Order::locked,Order::concurrent}) {
+        LoopRun run(400,order);
         ot::loop::run_parallel_loop(fake_table,0x1234,5,"test",&run,&loop_body);
         const bool once=std::all_of(run.seen.begin(),run.seen.end(),[](const auto& v){return v.load()==1;});
-        check(once && run.order.size()==400 && run.threads.size()==5,
-              ticket?"ticket loop: every item once, five executors":"free loop: every item once, five executors");
-        check(run.most.load()==1,ticket?"ticket loop runs one item at a time":"free loop runs one item at a time under its lock");
-        if(ticket) {
+        const std::string name=ot::loop::order_name(order);
+        check(once && run.order.size()==400 && run.threads.size()==5,name+" loop: every item once, five executors");
+        if(order==Order::concurrent) check(run.most.load()>1,"concurrent loop runs items at the same time");
+        else check(run.most.load()==1,name+" loop runs one item at a time");
+        if(order==Order::ticket) {
             bool sorted=true;
             for(size_t i=0;i<run.order.size();++i) sorted&=run.order[i]==i;
             check(sorted,"ticket loop keeps the original order whichever thread claims an item");
@@ -207,7 +212,6 @@ void alternate() {
     const auto summary=[](uint64_t dwords,uint64_t draws){Summary s;s.dwords=s.parsed=dwords;s.draws=draws;s.histogram[1]=static_cast<uint32_t>(draws);return s;};
     ot::loop::Alternate same;
     for(uint64_t frame=1;frame<=200;++frame) {
-        const int mode=ot::loop::Alternate::mode_of(frame);
         same.observe(1,frame,summary(100,5));
         same.observe(2,frame,summary(40,2));
     }
@@ -265,6 +269,39 @@ void names() {
 }
 }
 
+// docs/28 §3.4 1: the worker arena follows the engine allocator's rules and
+// keys chunk reuse on the tag it asked for, never the chunk header.
+void frame_arena() {
+    namespace arena=ot::arena;
+    std::deque<std::vector<uint8_t>> memory;
+    std::deque<arena::Chunk> chunks;
+    std::vector<uint64_t> asked;
+    const auto get=[&](uint64_t tag)->void* {
+        asked.push_back(tag);
+        memory.emplace_back(arena::chunk_bytes);
+        chunks.push_back({{0,0},tag,memory.back().data(),0});
+        return &chunks.back();
+    };
+    const uint64_t tag=7|arena::tag_mark;
+    arena::State state;
+    auto* a=static_cast<uint8_t*>(arena::allocate(state,24,8,tag,get));
+    auto* b=static_cast<uint8_t*>(arena::allocate(state,100,64,tag,get));
+    check(asked.size()==1 && a==chunks[0].data && b==chunks[0].data+64 && chunks[0].cursor==164,
+          "one chunk per tag: bump with the requested alignment from the start");
+    auto* c=static_cast<uint8_t*>(arena::allocate(state,arena::chunk_bytes-100,16,tag,get));
+    check(asked.size()==2 && c==chunks[1].data && state.chunks==2,"a request that does not fit takes a new chunk of the same tag");
+    chunks[1].tag=10|arena::tag_mark;                                            // the chunk was returned and handed out again
+    (void)arena::allocate(state,16,16,10|arena::tag_mark,get);
+    check(asked.size()==3 && asked[2]==(10|arena::tag_mark) && state.chunk==&chunks[2],
+          "a tag change takes a new chunk even when the old chunk's header shows the new tag");
+    chunks.push_back({{0,0},0,nullptr,0});memory.emplace_back(arena::chunk_bytes);
+    arena::State recycled;
+    const auto reused=[&](uint64_t)->void* {chunks[2].cursor=37;return &chunks[2];};
+    auto* d=static_cast<uint8_t*>(arena::allocate(recycled,8,8,10|arena::tag_mark,reused));
+    check(d==chunks[2].data+48 && chunks[2].cursor==56,"a chunk that comes with a cursor starts at it rounded up to 16");
+    arena::State big;
+    check(!arena::allocate(big,arena::chunk_bytes+1,16,tag,get) && big.failures==1,"more than 2 MB fails like the engine (null)");
+}
 int main() {
     splice_order();
     splice_across_chunks();
@@ -273,6 +310,7 @@ int main() {
     comparator();
     text_gate();
     engine_loop();
+    frame_arena();
     alternate();
     names();
     std::printf(failures?"FAILED %d\n":"ALL PASSED\n",failures);

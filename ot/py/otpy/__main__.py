@@ -42,7 +42,7 @@ def main():
     abab.add_argument("--out", help="Directory; default research/live/<today>-perf")
     abab.add_argument("--a", choices=("off", "serial", "parallel", "alternate"), default="off", help="Mode of the A samples")
     abab.add_argument("--b", choices=("off", "serial", "parallel", "alternate"), default="serial", help="Mode of the B samples")
-    abab.add_argument("--order", choices=("ticket", "free"), help="Required when A or B is parallel/alternate")
+    abab.add_argument("--order", choices=("ticket", "free", "concurrent"), help="Required when A or B is parallel/alternate")
     abab.add_argument("--accept-foreign-hooks", action="store_true", help="order=ticket only, as in parallel_passes")
     sub.add_parser("perf_table", help="One line per saved perf sample").add_argument("files", nargs="+")
     spots = sub.add_parser("hotspots", help="Main-thread time per function from saved perf stacks (offline)")
@@ -72,8 +72,9 @@ def main():
                             "there in order on the main thread (serial), record them on engine workers (parallel) or alternate the two per "
                             "frame (alternate); F11 returns to off")
     passes.add_argument("mode", choices=("status", "off", "serial", "parallel", "alternate"), default="status", nargs="?")
-    passes.add_argument("--order", choices=("ticket", "free"),
-                        help="parallel/alternate (required): ticket = one pass at a time in the original order; free = any order under one lock")
+    passes.add_argument("--order", choices=("ticket", "free", "concurrent"),
+                        help="parallel/alternate (required): ticket = one pass at a time in the original order; free = any order under one lock; "
+                             "concurrent = passes at the same time, frame arenas and the device pool lock (M3c, clean .text only)")
     passes.add_argument("--executors", type=int, default=0, help="Executors including the main thread; 0 = engine workers + 1")
     passes.add_argument("--accept-foreign-hooks", action="store_true",
                         help="order=ticket only: run although foreign code patches are in the recording path")
