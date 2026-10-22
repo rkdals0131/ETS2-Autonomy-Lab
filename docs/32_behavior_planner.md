@@ -54,7 +54,7 @@ Control: drive_speed (50 Hz) ACC·LCC MPC
 
 ## 그림자 모드
 
-지금 planner는 **보여 주기만** 합니다. 실제 차선 변경은 여전히 `drive_speed`의 깜빡이 차선 변경이 판단하고 실행합니다.
+2026-10-23부터 런처는 planner를 지휘 모드로 띄웁니다(아래 "깜빡이 출력과 지휘 모드"). 이 절은 노드 기본값 `command:=false`일 때의 동작입니다. 그때 planner는 **보여 주기만** 합니다. 실제 차선 변경은 여전히 `drive_speed`의 깜빡이 차선 변경이 판단하고 실행합니다.
 - 운전자 깜빡이 가지는 그 실행을 그대로 따라 보여 줍니다.
 - 경로·추월 가지는 간격이 비면 `gap free, would start`로 멈춰 있습니다.
 - 깜빡이 출력 채널(계획 3단계)이 생기면 planner가 깜빡이를 켜고 `drive_speed`에 차선 변경을 지시하는 쪽으로 넘어갑니다.
@@ -110,7 +110,12 @@ Control: drive_speed (50 Hz) ACC·LCC MPC
   - `ot_drive_test`: 소유자·epoch, 100 ms 누르기와 간격, 대기열, 해제
   - 릴레이 `ros_endpoint_test`: 누적값이 한 번씩만 넘어감
   - `planning_test`: 누르기, 운전자 깜빡이 보호, 취소, 비상등, 지휘 모드 깜빡이
-- △ 게임 시험 전입니다. 새 loader로 게임을 재시작해야 합니다. 런처는 아직 그림자 모드로 띄웁니다.
+- 2026-10-23부터 런처가 지휘 모드로 띄우고, provider follow에 `--route follow-lane.route.json`(게임 GPS 경로)을 줍니다.
+  - GPS 목적지가 있으면 walker가 교차로에서 경로 출구를 고릅니다.
+  - 지금 차로에서 그 출구에 못 가면 `route_lane_mismatch`가 나고, Route exit 가지가 1.5 km 앞부터 그쪽 차선 변경을 시작합니다.
+  - 추월은 `overtake_policy` 기본 `confirm`이라 제안만 합니다.
+- `drive_speed`의 깜빡이 차선 변경은 스위치가 켜져 있는 동안 유지되는 요청입니다(2026-10-23부터). 미리 켜 둔 깜빡이, 보조를 켜기 전에 켠 깜빡이, 옆 차로가 아직 없을 때 켠 깜빡이도 조건이 맞으면 옮기고, 한 번 켤 때 한 번만 옮깁니다.
+- △ 게임 시험 전입니다(경로 출구 차선 변경, 미리 켠 깜빡이).
 
 ## 다음
 

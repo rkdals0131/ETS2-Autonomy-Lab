@@ -238,7 +238,7 @@ follow는 매 주기 placement를 기준선에 투영합니다.
 - follow와 한 번 실행에 `--route <경로 파일>`을 주면, walker가 prefab에 들어갈 때 경로 파일에서 그 prefab과 진입 node(prefab 안에서 시작하면 prefab만)로 경로의 출구 node를 찾습니다. 지금 차로의 진입 곡선이 그 출구에 닿으면 그 출구를 따라갑니다(같은 출구로 가는 길이 여럿이면 차로 순위 유지, 짧은 길 순). 기본 규칙(본선·분기·가장 작은 꺾임)으로 골랐을 출구와 다르면 `route_turn` event를 냅니다.
 - 지금 차로의 곡선이 경로 출구에 닿지 않으면 기본 규칙의 출구를 그대로 따라가고 `route_lane_mismatch` event를 냅니다. event에는 그 출구에 닿는 진입 차로(`lanes_ok`, 왼쪽부터 순위)와 지금 차로 순위(`lane`)가 있어, 판단 계층이 그 전에 차로 변경을 계획할 수 있습니다. walker는 차로 변경을 하지 않습니다. 그 뒤 경로를 벗어난 prefab에서는 경로 항목이 없으므로 기본 규칙입니다(경로로 돌아오면 다시 따릅니다).
 - event는 차로 파일 `events`에 `{"type": "route_turn" | "route_lane_mismatch", "s": 누적 거리, "prefab": "16진", "exit_node": "16진", "lanes_ok": [..], "lane": n}`로 신호등 event와 함께 s 순서로 들어가고(경로 event가 없으면 `events`는 예전과 같음), follow 상태 줄(과 한 번 실행 요약)에는 `route_revision`, `route_taken`(이 경로에서 경로 출구를 고른 prefab 수), `route_events`(지금 파일에 남은 경로 event)가 붙습니다. 옆 차로(`.left/.right`)도 같은 경로를 따릅니다.
-- 경로 파일은 최대 1초에 한 번 수정 시각을 보고 바뀌었으면 다시 읽습니다(이미 낸 점은 그대로, 앞으로 지날 prefab부터 적용). 처음에 파일이 없어도 시작하고 생기면 읽습니다. `unavailable`만 있는 파일은 경로 없음으로, 읽기 오류는 직전 경로 유지로 처리합니다. 그래서 follow에 `--game-route --route <out>.route.json`을 함께 주면 게임 GPS 경로를 따라갑니다(△ 런처에는 아직 넣지 않음).
+- 경로 파일은 최대 1초에 한 번 수정 시각을 보고 바뀌었으면 다시 읽습니다(이미 낸 점은 그대로, 앞으로 지날 prefab부터 적용). 처음에 파일이 없어도 시작하고 생기면 읽습니다. `unavailable`만 있는 파일은 경로 없음으로, 읽기 오류는 직전 경로 유지로 처리합니다. 그래서 follow에 `--game-route --route <out>.route.json`을 함께 주면 게임 GPS 경로를 따라갑니다(런처가 2026-10-23부터 이렇게 띄움, △ 실게임 주행 확인 전).
 - `--route`가 없으면 출력은 예전과 바이트 단위로 같습니다(아래 검증).
 
 | 옵션 | 기본값 | 설명 |

@@ -305,7 +305,11 @@ class Controller:
         output = BRIDGE_ROOT / "recordings" / "gt-path" / "follow-lane.json"
         output.parent.mkdir(parents=True, exist_ok=True)
         game = Path(LoaderClient(timeout=2).status()["module_path"]).parents[4]
-        self.follow = self.spawn([str(dotnet), str(provider), "--game", str(game), "--follow", "--game-route", "--out", str(output), "--distance-m", "1000"], "follow")
+        # The game's GPS route (read into follow-lane.route.json) picks the exit at each junction;
+        # without a GPS destination the file says "no route" and the walker keeps its default rule.
+        route = output.with_name(output.stem + ".route.json")
+        self.follow = self.spawn([str(dotnet), str(provider), "--game", str(game), "--follow", "--game-route", "--route", str(route),
+                                  "--out", str(output), "--distance-m", "1000"], "follow")
         self.drive_stop_event = StopEvent("drive")
         self.drive = self.spawn(["ros2", "run", "ets2_autonomy", "drive_speed", "--stop-event", self.drive_stop_event.name,
                                  "--ros-args", "-p", "arm:=true", "-p", "engage:=cruise", "-p", "path_file:=" + str(output),
@@ -314,9 +318,11 @@ class Controller:
                                  "-p", "event_log:=" + str(self.session_log.directory / "disengage.jsonl")], "drive")
         # HUD marks from the assistance state, apart from the control loop (ends with the job).
         self.hud = self.spawn(["ros2", "run", "ets2_autonomy", "hud", "--ros-args", "-p", "path_file:=" + str(output)], "hud")
-        # Behavior tree and lane change state machine in shadow mode: it shows what it would do
-        # (Foxglove status board, /ets2/planning/behavior); drive_speed still drives.
-        self.planner = self.spawn(["ros2", "run", "ets2_autonomy", "planner", "--ros-args", "-p", "path_file:=" + str(output)], "planner")
+        # Behavior tree and lane change state machine (Foxglove status board, /ets2/planning/behavior).
+        # It commands the turn signal for its own lane changes (a route exit's lane; overtaking
+        # only proposes): drive_speed presses the lever and changes lanes 3 s later when the gap allows.
+        self.planner = self.spawn(["ros2", "run", "ets2_autonomy", "planner", "--ros-args", "-p", "path_file:=" + str(output),
+                                   "-p", "command:=true"], "planner")
         # LiDAR occupancy fused with GT traffic: it asks for the full point clouds, which render
         # only while LiDAR is checked; without it the node idles (blocked_m NaN).
         self.occupancy = self.spawn(["ros2", "run", "ets2_autonomy", "occupancy", "--ros-args", "-p", "path_file:=" + str(output)], "occupancy")

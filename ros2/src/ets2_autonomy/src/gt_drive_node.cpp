@@ -264,7 +264,7 @@ int main(int argc,char** argv) {
         // Turn signal lane change: the switch's rising edge requests one to that side (both on,
         // the hazards, is none); it starts while LCC steers, once the gap on the side lane is
         // clear, and keeps going until merged (changing: its side).
-        int change_request=0,previous_signal=2,changing=0;std::string change_waiting;uint64_t change_blocker=0;
+        int change_request=0,previous_signal=0,signal_used=0,changing=0;std::string change_waiting;uint64_t change_blocker=0;
         TurnSignalControl turn_signals;Clock::time_point signal_since{};
         // The driver's steering: since when without a pause over 0.3 s (the stick crossing centre).
         Clock::time_point steering_since{},steering_seen{};
@@ -393,37 +393,40 @@ int main(int argc,char** argv) {
                     }
                 }
             }
-            // Turn signal (the driver's switch, from the relay's powertrain state).
+            // Turn signal (the driver's switch, from the relay's powertrain state). The lever being
+            // on is the request, whenever it went on (before engaging, before the side lane
+            // appears): it waits until the change can start, one change per time the lever goes on.
             const int signal=powertrain && now-powertrain_time<=1s && powertrain->turn_signal_left!=powertrain->turn_signal_right?(powertrain->turn_signal_left?-1:1):0;
-            if(previous_signal==2) previous_signal=signal;
             if(signal!=previous_signal) {
                 if(change_request && !signal) std::cout<<"Lane change request withdrawn"<<std::endl;
-                change_request=signal;previous_signal=signal;change_waiting.clear();change_blocker=0;signal_since=now;
+                previous_signal=signal;signal_used=0;change_waiting.clear();change_blocker=0;signal_since=now;
             }
+            change_request=signal && signal!=signal_used && cruise_engage && lcc?signal:0;
             const char* side_name=change_request<0?"left":"right";
-            if(change_request && !(cruise_engage && lcc)) change_request=0;
-            else if(change_request && lcc_state==Lcc::Active && !changing && lane && lane_side==0 && was_on_lane) {
+            const auto wait=[&](const std::string& problem,uint64_t blocker=0) {
+                if(problem!=change_waiting) std::cout<<"Lane change to the "<<side_name<<" waits: "<<problem<<std::endl;
+                change_waiting=problem;change_blocker=blocker;
+            };
+            if(change_request && lcc_state==Lcc::Active && !changing && lane && lane_side==0 && was_on_lane) {
                 auto target=read_lane(change_request);
                 const auto [x,y]=rear_point();
                 const auto axles=kinematic_axles(axle_wheels,grounded);
-                if(!target) {std::cout<<"Lane change: no lane on the "<<side_name<<std::endl;change_request=0;}
+                if(!target) wait("no lane on that side");
                 else {
                     const auto to=LateralController::update(*target,x,y,ego_yaw,vehicle->speed_mps,axles.wheelbase(),lateral_settings(*settings));
                     // The side lane is one lane over: the truck is right of a left lane (offset < 0).
                     if(!(to.offset*change_request>.5*target->width && to.offset*change_request<1.6*target->width)) {
-                        std::cout<<"Lane change: the "<<side_name<<" lane is not beside the truck (offset "<<to.offset<<" m)"<<std::endl;change_request=0;
+                        wait("that lane is not beside the truck");
                     } else if(turn_signals.by==2 && now-signal_since<3s) {
                         // The assistance's own signal shows for 3 s before the truck moves over (the
                         // driver's starts the change as soon as the gap allows).
-                        if(change_waiting!="signal") std::cout<<"Lane change to the "<<side_name<<" waits: turn signal on for 3 s"<<std::endl;
-                        change_waiting="signal";change_blocker=0;
+                        wait("turn signal on for 3 s");
                     } else if(const auto [problem,blocker]=gap_problem(*target,to.s,front_axle+settings->front_overhang_m-axles.rear_x,
                                                              (now-trailer_time<=200ms?15.0:3.0),std::max(0.0,vehicle->speed_mps));!problem.empty()) {
-                        if(problem!=change_waiting) std::cout<<"Lane change to the "<<side_name<<" waits: "<<problem<<std::endl;
-                        change_waiting=problem;change_blocker=blocker;
+                        wait(problem,blocker);
                     } else {
                         merge=LaneMerge::start(to.s,to.offset,to.heading_error,vehicle->speed_mps,settings->lane_change_lateral_acceleration_mps2,settings->lane_change_min_s);
-                        lane=std::move(target);lane_side=change_request;changing=change_request;change_request=0;change_waiting.clear();change_blocker=0;
+                        lane=std::move(target);lane_side=change_request;changing=change_request;signal_used=change_request;change_request=0;change_waiting.clear();change_blocker=0;
                         std::cout<<"Lane change to the "<<side_name<<" over "<<merge->length<<" m"<<std::endl;
                     }
                 }
