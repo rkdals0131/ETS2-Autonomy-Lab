@@ -154,13 +154,26 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate,const Options& opti
     inputs.ours.push_back({join_hook_.target_address(),join_hook_.target_address()+join_hook_.original_bytes().size()});
     for(const auto& range:guard_.patched()) inputs.ours.push_back(range);
     auto scanned=scan_text(inputs);
-    const bool allowed=scanned.value("workers_allowed",false);
+    bool allowed=scanned.value("workers_allowed",false);
+    const bool concurrent=workers && options.order==loop::Order::concurrent;
+    // research/snowymoon/multicore.md §7: concurrent order runs beside the pinned
+    // snowymoon proxy when its game patches are exactly the known ones and its
+    // state hooks (plan B) are in place.
+    if(concurrent && !allowed && game_folder_dxgi() && !scanned.contains("error")) {
+        bool known=scanned.value("foreign",json::array()).size()>0 && scanned.value("accepted",json::array()).empty();
+        for(const auto& item:scanned.value("foreign",json::array()))
+            known&=ProxyPasses::known_patch(std::stoull(item.value("rva",std::string("0")),nullptr,16),item.value("size",size_t{0}));
+        if(!known) scanned["proxy"]="foreign patches are not exactly the snowymoon set";
+        else if(auto why=proxy_.install(base_,device);!why.empty()) scanned["proxy"]=why;
+        else {allowed=true;scanned["proxy"]="snowymoon plan B";}
+    }
     if(workers && !allowed) {
         // docs/28 §5: one pass at a time (ticket) may run beside foreign patches
         // only when asked explicitly; free order never does.
         if(options.order!=loop::Order::ticket || !options.accept_foreign)
             throw std::runtime_error("Foreign code patches are in the recording path (status gate); worker recording needs a clean .text"
-                                     " or order=ticket with accept_foreign_hooks");
+                                     ", order=ticket with accept_foreign_hooks, or concurrent with the pinned snowymoon proxy"+
+                                     (scanned.contains("proxy")?" (proxy: "+scanned["proxy"].get<std::string>()+")":std::string{}));
         for(const auto& item:scanned.value("foreign",json::array()))
             if(item.value("in_closure",false)) log("parallel_passes: accepting foreign patch "+item.dump());
     }
@@ -176,15 +189,22 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate,const Options& opti
     }
     // M3c: the pool lock and worker arenas are hooked only for concurrent
     // order, and before watch_code so their bytes are the watched baseline.
-    const bool concurrent=workers && options.order==loop::Order::concurrent;
     if(concurrent) {
         guard_.install(base_);
         if(!guard_.enable()) {(void)guard_.disable();throw std::runtime_error("Cannot enable the M3c pool guard hooks");}
+        // The proxy hooks stay like the guard: they only act in logged passes.
+        if(proxy_.installed() && !proxy_.enable()) {(void)proxy_.disable();throw std::runtime_error("Cannot enable the snowymoon proxy hooks");}
     }
     // Otherwise the guard stays as it is: its hooks only act on executor threads
     // of concurrent frames, and patching code while a frame may be recording
     // hung the game once (§11.12). disable() and close() remove it at a frame boundary.
-    if(requested_.load()==0) guard_.clear_counters();
+    // multicore.md §8 S2: serial frames with the proxy hooks only (no workers).
+    if(options.proxy_check && !workers) {
+        if(!game_folder_dxgi()) throw std::runtime_error("proxy_check needs the game-folder dxgi.dll (snowymoon)");
+        if(auto why=proxy_.install(base_,device);!why.empty()) throw std::runtime_error("proxy_check: "+why);
+        if(!proxy_.enable()) {(void)proxy_.disable();throw std::runtime_error("Cannot enable the snowymoon proxy hooks");}
+    }
+    if(requested_.load()==0) {guard_.clear_counters();proxy_.clear_counters();}
     options_=options;
     reason_.clear();error_.clear();
     // The join must be live before any pass can be deferred.
@@ -216,6 +236,7 @@ void ParallelPasses::disable() noexcept {
         if(execute_hook_.enabled()) {changed=true;if(!execute_hook_.disable()) error_="Pass execution detour disable failed";}
         if(join_hook_.enabled()) {changed=true;if(!join_hook_.disable()) error_="Join hook disable failed";}
         if(guard_.enabled()) {changed=true;if(!guard_.disable()) error_="Pool guard disable failed";}
+        if(proxy_.enabled()) {changed=true;if(!proxy_.disable()) error_="Proxy hook disable failed";}
         while(callbacks.load() && GetTickCount64()<deadline+2000) Sleep(1);
         if(changed) log("parallel_passes disabled"+(error_.empty()?std::string{}:": "+error_));
     } catch(...) {requested_.store(0);}
@@ -228,18 +249,19 @@ bool ParallelPasses::quiescent() noexcept {
     ranges.push_back({join_hook_.stub().address(),join_hook_.stub().address()+join_hook_.stub().size()});
     ranges.push_back({join_hook_.trampoline().address(),join_hook_.trampoline().address()+join_hook_.trampoline().size()});
     for(const auto& range:guard_.code()) ranges.push_back(range);
+    for(const auto& range:proxy_.code()) ranges.push_back(range);
     return threads_outside(ranges) && callbacks.load()==0;
 }
 bool ParallelPasses::close() noexcept {
     disable();
     if(!execute_hook_ && !join_hook_) return true;
-    if(execute_hook_.enabled() || join_hook_.enabled() || guard_.enabled()) return false;
+    if(execute_hook_.enabled() || join_hook_.enabled() || guard_.enabled() || proxy_.enabled()) return false;
     const auto deadline=GetTickCount64()+2000;
     do {
         if(quiescent()) {
             instance.store(nullptr);
             original_.store(nullptr);
-            execute_hook_.reset();join_hook_.reset();guard_.reset();
+            execute_hook_.reset();join_hook_.reset();guard_.reset();proxy_.reset();
             log("parallel_passes drained; trampolines released");
             return true;
         }
@@ -369,6 +391,7 @@ void ParallelPasses::latch() noexcept {
     if(mode!=Mode::off && paused_.load()) mode=Mode::off;
     if(mode!=Mode::off && !code_unchanged()) {requested_.store(0);log("parallel_passes off: "+reason_);mode=Mode::off;}
     if(mode!=Mode::off && non_main_calls.load()) {turn_off("0x226A00 was called off the main thread");mode=Mode::off;}
+    if(mode!=Mode::off && proxy_.enabled() && !proxy_.intact()) {turn_off("snowymoon proxy stopped or its device slots changed");mode=Mode::off;}
     summary_mode_=-1;
     if(mode==Mode::off) frame_active_.store(false);
     else {
@@ -463,7 +486,9 @@ void ParallelPasses::parallel_body(void* capture,void*) {
     if(concurrent) PoolGuard::executor_begin(GetCurrentThreadId()!=frame.main_thread);
     loop::run_items(frame.loop,[&](size_t i) {
         uint64_t dwords=0,largest=0;
+        ProxyPasses::pass_begin(i);
         frame.self->record(frame.self->queue_[i],dwords,largest,frame.summary_mode,frame.frame);
+        ProxyPasses::pass_end();
         frame.dwords+=dwords;
         for(auto seen=frame.largest.load();largest>seen && !frame.largest.compare_exchange_weak(seen,largest););
     });
@@ -497,12 +522,26 @@ void ParallelPasses::join() noexcept {
         ParallelFrame frame{this,{},summary_mode_,frame_index_};
         frame.loop.count=queued_;frame.loop.order=frame_options_.order;frame.main_thread=GetCurrentThreadId();
         const auto executors=std::clamp<unsigned>(frame_options_.executors?frame_options_.executors:workers_+1,1,std::min(workers_+1,255u));
+        const bool proxy_frame=frame.loop.order==loop::Order::concurrent && proxy_.enabled();
         if(frame.loop.order==loop::Order::concurrent) PoolGuard::count_window();
+        if(proxy_frame) proxy_.frame_begin(queued_,true);
         loop::run_parallel_loop(task_table_,base_+loop_vtable_rva,static_cast<uint8_t>(executors),"ot_parallel_passes",&frame,&parallel_body);
+        // multicore.md §5.2.3: the proxy gets the passes' cameras in queue order.
+        if(proxy_frame) proxy_.frame_end();
         frame_dwords=frame.dwords.load();largest=frame.largest.load();
         std::lock_guard stats(stats_mutex_);
         counters_.wait_ticks+=frame.loop.wait_ticks.load();counters_.hold_ticks+=frame.loop.hold_ticks.load();
-    } else for(size_t i=0;i<queued_;++i) record(queue_[i],frame_dwords,largest,summary_mode_,frame_index_);
+    } else {
+        // With the proxy hooks in place, serial frames check the logged hand-over against the proxy (multicore.md §8 S2).
+        const bool proxy_frame=proxy_.enabled();
+        if(proxy_frame) proxy_.frame_begin(queued_,false);
+        for(size_t i=0;i<queued_;++i) {
+            ProxyPasses::pass_begin(i);
+            record(queue_[i],frame_dwords,largest,summary_mode_,frame_index_);
+            ProxyPasses::pass_end();
+        }
+        if(proxy_frame) proxy_.frame_end();
+    }
     const auto ticks=qpc_now()-start;
     const bool overflowed=queued_==queue_.size();
     queued_=0;
@@ -534,7 +573,7 @@ json ParallelPasses::status() {
     const auto freq=static_cast<double>(qpc_frequency());
     json threads=json::object();
     for(const auto& [thread,count]:thread_passes_) threads[std::to_string(thread)]=count;
-    result["parallel"]={{"order",loop::order_name(options_.order)},{"pool_guard",guard_.status()},{"executors_requested",options_.executors},{"workers",workers_},
+    result["parallel"]={{"order",loop::order_name(options_.order)},{"pool_guard",guard_.status()},{"proxy",proxy_.status()},{"executors_requested",options_.executors},{"workers",workers_},
         {"accept_foreign_hooks",options_.accept_foreign},{"turn_wait_ms",c.wait_ticks*1000.0/freq},{"pass_hold_ms",c.hold_ticks*1000.0/freq},
         {"join_ms",c.parallel_join_ticks*1000.0/freq},{"passes_by_thread",std::move(threads)}};
     const auto rates=[](const loop::Rates& r){return json{{"compared",r.compared},{"rate",r.rate()},{"structure_rate",r.rate(2)},

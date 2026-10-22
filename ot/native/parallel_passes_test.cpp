@@ -8,6 +8,7 @@
 #include "parallel_loop.hpp"
 #include "frame_arena.hpp"
 #include "uniform_slice.hpp"
+#include "camera_replay.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <deque>
@@ -331,6 +332,56 @@ void uniform_slice() {
     auto c=u::carve(real,0x10000);
     check(c.gpu+u::offset_of(c)==0x10011300,"the next slice starts where the previous one ended");
 }
+// research/snowymoon/multicore.md §5.2.3: per-pass logs replayed in queue
+// order hand the proxy the same frame record and the same ring pushes in the
+// same order as the composer leaf handler 0x1A440 run serially, and leave the
+// same state. Records and pushes are kept apart: they write different proxy
+// state, so their interleaving within a pass does not matter.
+void camera_replay() {
+    namespace r=ot::proxy::replay;
+    const float view[16]={1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1},position[4]={1,2,3,0};
+    float out[16]{};
+    r::relative_view(view,position,out);
+    check(out[0]==1 && out[5]==1 && out[10]==1 && out[15]==1 && out[3]==-1 && out[7]==-2 && out[11]==-3 && out[12]==0,
+          "the relative view is the view times the translation by -position");
+    struct Call {uintptr_t object;float m11,p11;uintptr_t key;};
+    const float values[]={0.0f,-0.0f,1.5f,3.0f,-3.0f,std::nanf("")};
+    std::mt19937 random(7);
+    const auto pick=[&](uint32_t n) {return static_cast<uint32_t>(random()%n);};
+    int mismatched=0,records=0,pushes=0;
+    for(int trial=0;trial<20000;++trial) {
+        std::vector<std::vector<Call>> frame(pick(7));
+        for(auto& pass:frame) for(uint32_t n=pick(5);n--;)
+            pass.push_back({pick(3),values[pick(6)],values[pick(6)],pick(3)==0?100u+pick(3):0u});
+        const r::State start{pick(3),values[pick(6)],pick(4)==0};
+        const auto tag=[](size_t p,size_t c) {return static_cast<uintptr_t>(p<<8|c);};
+        std::array<std::vector<uintptr_t>,2> serial,replayed;
+        r::State s=start;
+        for(size_t p=0;p<frame.size();++p) for(size_t c=0;c<frame[p].size();++c) {
+            const auto& call=frame[p][c];
+            if(call.object && r::differs(s.object,s.m11,call.object,call.m11)) {
+                if(r::candidate(call.m11) && !s.won) {s.won=true;serial[0].push_back(tag(p,c));}
+                s.object=call.object;s.m11=call.m11;
+            }
+            if(call.key && 0.0f<std::fabs(call.p11) && call.object) serial[1].push_back(tag(p,c));
+        }
+        std::vector<r::PassLog> logs(frame.size());
+        for(size_t p=0;p<frame.size();++p) for(size_t c=0;c<frame[p].size();++c) {
+            const auto& call=frame[p][c];
+            if(call.object) logs[p].note(call.object,call.m11,[&](r::Camera& camera) {camera.key=tag(p,c);});
+            if(call.key && 0.0f<std::fabs(call.p11) && call.object) {r::Camera camera;camera.key=tag(p,c);logs[p].add_push(camera);}
+        }
+        const auto end=r::replay(logs.data(),logs.size(),start,
+            [&](const r::Camera& camera) {replayed[0].push_back(camera.key);++records;},
+            [&](const r::Camera& camera) {replayed[1].push_back(camera.key);++pushes;});
+        if(serial!=replayed || end.won!=s.won || end.object!=s.object || std::memcmp(&end.m11,&s.m11,sizeof s.m11)) ++mismatched;
+    }
+    check(mismatched==0 && records>1000 && pushes>1000,"replayed logs match the serial handler in 20000 random frames ("+
+          std::to_string(records)+" records, "+std::to_string(pushes)+" pushes)");
+    r::PassLog full;
+    for(int i=0;i<6;++i) full.add_push({});
+    check(full.pushes==r::PassLog::push_capacity && full.dropped==2,"pushes beyond the log capacity are counted as dropped");
+}
 int main() {
     splice_order();
     splice_across_chunks();
@@ -341,6 +392,7 @@ int main() {
     engine_loop();
     frame_arena();
     uniform_slice();
+    camera_replay();
     alternate();
     names();
     std::printf(failures?"FAILED %d\n":"ALL PASSED\n",failures);

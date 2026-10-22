@@ -668,6 +668,7 @@ json Runtime::command(const json& request) {
                 ParallelPasses::GateInputs gate{render_probe_->patched_ranges(),accepted_text_patches_,{}};
                 for(const auto& rva:schema_.at("render_parallel").at("closure_rvas")) gate.closure.push_back(rva.get<uintptr_t>());
                 ParallelPasses::Options options;
+                options.proxy_check=request.value("proxy_check",false);
                 if(mode!="serial") {
                     // docs/28 §10: the order is always explicit for worker recording.
                     const auto order=request.at("order").get<std::string>();

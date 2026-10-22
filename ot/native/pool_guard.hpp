@@ -43,6 +43,21 @@ public:
     static void executor_end() noexcept;
     // Main thread, once per concurrent frame (counter only).
     static void count_window() noexcept;
+    static bool executor_thread() noexcept;
+    static bool holds_pool_lock() noexcept;
+    // Executors: the pool lock for the scope's lifetime unless this thread
+    // holds it already (the proxy's device slots, multicore.md §5.3.1).
+    class Scope {
+    public:
+        Scope() noexcept;
+        ~Scope();
+        Scope(const Scope&)=delete;
+        Scope& operator=(const Scope&)=delete;
+        bool locked() const noexcept {return locked_;}
+    private:
+        bool locked_=false;
+        uint64_t entered_=0;
+    };
     json status() const;
     void clear_counters() noexcept;
     static constexpr size_t hook_count=13;

@@ -4,6 +4,7 @@
 #include "hook_support.hpp"
 #include "parallel_loop.hpp"
 #include "pool_guard.hpp"
+#include "proxy_passes.hpp"
 #include <array>
 #include <string>
 #include <unordered_map>
@@ -25,6 +26,7 @@ public:
         unsigned executors=0;      // 0: worker count + 1, as the engine's own loops
         bool accept_foreign=false; // ticket only: run beside foreign code patches
         bool report_only=false;    // alternate: report a suspect verdict instead of turning off
+        bool proxy_check=false;    // serial: hook the snowymoon proxy and compare its hand-over (multicore.md §8 S2)
     };
     // docs/28 §5 environment gate inputs: hooks of this DLL (absolute ranges),
     // patches the user accepted (RVA, size) and the recording closure (RVAs).
@@ -86,6 +88,7 @@ private:
     safetyhook::InlineHook execute_hook_;
     safetyhook::MidHook join_hook_;
     PoolGuard guard_;
+    ProxyPasses proxy_;
     std::atomic<Execute> original_{};
     Allocate allocate_{};
     uintptr_t base_{},device_{},device_vtable_{};

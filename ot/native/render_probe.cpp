@@ -1,4 +1,5 @@
 #include "render_probe.hpp"
+#include "proxy_passes.hpp"
 #include "hook_support.hpp"
 #include <algorithm>
 #include <bit>
@@ -474,36 +475,6 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     ++records_written_;
     ReleaseSRWLockExclusive(&records_lock_);
 }
-namespace {
-// Proxy pre-check inputs read from the process (sensor_coexistence.md section 4.2 items 1, 2, 5).
-bool proxy_access(const void* address,size_t size,bool write) {
-    constexpr DWORD readable=PAGE_READONLY|PAGE_READWRITE|PAGE_WRITECOPY|PAGE_EXECUTE_READ|PAGE_EXECUTE_READWRITE|PAGE_EXECUTE_WRITECOPY;
-    constexpr DWORD writable=PAGE_READWRITE|PAGE_EXECUTE_READWRITE;
-    auto p=static_cast<const uint8_t*>(address);const auto end=p+size;
-    while(p<end) {
-        MEMORY_BASIC_INFORMATION info{};
-        if(!VirtualQuery(p,&info,sizeof info) || info.State!=MEM_COMMIT || (info.Protect&(PAGE_GUARD|PAGE_NOACCESS)) ||
-           !(info.Protect&(write?writable:readable))) return false;
-        p=static_cast<const uint8_t*>(info.BaseAddress)+info.RegionSize;
-    }
-    return true;
-}
-proxy::Environment proxy_environment() {
-    proxy::Environment environment;
-    const auto proxy_module=GetModuleHandleW(L"dxgi.dll");
-    if(!proxy_module) return environment;
-    environment.base=reinterpret_cast<uint8_t*>(proxy_module);
-    std::wstring path(32768,L'\0');
-    const auto length=GetModuleFileNameW(proxy_module,path.data(),static_cast<DWORD>(path.size()));
-    if(!length || length>=path.size()) return environment;
-    path.resize(length);
-    std::error_code error;
-    environment.in_game_directory=fs::equivalent(fs::path(path).parent_path(),module_path(nullptr).parent_path(),error) && !error;
-    if(!environment.in_game_directory) return environment;
-    try {environment.sha256=sha256_file(path);} catch(const std::exception& e) {environment.sha256=std::string("unreadable: ")+e.what();}
-    return environment;
-}
-}
 void RenderProbe::gate_observe(const safetyhook::Context& context) noexcept {
     // Render thread, before the OMSetRenderTargets call: who owns the pass being bound?
     // An unnamed pass is main (never inherits the previous owner).
@@ -524,7 +495,7 @@ json RenderProbe::proxy_coexistence(const json& request,bool allowed) {
             if(!accepting_.load() || !hook_.enabled() || (mode_!="observe" && mode_!="overlay"))
                 throw std::runtime_error("The proxy interval setting needs render_probe in observe or overlay mode");
             const bool trace=request.value("trace",false);
-            if(gate_.arm(proxy_environment(),proxy_access,trace))
+            if(gate_.arm(proxy::current_environment(),proxy::accessible,trace))
                 log(trace?"Proxy trace armed (read-only)":"Proxy sensor interval setting armed (static-analysis hypothesis)");
             else log("Proxy sensor interval setting refused: "+gate_.reason());
         } else {

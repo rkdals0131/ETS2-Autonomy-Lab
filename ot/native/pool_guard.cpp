@@ -56,7 +56,7 @@ constexpr uint64_t slice_bytes=0x10000;
 
 struct HookCounters {std::atomic<uint64_t> locked{0},nested{0},wait_ticks{0},hold_ticks{0};};
 std::array<HookCounters,PoolGuard::hook_count> counters;
-HookCounters ring_counters;
+HookCounters ring_counters,scope_counters;
 std::array<SRWLOCK,64> object_locks{},array_locks{}; // zero is SRWLOCK_INIT
 std::array<std::atomic<uintptr_t>,PoolGuard::hook_count> originals{};
 std::atomic<uintptr_t> base{0};
@@ -279,6 +279,24 @@ CodeRanges PoolGuard::code() const {
     return ranges;
 }
 void PoolGuard::count_window() noexcept {windows.fetch_add(1,std::memory_order_relaxed);}
+bool PoolGuard::executor_thread() noexcept {return executor;}
+bool PoolGuard::holds_pool_lock() noexcept {return depth>0;}
+PoolGuard::Scope::Scope() noexcept {
+    if(!executor || depth) {if(executor) scope_counters.nested.fetch_add(1,std::memory_order_relaxed);return;}
+    const auto start=qpc_now();
+    AcquireSRWLockExclusive(&pool_lock);
+    entered_=qpc_now();
+    ++depth;locked_=true;
+    scope_counters.wait_ticks.fetch_add(entered_-start,std::memory_order_relaxed);
+}
+PoolGuard::Scope::~Scope() {
+    if(!locked_) return;
+    --depth;
+    const auto left=qpc_now();
+    ReleaseSRWLockExclusive(&pool_lock);
+    scope_counters.locked.fetch_add(1,std::memory_order_relaxed);
+    scope_counters.hold_ticks.fetch_add(left-entered_,std::memory_order_relaxed);
+}
 // A slice lives one frame: the segment it came from may be retired after it.
 void PoolGuard::executor_begin(bool arena) noexcept {executor=true;arena_thread=arena;slice_valid=false;slice_now=false;}
 void PoolGuard::executor_end() noexcept {
@@ -305,13 +323,15 @@ json PoolGuard::status() const {
     wait+=ring_counters.wait_ticks.load();hold+=ring_counters.hold_ticks.load();
     // locked = slices carved under the pool lock, nested = uniform ranges served from slices.
     functions.push_back(entry("uniform_ring_slices 0x2E52BA",ring_counters,"pool"));
+    wait+=scope_counters.wait_ticks.load();hold+=scope_counters.hold_ticks.load();
+    functions.push_back(entry("proxy_device_slots 7/9/10",scope_counters,"pool"));
     return {{"installed",installed_},{"enabled",enabled()},{"windows",windows.load()},
         {"lock_wait_ms",wait*1000.0/freq},{"lock_hold_ms",hold*1000.0/freq},{"functions",std::move(functions)},
         {"arena",{{"chunks",arena_chunks.load()},{"allocations",arena_allocations.load()},{"failures",arena_failures.load()}}}};
 }
 void PoolGuard::clear_counters() noexcept {
     for(auto& c:counters) {c.locked=0;c.nested=0;c.wait_ticks=0;c.hold_ticks=0;}
-    ring_counters.locked=0;ring_counters.nested=0;ring_counters.wait_ticks=0;ring_counters.hold_ticks=0;
+    for(auto* c:{&ring_counters,&scope_counters}) {c->locked=0;c->nested=0;c->wait_ticks=0;c->hold_ticks=0;}
     arena_chunks=0;arena_allocations=0;arena_failures=0;windows=0;
 }
 }

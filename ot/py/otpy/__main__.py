@@ -80,6 +80,9 @@ def main():
                         help="order=ticket only: run although foreign code patches are in the recording path")
     passes.add_argument("--report-only", action="store_true",
                         help="alternate: keep running when cross differs from baseline; status lists the differing keys")
+    passes.add_argument("--proxy-check", action="store_true",
+                        help="serial: hook the snowymoon proxy (plan B, research/snowymoon/multicore.md) and compare its "
+                             "camera hand-over with the logged one in every frame; status parallel.proxy.shadow")
     rig = sub.add_parser("camera_rig", help="Place cameras in slots 0-8; +X right, +Y up, -Z forward")
     rig.add_argument("mode", choices=("status", "apply", "off"), default="status", nargs="?")
     rig.add_argument("--config", help="JSON containing views with slot, basis, position, quaternion_wxyz and FOVs")
@@ -320,6 +323,10 @@ def main():
                     options["report_only"] = True
             elif args.order or args.executors or args.accept_foreign_hooks or args.report_only:
                 parser.error("--order, --executors and --accept-foreign-hooks apply to parallel and alternate")
+            if args.proxy_check:
+                if args.mode != "serial":
+                    parser.error("--proxy-check applies to serial (concurrent order hooks the proxy by itself)")
+                options["proxy_check"] = True
             result = client.request("parallel_passes", **options)
         elif args.command == "camera_rig":
             if (args.rig_only or args.frames) and args.mode != "apply":
