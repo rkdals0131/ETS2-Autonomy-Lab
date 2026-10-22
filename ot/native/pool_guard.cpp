@@ -117,6 +117,28 @@ uintptr_t bundle(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uin
 // After the first load: make room in this thread's slice for the range
 // (size [rax+0x10] dwords), carving a new slice under the pool lock when it
 // does not fit, so the engine never switches segments for an executor.
+// 0x2B9520 (1.61.1.1 0x2B94B0): its hit test only reads the image object, and a
+// miss calls 0x2B8AC0, which only reads it too and creates the view with the
+// free-threaded D3D11 device (1.61.1.9 decompile), then 0x2AE6B0 registers the
+// view under its own pool lock hook. So it needs no lock of its own; the hook
+// stays to count calls (nested = unlocked calls).
+uintptr_t srv_cache(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
+    if(executor) counters[6].nested.fetch_add(1,std::memory_order_relaxed);
+    return reinterpret_cast<Pooled>(originals[6].load(std::memory_order_relaxed))(a,b,c,d,e,f,g,h);
+}
+// 0x2BEAE0 (1.61.1.1 0x2BEA70): a hit is a non-null pointer in
+// [device+0x363FE38][id]; a miss creates the sampler and stores it there. The
+// pointer store is one aligned write, so executors read hits without the lock.
+uintptr_t sampler_cache(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
+    if(executor && !depth) {
+        const auto id=b&0xFF;
+        if(id<*reinterpret_cast<const volatile uint64_t*>(a+0x363FE40)) {
+            const auto sampler=*reinterpret_cast<const volatile uintptr_t*>(*reinterpret_cast<const uintptr_t*>(a+0x363FE38)+id*8);
+            if(sampler) {counters[7].nested.fetch_add(1,std::memory_order_relaxed);return sampler;}
+        }
+    }
+    return pooled<7>(a,b,c,d,e,f,g,h);
+}
 void slice_first(safetyhook::Context& context) noexcept {
     if(!executor) return;
     const uint64_t bytes=uint64_t{*reinterpret_cast<const uint32_t*>(context.rax+0x10)}*4;
@@ -163,7 +185,8 @@ void PoolGuard::install(uintptr_t image) {
     const auto detours=pooled_detours(std::make_index_sequence<hook_count>{});
     for(size_t i=0;i<hook_count;++i) {
         const auto target=find_target(sites[i].signature,0,sites[i].rva);
-        void* detour=i==0?reinterpret_cast<void*>(&frame_allocate):i==1?reinterpret_cast<void*>(&bundle):detours[i];
+        void* detour=i==0?reinterpret_cast<void*>(&frame_allocate):i==1?reinterpret_cast<void*>(&bundle):
+                     i==6?reinterpret_cast<void*>(&srv_cache):i==7?reinterpret_cast<void*>(&sampler_cache):detours[i];
         auto hook=safetyhook::InlineHook::create(target,detour,safetyhook::InlineHook::StartDisabled);
         if(!hook) throw std::runtime_error(std::string("SafetyHook could not hook ")+sites[i].name);
         hooks[i]=std::move(*hook);
