@@ -17,8 +17,9 @@
 // - debug/mpc: the lateral MPC's plan for the rear point over 1.5 s (/ets2/drive/mpc_plan),
 //   to compare what it intends with what the truck then does (layout default: off).
 //   markings / junctions / signals: the map around the truck from the provider's scene file
-//     (path_file's .scene, 120 m, read when it changes; hud_scene.hpp), drawn within
-//     scene_view_m (60 m) of the truck each frame, grey background: lane dividers
+//     (path_file's .scene, 180 m, read when it changes; hud_scene.hpp), drawn within
+//     scene_view_m (70 m) of a point scene_ahead_m (50 m) ahead of the truck each frame
+//     (120 m ahead, 20 m behind, about 50 m aside), grey background: lane dividers
 //     dashed, the divider between the directions a double line, road edges solid; prefab
 //     navigation curves faint; traffic lights as a pole and a head with a tick towards the
 //     traffic they face (positions only: the game reports no light state).
@@ -60,8 +61,9 @@ int main(int argc,char** argv) {
         std::array<hud::Points,2> sides; // left, right
         auto next_sides=Clock::now();
         // The provider's map around the truck (Foxglove only): read when the file changes (checked
-        // every 0.1 s), drawn within scene_view_m of the truck.
-        const double scene_view=node->declare_parameter("scene_view_m",60.0);
+        // every 0.1 s), drawn within scene_view_m of a point scene_ahead_m ahead of the truck.
+        const double scene_view=node->declare_parameter("scene_view_m",70.0);
+        const double scene_ahead=node->declare_parameter("scene_ahead_m",50.0);
         hud::Scene scene;
         std::filesystem::file_time_type scene_written{};
         auto next_scene=Clock::now();
@@ -200,8 +202,9 @@ int main(int argc,char** argv) {
             }
             // Only while the truck is inside what the file covers (not a stopped provider's stale file).
             if(scene.valid && std::hypot(scene.x-ex,scene.y-ey)<=scene.radius) {
+                const double vx=ex+scene_ahead*std::cos(yaw),vy=ey+scene_ahead*std::sin(yaw);
                 const auto lines=[&](const std::string& ns,const std::vector<hud::Point3>& pairs,double width,std::array<float,4> c) {
-                    const auto pts=hud::within(pairs,ex,ey,scene_view);
+                    const auto pts=hud::within(pairs,vx,vy,scene_view);
                     if(pts.size()<2) return;
                     auto m=marker(ns,Marker::LINE_LIST);m.scale.x=width;colour(m,c[0],c[1],c[2],c[3]);
                     for(const auto& [x,y,z]:pts) {geometry_msgs::msg::Point p;p.x=x;p.y=y;p.z=z;m.points.push_back(p);}
@@ -211,14 +214,14 @@ int main(int argc,char** argv) {
                 lines("scene/markings",scene.centre,.1,{.85f,.87f,.9f,.6f});
                 lines("scene/markings",scene.edge,.15,{.85f,.87f,.9f,.7f});
                 lines("scene/junctions",scene.junction,.06,{.6f,.65f,.7f,.2f});
-                if(std::any_of(scene.lights.begin(),scene.lights.end(),[&](const auto& l) {return std::hypot(l.position[0]-ex,l.position[1]-ey)<=scene_view;})) {
+                if(std::any_of(scene.lights.begin(),scene.lights.end(),[&](const auto& l) {return std::hypot(l.position[0]-vx,l.position[1]-vy)<=scene_view;})) {
                     // Pole (light on the ground or on a pole head) or an overhead head alone; the tick
                     // points from the head towards the traffic it faces.
                     auto poles=marker("scene/signals",Marker::LINE_LIST);poles.scale.x=.15;colour(poles,.7f,.72f,.75f,.8f);
                     auto heads=marker("scene/signals",Marker::CUBE_LIST);heads.scale.x=heads.scale.y=.45;heads.scale.z=1;colour(heads,.7f,.72f,.75f,.9f);
                     for(const auto& l:scene.lights) {
                         const auto [lx,ly,lz]=l.position;
-                        if(std::hypot(lx-ex,ly-ey)>scene_view) continue;
+                        if(std::hypot(lx-vx,ly-vy)>scene_view) continue;
                         const bool overhead=l.height>=4.5;
                         const double top=lz+(overhead?l.height:std::max(l.height,3.2));
                         geometry_msgs::msg::Point p;p.x=lx;p.y=ly;

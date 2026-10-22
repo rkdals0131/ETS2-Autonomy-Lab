@@ -44,7 +44,7 @@ try
     double extendBelow = Number("--extend-below-m", Math.Min(600, distance)), keepBehind = Number("--keep-behind-m", 300, 0), period = Number("--period-s", .5);
     // Follow: the map around the truck for Foxglove (<out>.scene.json); 0 turns it off. Wide:
     // the hud draws a smaller radius around the truck from it until the next rewrite.
-    double sceneRadius = Number("--scene-radius-m", 120, 0);
+    double sceneRadius = Number("--scene-radius-m", 180, 0);
     string? snapshotSource = options.GetValueOrDefault("--snapshot");
     string output = options.GetValueOrDefault("--out", Path.Combine(Environment.CurrentDirectory, "bridge", "recordings", "gt-path", "current-lane.json"));
     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
