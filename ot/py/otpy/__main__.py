@@ -62,6 +62,9 @@ def main():
     probe.add_argument("--mode", dest="hook_mode", choices=("observe", "rig"), default="observe",
                        help="observe: capture hooks; rig: only the four camera placement hooks")
     probe.add_argument("--frames", action="store_true", help="With rig mode: also observe Present intervals")
+    proxy = sub.add_parser("proxy_coexistence", help="snowymoon proxy and sensor cameras (research/snowymoon/sensor_coexistence.md): "
+                           "off by default, needs allow_proxy_sensor_coexistence and render_probe observe; static-analysis hypothesis")
+    proxy.add_argument("mode", choices=("on", "off", "status"), default="status", nargs="?")
     passes = sub.add_parser("parallel_passes", help="docs/28: postpone type 1 render passes to the end of the pass loop and record them "
                             "there in order on the main thread (serial), record them on engine workers (parallel) or alternate the two per "
                             "frame (alternate); F11 returns to off")
@@ -280,6 +283,8 @@ def main():
                     parser.error("--vehicles requires render_probe on")
                 options["vehicle_metadata"] = True
             result = client.request("render_probe", **options)
+        elif args.command == "proxy_coexistence":
+            result = client.request("proxy_sensor_coexistence", **({} if args.mode == "status" else {"enabled": args.mode == "on"}))
         elif args.command == "parallel_passes":
             options = {} if args.mode == "status" else {"mode": args.mode}
             if args.mode in ("parallel", "alternate"):

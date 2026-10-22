@@ -76,6 +76,9 @@ struct RenderImageLink {
 struct RenderPassSample {
     uintptr_t pass{},input{};
     unsigned graph{},camera_slot=9;
+    // Slot N of an output image labelled mirrorN, set only in all-sensor naming mode
+    // (proxy interval setting); 9 when absent. camera_slot needs a geometry or color target.
+    unsigned sensor_slot=9;
     bool geometry=false;
     std::array<RenderTarget,8> targets{};
     MainPass main=MainPass::none;

@@ -130,7 +130,7 @@ private:
     std::atomic<uint32_t> wheel_count_{0},trailer_wheel_count_{0};
     std::atomic<std::shared_ptr<const json>> registered_;
     std::string executable_hash_,gate_error_;
-    bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,allow_camera_rig_=false,allow_parallel_passes_=false,paused_=true;
+    bool gate_ok_=false,allow_tier1_=false,allow_render_probe_=false,allow_camera_rig_=false,allow_parallel_passes_=false,allow_proxy_coexistence_=false,paused_=true;
     std::mutex control_;
     std::string lease_;
     uint64_t lease_deadline_=0;
@@ -166,6 +166,7 @@ void Runtime::initialize() {
     allow_render_probe_=config_.value("allow_render_probe",false);
     allow_camera_rig_=config_.value("allow_camera_rig",false);
     allow_parallel_passes_=config_.value("allow_parallel_passes",false);
+    allow_proxy_coexistence_=config_.value("allow_proxy_sensor_coexistence",false);
     read_accepted_patches(config_);
     render_probe_=std::make_unique<RenderProbe>();
     parallel_passes_=std::make_unique<ParallelPasses>();
@@ -351,7 +352,7 @@ void Runtime::event(scs_event_t event,const void* data) {
 json Runtime::reload_permissions() {
     // Only the pipe worker calls this after initialization. Engine callbacks
     // consume the atomic tier; permissions never grant a higher tier implicitly.
-    panic();allow_tier1_=false;allow_render_probe_=false;allow_camera_rig_=false;allow_parallel_passes_=false;
+    panic();allow_tier1_=false;allow_render_probe_=false;allow_camera_rig_=false;allow_parallel_passes_=false;allow_proxy_coexistence_=false;
     configure_drive(json::object());
     std::ifstream input(module_path(module).parent_path()/L"ot_config.json");
     if(!input) throw std::runtime_error("Cannot open ot_config.json; returned to Tier 0");
@@ -361,6 +362,7 @@ json Runtime::reload_permissions() {
     allow_render_probe_=settings.value("allow_render_probe",false);
     allow_camera_rig_=settings.value("allow_camera_rig",false);
     allow_parallel_passes_=settings.value("allow_parallel_passes",false);
+    allow_proxy_coexistence_=settings.value("allow_proxy_sensor_coexistence",false);
     read_accepted_patches(settings);
     configure_drive(settings);
     log("Permissions reloaded; tier=0, allow_tier1="+std::to_string(allow_tier1_));
@@ -503,7 +505,7 @@ json Runtime::command(const json& request) {
     if(cmd=="version") return {{"plugin_version",OT_VERSION},{"schema_game_version",schema_.at("game_version")},
         {"sdk_game_version",api_.common.game_version},{"expected_exe_sha256",OT_GAME_SHA256},
         {"observed_exe_sha256",executable_hash_},{"internal_access_allowed",gate_ok_ && allow_tier1_},
-        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","configs","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","drive_auxiliary_brakes","drive_turn_signals","parallel_passes","overlay"}},
+        {"gate_error",gate_error_},{"tier",tier_.load()},{"capabilities",{"sdk","truck_config","configs","pipe","state_ring","mirror_read","vehicle_physics_read","drivetrain_read","render_probe","frames","stream","manual_dump","panic","drive","drive_auxiliary_brakes","drive_turn_signals","parallel_passes","overlay","proxy_sensor_coexistence"}},
         {"render_probe_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},
         {"parallel_passes_allowed",gate_ok_ && allow_tier1_ && allow_parallel_passes_},
         {"overlay",true},{"overlay_allowed",gate_ok_ && allow_tier1_ && allow_render_probe_},{"gpu_capture",true},{"writes",render_probe_->status().at("active").get<int>()!=0 || current_drive().value("active",false) || parallel_passes_->active()},
@@ -643,6 +645,13 @@ json Runtime::command(const json& request) {
             } else {render_probe_->disable();if(tier_==2) tier_=1;}
         }
         return render_probe_->status();
+    }
+    if(cmd=="proxy_sensor_coexistence") {
+        // Hypothesis from static analysis, off by default (research/snowymoon/sensor_coexistence.md).
+        // Needs render_probe observe or overlay mode; the pre-checks refuse and say why in the status.
+        std::lock_guard lock(control_);
+        if(request.contains("enabled")) require_owner();
+        return render_probe_->proxy_coexistence(request,tier_>=1 && gate_ok_ && allow_tier1_ && allow_render_probe_ && allow_proxy_coexistence_);
     }
     if(cmd=="parallel_passes") {
         // docs/28 M3a. Independent of the bridge lease: it changes when passes

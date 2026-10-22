@@ -33,6 +33,8 @@ public:
         return !c || !c->private_outputs || (!in_flight() && prepared_configuration_.load()==c);
     }
     uint32_t mask() const noexcept { auto c=configuration_.load();return c?c->mask:0; }
+    // Slots rendered into private outputs; 0 for native mirrors or no rig.
+    uint32_t sensor_mask() const noexcept { auto c=configuration_.load();return c && c->private_outputs?c->mask:0; }
 private:
     enum class Basis { world,chassis,cabin };
     struct View {

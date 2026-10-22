@@ -3,6 +3,7 @@
   "allow_render_probe": false,
   "allow_camera_rig": false,
   "allow_parallel_passes": false,
+  "allow_proxy_sensor_coexistence": false,
   "allow_drive": false,
   "drive_controls_path": "",
   "singleplayer_research": false,

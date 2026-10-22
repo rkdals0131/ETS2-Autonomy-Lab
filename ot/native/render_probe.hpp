@@ -5,6 +5,7 @@
 #include "pass_commands.hpp"
 #include "camera_rig.hpp"
 #include "overlay_decal.hpp"
+#include "proxy_gate.hpp"
 #include <array>
 #include <safetyhook.hpp>
 
@@ -42,6 +43,10 @@ public:
     }
     json frames(uint64_t after_id=0);
     json camera_rig(const json& request);
+    // snowymoon proxy interval setting (research/snowymoon/sensor_coexistence.md); off by
+    // default, static-analysis hypothesis. request.enabled turns it on or off (on only
+    // when allowed and every pre-check passes); no request.enabled returns the status.
+    json proxy_coexistence(const json& request,bool allowed);
     json stream(const json& request,Transport& publisher,const CaptureOptions& options={});
     ~RenderProbe();
 private:
@@ -80,6 +85,8 @@ private:
     Timing draw_batch_timing_;
     void present(HRESULT result) noexcept;
     void observe(const safetyhook::Context& context) noexcept;
+    void gate_observe(const safetyhook::Context& context) noexcept;
+    json proxy_json();
     void overlay_observe(const safetyhook::Context& context) noexcept;
     bool backbuffer_usage(uintptr_t view) noexcept;
     void enable_locked(bool vehicle_metadata,const std::string& mode,bool frame_timing,bool draw_metadata,bool overlay);
@@ -111,6 +118,7 @@ private:
             &rig_drawables_hook_,&rig_graph_drawables_hook_,&rig_graph_cameras_hook_,&rig_graph_end_hook_};
     }
     PassCommands pass_commands_;
+    proxy::Gate gate_;
     std::atomic<std::shared_ptr<const json>> sdk_state_;
     struct PresentRecord { uint64_t id,qpc,sdk_frame;HRESULT result;DWORD thread;bool game_foreground; };
     SRWLOCK frames_lock_=SRWLOCK_INIT;

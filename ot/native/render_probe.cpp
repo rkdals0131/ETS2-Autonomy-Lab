@@ -96,6 +96,7 @@ void RenderProbe::enable_locked(bool vehicle_metadata,const std::string& mode,bo
             disable_locked(true);
             throw std::runtime_error("Previous observation callbacks did not drain");
         }
+        gate_.restore(); // the OM hook is off now: close an open sensor interval
     } else if(!disable_locked(false)) {
         rig_.clear();
         throw std::runtime_error("Previous render mode did not drain: "+last_error_);
@@ -233,6 +234,7 @@ bool RenderProbe::disable_locked(bool clear_rig) {
     if(!callbacks.load() && !rig_.in_flight()) {
         for(auto* hook:hookset()) if(draining(hook) && hook->enabled() && !hook->disable()) last_error_="Camera graph drain hook disable failed";
         if(clear_rig) rig_.clear();
+        gate_.disarm(); // no render callback is inside the gate now
         // No render callback can be inside the decal now: release its GPU objects.
         decal_.release_gpu();
         for(auto& view:composition_) view.Reset();
@@ -294,8 +296,11 @@ void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept 
         const auto stream=self->stream_.load();
         // The decal needs the main0 camera every frame, independent of the stream mask.
         const bool main=self->overlay_.load(std::memory_order_relaxed);
-        const auto mask=self->overlay_only_.load(std::memory_order_relaxed)?0:
+        auto mask=self->overlay_only_.load(std::memory_order_relaxed)?0:
             stream && stream->running()?stream->compiling_mask():UINT32_MAX;
+        // Proxy interval setting: name every pass of the private sensor slots.
+        const uint32_t gate_slots=self->gate_.armed()?self->rig_.sensor_mask():0;
+        mask|=gate_slots;
         if(!mask && !main) {callbacks.fetch_sub(1);return;}
         const auto start=qpc_now();
         uintptr_t input{},output{};uint16_t id{};
@@ -303,7 +308,7 @@ void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept 
            read_memory(context.rbp+0x240,id))
             self->pass_commands_.begin(context.rbp,input,output,id,
                 mask && self->vehicle_metadata_.load()?(stream && stream->running()?stream->compiling_mask(true):UINT32_MAX):0,
-                mask?self->sdk_state_.load():nullptr,mask,mask && (!stream || !stream->running() || stream->compiling_diagnostics()),main);
+                mask?self->sdk_state_.load():nullptr,mask,mask && (!stream || !stream->running() || stream->compiling_diagnostics()),main,gate_slots!=0);
         self->compile_begin_timing_.add(qpc_now()-start);
     }
     callbacks.fetch_sub(1);
@@ -435,6 +440,7 @@ bool RenderProbe::compile_frame() const noexcept {
         stream->compiling();
 }
 void RenderProbe::observe(const safetyhook::Context& context) noexcept {
+    if(gate_.armed()) gate_observe(context);
     if(overlay_.load(std::memory_order_relaxed)) overlay_observe(context);
     if(overlay_only_.load(std::memory_order_relaxed)) return;
     const auto stream=stream_.load();
@@ -467,6 +473,78 @@ void RenderProbe::observe(const safetyhook::Context& context) noexcept {
     records_[records_written_%records_.size()]=record;
     ++records_written_;
     ReleaseSRWLockExclusive(&records_lock_);
+}
+namespace {
+// Proxy pre-check inputs read from the process (sensor_coexistence.md section 4.2 items 1, 2, 5).
+bool proxy_access(const void* address,size_t size,bool write) {
+    constexpr DWORD readable=PAGE_READONLY|PAGE_READWRITE|PAGE_WRITECOPY|PAGE_EXECUTE_READ|PAGE_EXECUTE_READWRITE|PAGE_EXECUTE_WRITECOPY;
+    constexpr DWORD writable=PAGE_READWRITE|PAGE_EXECUTE_READWRITE;
+    auto p=static_cast<const uint8_t*>(address);const auto end=p+size;
+    while(p<end) {
+        MEMORY_BASIC_INFORMATION info{};
+        if(!VirtualQuery(p,&info,sizeof info) || info.State!=MEM_COMMIT || (info.Protect&(PAGE_GUARD|PAGE_NOACCESS)) ||
+           !(info.Protect&(write?writable:readable))) return false;
+        p=static_cast<const uint8_t*>(info.BaseAddress)+info.RegionSize;
+    }
+    return true;
+}
+proxy::Environment proxy_environment() {
+    proxy::Environment environment;
+    const auto proxy_module=GetModuleHandleW(L"dxgi.dll");
+    if(!proxy_module) return environment;
+    environment.base=reinterpret_cast<uint8_t*>(proxy_module);
+    std::wstring path(32768,L'\0');
+    const auto length=GetModuleFileNameW(proxy_module,path.data(),static_cast<DWORD>(path.size()));
+    if(!length || length>=path.size()) return environment;
+    path.resize(length);
+    std::error_code error;
+    environment.in_game_directory=fs::equivalent(fs::path(path).parent_path(),module_path(nullptr).parent_path(),error) && !error;
+    if(!environment.in_game_directory) return environment;
+    try {environment.sha256=sha256_file(path);} catch(const std::exception& e) {environment.sha256=std::string("unreadable: ")+e.what();}
+    return environment;
+}
+}
+void RenderProbe::gate_observe(const safetyhook::Context& context) noexcept {
+    // Render thread, before the OMSetRenderTargets call: who owns the pass being bound?
+    // An unnamed pass is main (never inherits the previous owner).
+    const auto index=static_cast<uint32_t>(context.r13);
+    uintptr_t cursor{},data{};uint16_t id{};
+    RenderPassPtr pass;
+    if(index && read_memory(context.rbp-0x30,cursor) && read_memory(cursor,id) && read_memory(context.r12,data))
+        pass=pass_commands_.peek(id,data+(index-1)*4);
+    const auto sensors=rig_.sensor_mask();
+    const bool sensor=pass && pass->sensor_slot<9 && (sensors>>pass->sensor_slot&1);
+    gate_.bind(sensor?proxy::Owner::sensor:proxy::Owner::main,sensor?pass->pass:0,!pass);
+}
+json RenderProbe::proxy_coexistence(const json& request,bool allowed) {
+    std::lock_guard lock(control_);
+    if(request.contains("enabled")) {
+        if(request.at("enabled").get<bool>()) {
+            if(!allowed) throw std::runtime_error("The proxy interval setting needs allow_proxy_sensor_coexistence in ot_config.json, Tier 1, matching EXE and allow_render_probe");
+            if(!accepting_.load() || !hook_.enabled() || (mode_!="observe" && mode_!="overlay"))
+                throw std::runtime_error("The proxy interval setting needs render_probe in observe or overlay mode");
+            if(gate_.arm(proxy_environment(),proxy_access)) log("Proxy sensor interval setting armed (static-analysis hypothesis)");
+            else log("Proxy sensor interval setting refused: "+gate_.reason());
+        } else {
+            gate_.stop();
+            const auto deadline=GetTickCount64()+2000;
+            while(callbacks.load() && GetTickCount64()<deadline) Sleep(1);
+            gate_.restore();
+        }
+    }
+    return proxy_json();
+}
+json RenderProbe::proxy_json() {
+    const auto& c=gate_.counters();
+    const auto reason=gate_.armed()?json(nullptr):json(gate_.reason().empty()?std::string("disabled"):gate_.reason());
+    return {{"enabled",gate_.armed()},{"reason",reason},{"in_sensor_interval",gate_.in_sensor()},
+        {"sensor_mask",rig_.sensor_mask()},
+        {"basis","static analysis only; not verified in a game session (research/snowymoon/sensor_coexistence.md)"},
+        {"expected_sha256",proxy::Layout::sha256},
+        {"counters",{{"interval_entries",c.enters.load()},{"interval_exits",c.exits.load()},
+            {"sensor_binds",c.binds_sensor.load()},{"main_binds",c.binds_main.load()},{"lookup_miss",c.lookup_miss.load()},
+            {"ring_flagged",c.ring_flagged.load()},{"ring_invalid",c.ring_invalid.load()},{"ring_count_max",c.ring_max.load()},
+            {"entries_with_nonidle_draw_state",c.nonidle_entries.load()},{"recopies",c.recopies.load()}}}};
 }
 json RenderProbe::stream(const json& request,Transport& publisher,const CaptureOptions& options) {
     std::lock_guard lock(control_);
@@ -511,6 +589,7 @@ json RenderProbe::status() {
         {"mode",mode_},{"frame_timing_enabled",present_hook_.enabled()},{"capture_enabled",hook_.enabled()},
         {"vehicle_metadata_enabled",vehicle_metadata_.load()},
         {"camera_rig",rig_.status()},
+        {"proxy_sensor_coexistence",proxy_json()},
         {"callbacks_in_flight",callbacks.load()},
         {"qpc_frequency",qpc_frequency()},
         {"timing_scope","callback_body_elapsed; cumulative per module; excludes detour and counter bookkeeping"},
