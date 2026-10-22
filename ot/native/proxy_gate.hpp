@@ -18,7 +18,7 @@ struct Layout {
     // sensor_coexistence.md section 4.2 item 2.
     static constexpr const char* sha256="d819c16805a9a0ca17f34ef46cc445c5847f32308d10e69bf08f3c1b4779f4dc";
     // Section 3.1 and 3.3 item 1: the draw bodies per-frame re-copy, reproduced in Gate::enter.
-    static constexpr uint32_t aa_copy=0xC7382C;      // u32, copy of aa_source (0 = effects off, 1..3 mode)
+    static constexpr uint32_t aa_copy=0xC7382C;      // u32, copy of aa_source (0 = effects off; 1 TAA, 2 TAA Clarity, 3 DLAA, 4..6 DLSS Q/B/P, settings UI 0x25A40)
     static constexpr uint32_t frame_copy=0xC73830;   // u32, frame number of the last re-copy
     static constexpr uint32_t frame_source=0xC288D8; // u32, frame number, incremented by the frame bracket
     static constexpr uint32_t aa_source=0xA3D840;    // u32, configuration value (restore value, 3.3 item 2)

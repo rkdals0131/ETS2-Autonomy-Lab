@@ -24,7 +24,7 @@ std::string precheck(const Environment& e,const AccessCheck& access) {
         if(!readable(rva,4)) return "proxy data is not readable";
     if(load<uint32_t>(e.base,L::installed)!=1) return "proxy is not installed (0xC737AC != 1)";
     if(load<uint32_t>(e.base,L::version)!=L::expected_version) return "proxy game version value is not 0x3D";
-    if(load<uint32_t>(e.base,L::aa_source)>3) return "proxy AA setting is outside 0..3";
+    if(load<uint32_t>(e.base,L::aa_source)>6) return "proxy AA setting is outside 0..6";
     if(load<int32_t>(e.base,L::state_machine)>4 || load<int32_t>(e.base,L::state_machine)<0) return "proxy draw state is outside 0..4";
     // Writes: every location the gate may write must be a writable data page.
     const auto writable=[&](uint32_t rva,size_t size) {return access(e.base+rva,size,true);};
@@ -69,7 +69,7 @@ void Gate::bind(Owner owner,uintptr_t pass,bool miss) noexcept {
 }
 void Gate::enter(uintptr_t pass) noexcept {
     // A proxy no longer in the analyzed state: put the value back and stop.
-    if(read<uint32_t>(L::installed)!=1 || read<uint32_t>(L::aa_source)>3) {
+    if(read<uint32_t>(L::installed)!=1 || read<uint32_t>(L::aa_source)>6) {
         tripped_.store(true);
         armed_.store(false);
         restore();

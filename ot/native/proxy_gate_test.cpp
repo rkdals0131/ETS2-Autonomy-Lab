@@ -40,8 +40,8 @@ void precheck_branches() {
     }
     {Image bad;bad.set<uint32_t>(L::installed,0);CHECK(!precheck(bad.environment(),allow).empty());}
     {Image bad;bad.set<uint32_t>(L::version,0x3C);CHECK(!precheck(bad.environment(),allow).empty());}
-    {Image bad;bad.set<uint32_t>(L::aa_source,4);CHECK(!precheck(bad.environment(),allow).empty());}
-    {Image ok;ok.set<uint32_t>(L::aa_source,3);ok.set<uint32_t>(L::aa_copy,3);CHECK(precheck(ok.environment(),allow).empty());}
+    {Image bad;bad.set<uint32_t>(L::aa_source,7);CHECK(!precheck(bad.environment(),allow).empty());}
+    {Image ok;ok.set<uint32_t>(L::aa_source,4);ok.set<uint32_t>(L::aa_copy,4);CHECK(precheck(ok.environment(),allow).empty());}
     {Image bad;bad.set<int32_t>(L::state_machine,5);CHECK(!precheck(bad.environment(),allow).empty());}
     {Image ok;ok.set<int32_t>(L::state_machine,0);CHECK(precheck(ok.environment(),allow).empty());}
     // A non-writable page (or unreadable text) refuses.
