@@ -45,12 +45,14 @@ Steam이 실행 파일을 바꾸면 core의 해시 게이트가 Tier 1을 끕니
 py -3 research/ghidra/ghidra.py image                       # 업데이트 전에 분석한 빌드의 이미지 덤프(프로젝트에서 읽기만 함)
 # ot/schema/<새 버전>/game.json 작성(game_version, exe_sha256)
 py -3 research/rebase_rvas.py --new-version <새 버전> --analyzed   # 표 확인, research/ghidra/out/<새 버전>/rebase.json
+py -3 research/xref_crosscheck.py apply --new-version <새 버전>   # 검산: 문자열 참조 규칙으로 같은 주소를 다시 구해 rebase.json과 비교(일치/불일치/규칙 없음), research/ghidra/out/<새 버전>/xref_crosscheck.json
 py -3 research/rebase_rvas.py --new-version <새 버전> --layout     # 구조체 오프셋 변화와 ot/native 오프셋 대조(4분)
 py -3 research/rebase_rvas.py --new-version <새 버전> --write [--accept <RVA>=<확인 내용>]
 .\ot\build.cmd -DOT_GAME_VERSION=<새 버전>
 ```
 
 - `rebase_rvas.py`는 스키마의 `*_rva`와 `ot/native`의 주소 리터럴, 훅 위치를 확인하는 바이트 서명(`find_target`; 상대 변위가 섞여 있어 새 위치에서 다시 읽음)을 옮깁니다. 다시 실행해도 이미 옮긴 리터럴을 한 번 더 옮기지 않습니다. 함수는 본문 바이트 창 투표로 찾은 뒤 capstone으로 명령어 단위 비교를 하고, 분기·RIP 상대·이미지 상대 대상을 정규화해 "이동만 있음"을 판정합니다. 이 판정이 나면 함수 안의 구조체 오프셋도 그대로입니다. 데이터는 이전 코드의 참조를 새 코드에서 찾아 새 변위로 옮기고, vtable(이 게임은 RTTI가 없음)은 슬롯 함수 대응으로 확인합니다.
+- `xref_crosscheck.py`는 `rebase_rvas.py`와 독립인 두 번째 검산입니다. `research/xref_rules.json`의 규칙(빌드에서 한 번만 나오는 문자열 → 그 문자열을 참조하는 명령 → 그 명령이 속한 함수(.pdata) → 함수 시작, n번째 call, RIP 목표, 바이트 서명 중 하나)을 새 실행 파일에 적용해 구한 주소를 `rebase.json`과 비교합니다. 불일치는 두 값과 근거를 모두 남기고 자동으로 고르지 않습니다. 규칙은 이전 빌드 이미지로 만듭니다(`xref_crosscheck.py generate`, 이전 주소를 되찾는 것만 남김). 새 빌드를 분석 기준으로 삼을 때 다시 만듭니다.
 - `--analyzed`는 `ghidra/out/decomp/`의 근거 함수 전체를 비교해 구조체 레이아웃 변화를 찾습니다. `--layout`은 바이너리 전체에서 바뀐 구조체 변위를 모으고, `ot/native`에 박힌 오프셋(`+0x…`) 중 어디선가 바뀐 값을 나열합니다. 같은 숫자를 여러 클래스가 쓰므로 각 후보는 그 객체를 읽는 코드에서 확인합니다. `--write`는 사용 중인 주소가 하나라도 확정되지 않으면 거절합니다. 손으로 확인한 것만 `--accept`에 이유와 함께 적으며, 그 기록이 `ot/schema/<새 버전>/rebase.json`에 남습니다.
 - 문서(docs/)의 주소는 발견한 빌드 기준입니다. 현재 빌드 주소는 그 `rebase.json`으로 찾습니다.
 - 새 빌드를 Ghidra로 디컴파일하려면 `ghidra.py --version <새 버전> import`(30분 정도, 메모리 8 GB 이상)가 필요합니다. 주소 옮기기 자체에는 필요 없습니다.

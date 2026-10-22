@@ -1,0 +1,1127 @@
+{
+ "old_version": "1.61.1.1",
+ "old_exe_sha256": "2014bfcc850a06108f4ca3c233a5bb6d31d7d83346c5d449f94c8e0675e5199a",
+ "built_from": "research/ghidra/out/image.bin",
+ "address_list": "C:\\Users\\kikiw\\Desktop\\ETS2-Autonomy-Lab\\ot\\schema\\1.61.1.9\\rebase.json",
+ "note": "rule: string -> referencing instruction -> .pdata function -> selector; null = no rule (reason). Every rule recovers its old RVA from the old image dump.",
+ "rules": [
+  {
+   "old": "0x166b30",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[25]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x166c50",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[26]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x167d50",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.task_submit_stub_rva",
+    "parallel_passes.cpp:22"
+   ],
+   "rule": null,
+   "reason": "no .pdata function (leaf stub): no string can be tied to it"
+  },
+  {
+   "old": "0x167d80",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.task_wait_stub_rva",
+    "parallel_passes.cpp:22"
+   ],
+   "rule": null,
+   "reason": "no .pdata function (leaf stub): no string can be tied to it"
+  },
+  {
+   "old": "0x167dd0",
+   "kind": "code",
+   "used_by": [
+    "parallel_passes_test.cpp:155"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x167e90",
+   "kind": "code",
+   "used_by": [
+    "parallel_passes_test.cpp:155"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x190c70",
+   "kind": "code",
+   "used_by": [
+    "parallel_loop.hpp:18"
+   ],
+   "rule": null,
+   "reason": "no .pdata function (leaf stub): no string can be tied to it"
+  },
+  {
+   "old": "0x1e05b0",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[23]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x226960",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.pass_execute_rva",
+    "render_parallel.closure_rvas[0]",
+    "parallel_passes.cpp:17",
+    "parallel_passes.cpp:23",
+    "parallel_passes.cpp:352",
+    "parallel_passes.hpp:12",
+    "parallel_passes_test.cpp:55"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x227140",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[1]",
+    "parallel_passes.hpp:13",
+    "parallel_passes_test.cpp:58",
+    "pass_stream.hpp:128",
+    "pass_stream.hpp:134"
+   ],
+   "rule": "\"??A?$array_t@PEAUr_cmd_storage_t@prism@@@prism@@...\" (접두, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "??A?$array_t@PEAUr_cmd_storage_t@prism@@@prism@@QEAAAEAPEAUr_cmd_storage_t@1@_K@",
+    "match": "prefix",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x227b1f",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.execute_join_rva",
+    "parallel_passes.cpp:17",
+    "parallel_passes.cpp:367",
+    "parallel_passes.hpp:13"
+   ],
+   "rule": "\"??A?$array_t@PEAUr_cmd_storage_t@prism@@@prism@@...\" (접두, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 바이트 서명 1번째 일치",
+   "string": {
+    "text": "??A?$array_t@PEAUr_cmd_storage_t@prism@@@prism@@QEAAAEAPEAUr_cmd_storage_t@1@_K@",
+    "match": "prefix",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "signature",
+    "pattern": "4c 89 bd 98 08 00 00 48 8d 85 a8 08 00 00 48 89 85 90 08 00 00",
+    "occurrence": 0
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x28ce60",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.storage_allocate_rva",
+    "render_parallel.closure_rvas[24]",
+    "parallel_passes.cpp:17",
+    "parallel_passes_test.cpp:21",
+    "pass_stream.hpp:14",
+    "pass_stream.hpp:147"
+   ],
+   "rule": "\"?allocate@r_cmd_storage_t@prism@@QEAAPEAI_K@Z\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "?allocate@r_cmd_storage_t@prism@@QEAAPEAI_K@Z",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2ae640",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[16]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x2b1a30",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.device_slots_checked.0x108",
+    "render_parallel.closure_rvas[27]",
+    "parallel_passes.cpp:30"
+   ],
+   "rule": "\"[dx11] Unknown meta op requested\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "[dx11] Unknown meta op requested",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2b1b40",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:16"
+   ],
+   "rule": "\"[dx11] Unknown meta op requested\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 바이트 서명 1번째 일치",
+   "string": {
+    "text": "[dx11] Unknown meta op requested",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "signature",
+    "pattern": "4d 8b 3a 49 8b 4f 10 48 85 c9 0f 84 .. .. .. ..",
+    "occurrence": 0
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2b266a",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:16"
+   ],
+   "rule": "\"[dx11] Unknown meta op requested\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 바이트 서명 1번째 일치",
+   "string": {
+    "text": "[dx11] Unknown meta op requested",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "signature",
+    "pattern": "49 83 c2 08 4c 89 55 f0 4d 3b d3 0f 85 .. .. .. ..",
+    "occurrence": 0
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2b3193",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:14"
+   ],
+   "rule": "\"[dx11] Unknown command or corrupted token stream...\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 바이트 서명 1번째 일치",
+   "string": {
+    "text": "[dx11] Unknown command or corrupted token stream in execute!",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "signature",
+    "pattern": "4c 8b 8d a8 00 00 00 48 8b 88 f0 fc 63 03 48 8b 01",
+    "occurrence": 0
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2b5f70",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[20]"
+   ],
+   "rule": "\"[dx11] Failed to map buffer range of %Iu bytes @...\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "[dx11] Failed to map buffer range of %Iu bytes @ %Iu u: %u m: %d (0x%lx)",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2b62b0",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[28]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x2b6b20",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.device_slots_checked.0x278",
+    "render_parallel.closure_rvas[13]",
+    "parallel_passes.cpp:30"
+   ],
+   "rule": "\"[dx11] Failed to create TB SRV (0x%lx)\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "[dx11] Failed to create TB SRV (0x%lx)",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2b94b0",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[14]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x2bea70",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[15]"
+   ],
+   "rule": "\"[dx11] Failed to create sampler object\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "[dx11] Failed to create sampler object",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2bfeda",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:15"
+   ],
+   "rule": "\"[dxgi] Present failed (0x%lx)\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 바이트 서명 1번째 일치",
+   "string": {
+    "text": "[dxgi] Present failed (0x%lx)",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "signature",
+    "pattern": "85 c0 79 .. 8b d0 48 8d 0d .. .. .. .. 48 83 c4 28",
+    "occurrence": 0
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2e5040",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[8]"
+   ],
+   "rule": "\"?index_of@?$array_t@Ur_composed_uniform_range_t@...\" (접두, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "?index_of@?$array_t@Ur_composed_uniform_range_t@prism@@@prism@@QEBA_KQEBUr_compo",
+    "match": "prefix",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2e5ff0",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[7]"
+   ],
+   "rule": "\"Unknown primitive type encountered.\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "Unknown primitive type encountered.",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2e6243",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:17"
+   ],
+   "rule": "\"Unknown primitive type encountered.\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 바이트 서명 1번째 일치",
+   "string": {
+    "text": "Unknown primitive type encountered.",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "signature",
+    "pattern": "8b 4c 24 40 4c 8d 05 .. .. .. .. 48 8b 5d 7f ff c1",
+    "occurrence": 0
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2e6af0",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[9]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x2e8090",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[21]"
+   ],
+   "rule": "\"Failed to reserve new buffer record.\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "Failed to reserve new buffer record.",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x2e8440",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[22]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x2e8fe0",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.device_slots_checked.0x120",
+    "render_parallel.closure_rvas[17]",
+    "parallel_passes.cpp:30"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x2e9360",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[18]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x2f3ea0",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[19]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x321460",
+   "kind": "code",
+   "used_by": [
+    "render_vehicle.model_component_set_placement_rva"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x3eb290",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[12]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x3eb9f0",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[11]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x4d458b",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:19"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x4d46b8",
+   "kind": "code",
+   "used_by": [
+    "camera_rig.cpp:245"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x4d46e4",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:19"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x4d4e54",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:19"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x538a4e",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:18"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x538ad4",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:19"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x538b11",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:18"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x538ce3",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:18"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x646dc9",
+   "kind": "code",
+   "used_by": [
+    "camera_rig.cpp:255"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x646e57",
+   "kind": "code",
+   "used_by": [
+    "camera_rig.cpp:255"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x87fd70",
+   "kind": "code",
+   "used_by": [
+    "camera_rig.cpp:216",
+    "camera_rig.cpp:220"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x918f30",
+   "kind": "code",
+   "used_by": [
+    "render_vehicle.actor_set_bounds_rva"
+   ],
+   "rule": null,
+   "reason": "no .pdata function (leaf stub): no string can be tied to it"
+  },
+  {
+   "old": "0x923b60",
+   "kind": "code",
+   "used_by": [
+    "render_vehicle.ai_publish_bounds_rva"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x955790",
+   "kind": "code",
+   "used_by": [
+    "render_vehicle.model_set_placement_rva"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x955870",
+   "kind": "code",
+   "used_by": [
+    "render_vehicle.model_get_placement_rva"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x95b4d0",
+   "kind": "code",
+   "used_by": [
+    "render_vehicle.parked_publish_bounds_rva"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x978530",
+   "kind": "code",
+   "used_by": [
+    "render_vehicle.model_bounds_in_actor_basis_rva"
+   ],
+   "rule": "\"[traffic_vehicle] Error computing cabin bounding...\" (접두, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "[traffic_vehicle] Error computing cabin bounding box! Please check the collision",
+    "match": "prefix",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0xa3cade",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:25"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0xc74aa0",
+   "kind": "code",
+   "used_by": [
+    "parallel_loop.hpp:15",
+    "parallel_passes.cpp:19",
+    "parallel_passes_test.cpp:203"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x1473e60",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[2]",
+    "pass_commands.cpp:162"
+   ],
+   "rule": "\"?element_at@?$array_t@Uqueue_data_t@render_queue...\" (접두, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "?element_at@?$array_t@Uqueue_data_t@render_queue_set_data_t@prism@@@prism@@QEBAP",
+    "match": "prefix",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x1476140",
+   "kind": "code",
+   "used_by": [
+    "pass_commands.cpp:161"
+   ],
+   "rule": null,
+   "reason": "no .pdata function (leaf stub): no string can be tied to it"
+  },
+  {
+   "old": "0x1509140",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[10]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x151bf80",
+   "kind": "code",
+   "used_by": [
+    "core.cpp:598",
+    "parallel_passes.hpp:16"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x160c990",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[3]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x160cf10",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[4]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x160d010",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[5]"
+   ],
+   "rule": "\"?element_at@?$array_t@Vviewport_t@prism@@@prism@...\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 함수 시작",
+   "string": {
+    "text": "?element_at@?$array_t@Vviewport_t@prism@@@prism@@QEBAPEBVviewport_t@2@_K@Z",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "function_start"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x160d580",
+   "kind": "code",
+   "used_by": [
+    "render_parallel.closure_rvas[6]"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x1610250",
+   "kind": "code",
+   "used_by": [
+    "render_probe.cpp:24"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x1d16a8d",
+   "kind": "code",
+   "used_by": [
+    "core.cpp:325"
+   ],
+   "rule": null,
+   "reason": "the function holds no unique string (1-4 references) that reaches the address with a rule"
+  },
+  {
+   "old": "0x21ec488",
+   "kind": "data",
+   "used_by": [
+    "render_parallel.parallel_loop_vtable_rva",
+    "parallel_passes.cpp:21"
+   ],
+   "rule": "\"[dstorage] Failed to set request results (0x%lx)\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 참조 앞 1번째 vtable RIP 목표",
+   "string": {
+    "text": "[dstorage] Failed to set request results (0x%lx)",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": "vtable",
+    "n": -1,
+    "anchor": "xref"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x21fd1b0",
+   "kind": "data",
+   "used_by": [
+    "render_pass_camera.wrapper_vtable_rva"
+   ],
+   "rule": "\"%s @ %s\" (정확, 참조 2개 중 2번째) → 참조 명령 → .pdata 함수 → 참조 뒤 3번째 vtable RIP 목표",
+   "string": {
+    "text": "%s @ %s",
+    "match": "exact",
+    "xrefs": 2,
+    "xref_index": 1
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": "vtable",
+    "n": 3,
+    "anchor": "xref"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x21fd700",
+   "kind": "data",
+   "used_by": [
+    "render_parallel.storage_vtable_rva",
+    "parallel_passes.cpp:18"
+   ],
+   "rule": "\"?index_of@?$array_t@Udx11_cmd_buffer_t@prism@@@p...\" (접두, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 참조 앞 1번째 vtable RIP 목표",
+   "string": {
+    "text": "?index_of@?$array_t@Udx11_cmd_buffer_t@prism@@@prism@@QEBA_KQEBUdx11_cmd_buffer_",
+    "match": "prefix",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": "vtable",
+    "n": -1,
+    "anchor": "xref"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x22127a8",
+   "kind": "data",
+   "used_by": [
+    "render_parallel.device_vtable_rva",
+    "parallel_passes.cpp:18"
+   ],
+   "rule": null,
+   "reason": "2 references, none of the first 2 functions has a unique string it can be chosen by"
+  },
+  {
+   "old": "0x2222fd8",
+   "kind": "data",
+   "used_by": [
+    "render_vehicle.model_component_vtable_rva"
+   ],
+   "rule": null,
+   "reason": "2 references, none of the first 2 functions has a unique string it can be chosen by"
+  },
+  {
+   "old": "0x2223120",
+   "kind": "data",
+   "used_by": [
+    "render_pass_camera.camera_vtable_rva"
+   ],
+   "rule": null,
+   "reason": "1 references, none of the first 0 functions has a unique string it can be chosen by"
+  },
+  {
+   "old": "0x22df760",
+   "kind": "data",
+   "used_by": [
+    "render_vehicle.model_vtable_rva"
+   ],
+   "rule": null,
+   "reason": "1 references, none of the first 1 functions has a unique string it can be chosen by"
+  },
+  {
+   "old": "0x23f5530",
+   "kind": "data",
+   "used_by": [
+    "render_pass_camera.inner_vtable_rva"
+   ],
+   "rule": "\"blit_to_target\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 참조 앞 2번째 vtable RIP 목표 -0x18",
+   "string": {
+    "text": "blit_to_target",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": "vtable",
+    "n": -2,
+    "anchor": "xref",
+    "adjust": -24
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x23f64a0",
+   "kind": "data",
+   "used_by": [
+    "render_pass_camera.deferred_vtable_rva"
+   ],
+   "rule": null,
+   "reason": "2 references, none of the first 2 functions has a unique string it can be chosen by"
+  },
+  {
+   "old": "0x2506950",
+   "kind": "data",
+   "used_by": [
+    "vehicle_physics.backend_vtable_rva"
+   ],
+   "rule": null,
+   "reason": "1 references, none of the first 1 functions has a unique string it can be chosen by"
+  },
+  {
+   "old": "0x2737a78",
+   "kind": "data",
+   "used_by": [
+    "render_pass_camera.batch_pool_rva"
+   ],
+   "rule": "\"i_cursor_non_semantical_forced_slow_speed_multip...\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 참조 뒤 1번째 .data RIP 목표 -0x28",
+   "string": {
+    "text": "i_cursor_non_semantical_forced_slow_speed_multiplier",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": ".data",
+    "n": 1,
+    "anchor": "xref",
+    "adjust": -40
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x304b300",
+   "kind": "data",
+   "used_by": [
+    "render_parallel.worker_count_rva",
+    "parallel_passes.cpp:21"
+   ],
+   "rule": "\"[dstorage] Failed to set request results (0x%lx)\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 참조 앞 1번째 .data RIP 목표",
+   "string": {
+    "text": "[dstorage] Failed to set request results (0x%lx)",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": ".data",
+    "n": -1,
+    "anchor": "xref"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x304fc50",
+   "kind": "data",
+   "used_by": [
+    "render_graph.manager_rva",
+    "pass_commands.cpp:387"
+   ],
+   "rule": "\"color_tile%u\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 참조 뒤 1번째 .data RIP 목표",
+   "string": {
+    "text": "color_tile%u",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": ".data",
+    "n": 1,
+    "anchor": "xref"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x363fcf0",
+   "kind": "data",
+   "used_by": [
+    "render_probe.cpp:433"
+   ],
+   "rule": null,
+   "reason": "no RIP-relative reference to the .data address"
+  },
+  {
+   "old": "0x3681860",
+   "kind": "data",
+   "used_by": [
+    "render_graph.renderer_pointer_rva",
+    "render_parallel.device_pointer_rva",
+    "parallel_passes.cpp:18"
+   ],
+   "rule": "\"r_buffer_page_size\" (정확, 참조 3개 중 3번째) → 참조 명령 → .pdata 함수 → 참조 뒤 2번째 .data RIP 목표",
+   "string": {
+    "text": "r_buffer_page_size",
+    "match": "exact",
+    "xrefs": 3,
+    "xref_index": 2
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": ".data",
+    "n": 2,
+    "anchor": "xref"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x36ac888",
+   "kind": "data",
+   "used_by": [
+    "render_parallel.task_table_rva",
+    "parallel_passes.cpp:21"
+   ],
+   "rule": "\"ui_hud_widget_tourist_board_t::loading_image_tas...\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 참조 앞 1번째 .data RIP 목표",
+   "string": {
+    "text": "ui_hud_widget_tourist_board_t::loading_image_task_t",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": ".data",
+    "n": -1,
+    "anchor": "xref"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x36ae6d8",
+   "kind": "data",
+   "used_by": [
+    "controller_pointer_rva",
+    "camera_rig.cpp:29",
+    "camera_rig.cpp:144",
+    "camera_rig.cpp:266"
+   ],
+   "rule": "\"hookup_reload\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 참조 앞 1번째 .data RIP 목표",
+   "string": {
+    "text": "hookup_reload",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": ".data",
+    "n": -1,
+    "anchor": "xref"
+   },
+   "old_check": "ok"
+  },
+  {
+   "old": "0x36ae728",
+   "kind": "data",
+   "used_by": [
+    "render_vehicle.traffic_pointer_rva"
+   ],
+   "rule": "\"Dump game was marked as deprecated!\" (정확, 참조 1개 중 1번째) → 참조 명령 → .pdata 함수 → 참조 앞 1번째 .data RIP 목표 -0x10",
+   "string": {
+    "text": "Dump game was marked as deprecated!",
+    "match": "exact",
+    "xrefs": 1,
+    "xref_index": 0
+   },
+   "function": "pdata",
+   "select": {
+    "type": "rip_target",
+    "filter": ".data",
+    "n": -1,
+    "anchor": "xref",
+    "adjust": -16
+   },
+   "old_check": "ok"
+  }
+ ]
+}
