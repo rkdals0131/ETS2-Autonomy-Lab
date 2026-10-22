@@ -5,6 +5,10 @@
 //   explained grey, and a bar across the lane at the first blocked stretch;
 // - /ets2/perception/blocked_m (Float32): distance along the followed lane (provider file)
 //   to the first unexplained obstacle; inf when clear, NaN without LiDAR.
+// The clouds trail GT (2026-10-22 live, 80 km/h behind a lead: traffic stamp minus cloud
+// stamp median 133 ms, p95 517 ms, and the lead's rear returns 2-3 m behind its GT box, all
+// unexplained), so the GT boxes and the truck go back to the clouds' time: traffic along
+// its speed, the truck from its pose history.
 // The LiDAR renders only while its topics have subscribers and the relay's lidar_enabled is
 // on, so without LiDAR this node publishes NaN and costs nothing in the game.
 #include "control/drive_session.hpp"
@@ -23,14 +27,26 @@
 #include <tf2_ros/transform_listener.h>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <cstring>
+#include <deque>
 #include <iostream>
 #include <map>
+#include <numbers>
 
 using namespace std::chrono_literals;
 using Clock=std::chrono::steady_clock;
 
 namespace {
 double yaw_of(const geometry_msgs::msg::Quaternion& q) {return std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z));}
+double seconds(const builtin_interfaces::msg::Time& t) {return t.sec+t.nanosec*1e-9;}
+struct Pose2 {double t,x,y,yaw;};
+// The pose at t, interpolated in the history (the nearest end outside it).
+Pose2 pose_at(const std::deque<Pose2>& history,double t) {
+    if(t<=history.front().t) return history.front();
+    if(t>=history.back().t) return history.back();
+    const auto b=std::upper_bound(history.begin(),history.end(),t,[](double v,const Pose2& p){return v<p.t;});
+    const auto& a=*(b-1);const double u=(t-a.t)/(b->t-a.t);
+    return {t,a.x+u*(b->x-a.x),a.y+u*(b->y-a.y),a.yaw+u*std::remainder(b->yaw-a.yaw,2*std::numbers::pi)};
+}
 }
 
 int main(int argc,char** argv) {
@@ -42,7 +58,7 @@ int main(int argc,char** argv) {
         const auto path_file=node->declare_parameter<std::string>("path_file","");
         tf2_ros::Buffer tf(node->get_clock());tf2_ros::TransformListener listener(tf);
         // The latest cloud of each LiDAR in world coordinates, with its arrival.
-        struct Cloud {std::vector<perception::Point> points;Clock::time_point at;};
+        struct Cloud {std::vector<perception::Point> points;Clock::time_point at;double stamp;};
         std::map<std::string,Cloud> clouds;
         std::vector<rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr> lidar;
         for(const char* name:{"L_F","L_PL","L_PR"})
@@ -65,12 +81,19 @@ int main(int argc,char** argv) {
                         const tf2::Vector3 w=R*tf2::Vector3(x,y,z);
                         cloud.points.push_back({w.x()+o.x,w.y()+o.y,w.z()+o.z});
                     }
-                    cloud.at=Clock::now();
+                    cloud.at=Clock::now();cloud.stamp=seconds(m->header.stamp);
                 }));
         geometry_msgs::msg::PoseStamped::SharedPtr ego,trailer;Clock::time_point ego_time{},trailer_time{},traffic_time{};
         ets2_msgs::msg::TrafficState::SharedPtr traffic;
         double truck_front=5.3,truck_rear=-2.5;
-        auto es=node->create_subscription<geometry_msgs::msg::PoseStamped>("/ets2/ground_truth/ego/pose",rclcpp::QoS(1),[&](geometry_msgs::msg::PoseStamped::SharedPtr m){ego=std::move(m);ego_time=Clock::now();});
+        std::deque<Pose2> ego_history; // the last 2 s of ego poses, by stamp
+        auto es=node->create_subscription<geometry_msgs::msg::PoseStamped>("/ets2/ground_truth/ego/pose",rclcpp::QoS(1),[&](geometry_msgs::msg::PoseStamped::SharedPtr m){
+            const double t=seconds(m->header.stamp);
+            if(!ego_history.empty() && t<=ego_history.back().t) ego_history.clear(); // a reload or a time jump
+            ego_history.push_back({t,m->pose.position.x,m->pose.position.y,yaw_of(m->pose.orientation)});
+            while(ego_history.size()>2 && ego_history.back().t-ego_history.front().t>2) ego_history.pop_front();
+            ego=std::move(m);ego_time=Clock::now();
+        });
         auto trs=node->create_subscription<geometry_msgs::msg::PoseStamped>("/ets2/ground_truth/trailer/pose",rclcpp::QoS(1),[&](geometry_msgs::msg::PoseStamped::SharedPtr m){trailer=std::move(m);trailer_time=Clock::now();});
         auto ts=node->create_subscription<ets2_msgs::msg::TrafficState>("/ets2/ground_truth/traffic",rclcpp::QoS(1),[&](ets2_msgs::msg::TrafficState::SharedPtr m){traffic=std::move(m);traffic_time=Clock::now();});
         auto as=node->create_subscription<ets2_msgs::msg::AssistState>("/ets2/drive/assist",rclcpp::QoS(10),[&](ets2_msgs::msg::AssistState::SharedPtr m) {
@@ -86,19 +109,31 @@ int main(int argc,char** argv) {
             const auto now=Clock::now();
             std_msgs::msg::Float32 blocked;blocked.data=NAN;
             std::vector<perception::Point> points;
-            for(const auto& [name,cloud]:clouds) if(now-cloud.at<=300ms) points.insert(points.end(),cloud.points.begin(),cloud.points.end());
-            if(points.empty() || !ego || now-ego_time>300ms) {blocked_pub->publish(blocked);return;}
-            const auto& p=ego->pose.position;const double yaw=yaw_of(ego->pose.orientation);
+            double first=INFINITY,last=-INFINITY;
+            for(const auto& [name,cloud]:clouds) if(now-cloud.at<=300ms) {
+                points.insert(points.end(),cloud.points.begin(),cloud.points.end());
+                first=std::min(first,cloud.stamp);last=std::max(last,cloud.stamp);
+            }
+            if(points.empty() || !ego || now-ego_time>300ms || ego_history.empty()) {blocked_pub->publish(blocked);return;}
+            // Everything at the clouds' time (their mean; GT boxes lengthened over their spread).
+            const double cloud_t=(first+last)/2,spread=last-first;
+            const auto at=pose_at(ego_history,cloud_t);
+            const struct {double x,y,z;} p{at.x,at.y,ego->pose.position.z};const double yaw=at.yaw;
             // The truck and its trailer (hud_node's estimates: fifth wheel 0.5 m ahead of the drive
             // axle, 13.6 m trailer whose front is 1.6 m ahead of the kingpin).
             std::vector<perception::Box> own{{p.x+(truck_front+truck_rear)/2*std::cos(yaw),p.y+(truck_front+truck_rear)/2*std::sin(yaw),yaw,truck_front-truck_rear,2.55}};
             if(trailer && now-trailer_time<=500ms) {
+                // The trailer's yaw changes slowly; its latest is close enough.
                 const double ty=yaw_of(trailer->pose.orientation),kx=p.x+.5*std::cos(yaw),ky=p.y+.5*std::sin(yaw),centre=1.6-13.6/2;
                 own.push_back({kx+centre*std::cos(ty),ky+centre*std::sin(ty),ty,13.6,2.55});
             }
             std::vector<perception::Box> objects;
-            if(traffic && now-traffic_time<=500ms) for(size_t i=0;i<traffic->id.size();++i)
-                objects.push_back({traffic->x[i],traffic->y[i],traffic->yaw[i],traffic->length_m[i],traffic->width_m[i]});
+            if(traffic && now-traffic_time<=500ms) {
+                const double dt=cloud_t-seconds(traffic->header.stamp);
+                for(size_t i=0;i<traffic->id.size();++i)
+                    objects.push_back(perception::moved({traffic->x[i],traffic->y[i],traffic->yaw[i],traffic->length_m[i],traffic->width_m[i]},
+                                                        i<traffic->speed_mps.size()?traffic->speed_mps[i]:0,dt,spread));
+            }
             if(!path_file.empty() && now>=next_lane) {
                 next_lane=now+1s;
                 try {lane=LanePath(path_file);} catch(const std::exception&) {lane.reset();}
@@ -110,7 +145,7 @@ int main(int argc,char** argv) {
             } else for(double s=0;s<=120;s+=2) path.push_back({p.x+s*std::cos(yaw),p.y+s*std::sin(yaw)});
             const auto r=perception::analyze(points,p.x,p.y,yaw,objects,own,path);
             nav_msgs::msg::OccupancyGrid grid;
-            grid.header.stamp=ego->header.stamp;grid.header.frame_id="world";
+            grid.header.stamp=rclcpp::Time(int64_t(cloud_t*1e9));grid.header.frame_id="world";
             grid.info.resolution=float(r.cell);grid.info.width=uint32_t(r.nx);grid.info.height=uint32_t(r.ny);
             grid.info.origin.position.x=r.origin_x;grid.info.origin.position.y=r.origin_y;grid.info.origin.position.z=p.z;
             grid.info.origin.orientation.z=std::sin(r.yaw/2);grid.info.origin.orientation.w=std::cos(r.yaw/2);

@@ -63,3 +63,18 @@ TEST(Occupancy,OwnTrailerAndRoadsideAreNotOnThePath) {
     auto stray=road();stray.push_back({30,0,1});stray.push_back({50,0,1});
     EXPECT_TRUE(std::isinf(perception::analyze(stray,0,0,0,{},{},straight()).blocked_m));
 }
+
+TEST(Occupancy,GtBoxGoesBackToTheCloudTime) {
+    // 80 km/h lead: the cloud shows it where it was 0.13 s before the GT box (2.9 m back).
+    const double v=80/3.6,dt=-.13;
+    auto pts=road();block(pts,40-2.9,44.5-2.9,-.9,.9,1.5);
+    const Box gt{42.25,0,0,4.5,1.8};
+    EXPECT_NEAR(perception::analyze(pts,0,0,0,{gt},{},straight()).blocked_m,37.1,.5);   // the live false positive
+    const auto r=perception::analyze(pts,0,0,0,{perception::moved(gt,v,dt)},{},straight());
+    EXPECT_TRUE(r.unexplained.empty());
+    EXPECT_TRUE(std::isinf(r.blocked_m));
+    // Clouds 0.1 s apart: the box covers both positions.
+    const auto both=perception::moved(gt,v,dt,.1);
+    EXPECT_NEAR(both.length,4.5+v*.1,1e-9);
+    EXPECT_TRUE(both.contains(42.25-2.9-2.25-1,0) && both.contains(42.25-2.9+2.25+1,0));
+}

@@ -31,6 +31,14 @@ struct Box {
     }
 };
 
+// A GT vehicle at another time: moved dt seconds along its heading at speed (dt < 0: back to
+// when the clouds were taken, which trail GT by about 0.13 s, p95 0.5 s), lengthened by
+// speed * spread to cover clouds taken over spread seconds.
+inline Box moved(Box b,double speed,double dt,double spread=0) {
+    b.x+=speed*dt*std::cos(b.yaw);b.y+=speed*dt*std::sin(b.yaw);b.length+=std::abs(speed)*spread;
+    return b;
+}
+
 struct Params {
     double behind=20,ahead=100,side=20,cell=.5;   // grid extent (m) and cell size
     double tile=2;int ground_tiles=1;              // ground tiles and the window around each
