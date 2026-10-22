@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace ot::loop {
 // Layout of parallel_loop_task_t as 0xC75570 builds it on its stack. The task
@@ -79,10 +80,14 @@ template<class Run> void run_items(Loop& loop,Run&& run) {
     }
 }
 
-// §4.2: frames alternate between serial and parallel recording. Each pass
-// key's body summary is compared with the neighbouring frame of the other mode
-// (cross) and with the frame two back in the same mode (baseline); recording
-// on workers is suspect only when cross differs more often than baseline.
+// §4.2: frames alternate between serial and parallel recording in the pattern
+// serial, serial, parallel, parallel (mode_of). Each pass key's body summary is
+// compared with the frame two back, which used the other mode (cross), and with
+// the frame four back, which used the same mode (baseline); recording on workers
+// is suspect only when cross differs more often than baseline. Both lags are even
+// because the engine renders some passes differently on odd and even frames
+// (vehicle environment maps veh_env_*, mirror draw_geometry: draws 42 vs 127,
+// 2026-10-22); with a one-frame pattern that alone made cross 100% and baseline 0.
 struct Rates {
     uint64_t compared=0;
     std::array<uint64_t,4> differ{};   // by passes::compare level 1-3 (index 0 unused)
@@ -96,17 +101,26 @@ struct Rates {
 class Alternate {
 public:
     struct Difference {uint64_t key;int level;uint64_t frame;passes::Summary now,before;};
-    // mode 0 serial, 1 parallel. Frames must be consecutive integers.
-    void observe(uint64_t key,int mode,uint64_t frame,const passes::Summary& summary) {
+    // Per key: comparisons and structural (level 1-2) differences, cross and baseline.
+    struct KeyRates {uint64_t key,cross,cross_structure,baseline,baseline_structure;};
+    // 0 serial, 1 parallel. Frames must be consecutive integers.
+    static int mode_of(uint64_t frame) noexcept {return static_cast<int>((frame>>1)&1);}
+    void observe(uint64_t key,uint64_t frame,const passes::Summary& summary) {
         auto& history=keys_[key];
-        const int other=1-mode;
-        if(history.frame[other]+1==frame && history.valid[other]) count(cross_,key,frame,summary,history.last[other]);
-        if(history.frame[mode]+2==frame && history.valid[mode]) count(baseline_,key,frame,summary,history.last[mode]);
-        history.last[mode]=summary;history.frame[mode]=frame;history.valid[mode]=true;
+        const auto two=(frame-2)&3,four=frame&3;
+        if(history.valid[two] && history.frame[two]+2==frame) count(cross_,key,frame,summary,history.last[two]);
+        if(history.valid[four] && history.frame[four]+4==frame) count(baseline_,key,frame,summary,history.last[four]);
+        history.last[four]=summary;history.frame[four]=frame;history.valid[four]=true;
     }
     const Rates& cross() const noexcept {return cross_;}
     const Rates& baseline() const noexcept {return baseline_;}
     const std::optional<Difference>& first_cross() const noexcept {return first_cross_;}
+    const std::optional<Difference>& first_structure_cross() const noexcept {return first_structure_cross_;}
+    std::vector<KeyRates> key_rates() const {
+        std::vector<KeyRates> out;
+        for(const auto& [key,h]:keys_) out.push_back({key,h.counts[0],h.counts[1],h.counts[2],h.counts[3]});
+        return out;
+    }
     // Suspect when cross exceeds both twice the baseline and the baseline plus a
     // margin, judged on all levels, on structure alone (levels 1-2) and on token
     // counts alone. In game the content level differs in ~77% of comparisons even
@@ -119,18 +133,24 @@ public:
         return exceeds(cross_.rate(),baseline_.rate(),0.01) || exceeds(cross_.rate(2),baseline_.rate(2),0.01)
             || exceeds(tokens(cross_),tokens(baseline_),0.001);
     }
-    void clear() {keys_.clear();cross_={};baseline_={};first_cross_.reset();}
+    void clear() {keys_.clear();cross_={};baseline_={};first_cross_.reset();first_structure_cross_.reset();}
 private:
-    struct History {passes::Summary last[2];uint64_t frame[2]{};bool valid[2]{};};
+    // counts: cross compared, cross structural, baseline compared, baseline structural.
+    // Slots by frame & 3, so the frames two and four back are both at hand.
+    struct History {passes::Summary last[4];uint64_t frame[4]{};bool valid[4]{};uint64_t counts[4]{};};
     void count(Rates& rates,uint64_t key,uint64_t frame,const passes::Summary& now,const passes::Summary& before) {
-        ++rates.compared;
+        const bool cross=&rates==&cross_;
+        auto& counts=keys_[key].counts;
+        ++rates.compared;++counts[cross?0:2];
         if(const auto level=passes::compare(now,before)) {
             ++rates.differ[level];
-            if(&rates==&cross_ && !first_cross_) first_cross_=Difference{key,level,frame,now,before};
+            if(level<=2) ++counts[cross?1:3];
+            if(cross && !first_cross_) first_cross_=Difference{key,level,frame,now,before};
+            if(cross && level<=2 && !first_structure_cross_) first_structure_cross_=Difference{key,level,frame,now,before};
         }
     }
     std::unordered_map<uint64_t,History> keys_;
     Rates cross_,baseline_;
-    std::optional<Difference> first_cross_;
+    std::optional<Difference> first_cross_,first_structure_cross_;
 };
 }

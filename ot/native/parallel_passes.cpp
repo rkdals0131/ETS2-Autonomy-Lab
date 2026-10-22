@@ -147,7 +147,12 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate,const Options& opti
     // Report every foreign patch; worker modes (M3b+) refuse them (docs/28 §5).
     // Deferral stays on the main thread in the original order, so it runs
     // beside patches such as snowymoon's (2,200 frames, 2026-10-15).
-    auto scanned=scan_text(gate);
+    // Our own two hooks count as ours: switching serial -> parallel scans while
+    // they are enabled (2026-10-22 refused free order as "foreign" otherwise).
+    auto inputs=gate;
+    inputs.ours.push_back({execute_hook_.target_address(),execute_hook_.target_address()+execute_hook_.original_bytes().size()});
+    inputs.ours.push_back({join_hook_.target_address(),join_hook_.target_address()+join_hook_.original_bytes().size()});
+    auto scanned=scan_text(inputs);
     const bool allowed=scanned.value("workers_allowed",false);
     if(workers && !allowed) {
         // docs/28 §5: one pass at a time (ticket) may run beside foreign patches
@@ -355,7 +360,7 @@ void ParallelPasses::latch() noexcept {
     else {
         ++frame_index_;
         frame_options_=options_;
-        if(mode==Mode::alternate) {summary_mode_=static_cast<int>(frame_index_&1);mode=summary_mode_?Mode::parallel:Mode::serial;}
+        if(mode==Mode::alternate) {summary_mode_=loop::Alternate::mode_of(frame_index_);mode=summary_mode_?Mode::parallel:Mode::serial;}
     }
     occurrences_.clear();
     frame_mode_=mode;latched_=true;latch_qpc_=qpc_now();
@@ -426,7 +431,7 @@ void ParallelPasses::record(const Deferred& item,uint64_t& frame_dwords,uint64_t
     entry.last_raw=item.raw;
     ++entry.passes;entry.ticks+=ticks;entry.max_ticks=std::max(entry.max_ticks,ticks);entry.dwords+=dwords;
     ++thread_passes_[GetCurrentThreadId()];
-    if(observed) alternate_.observe(item.key,summary_mode,frame,summary);
+    if(observed) alternate_.observe(item.key,frame,summary);
 }
 struct ParallelPasses::ParallelFrame {
     ParallelPasses* self;
@@ -495,7 +500,7 @@ void ParallelPasses::join() noexcept {
         overflow_off=overflow_frames_>=overflow_limit_frames;
     }
     if(too_long) turn_off("join exceeded 50 ms");
-    if(suspect) turn_off("alternate: parallel frames differ from serial frames more than serial frames from each other");
+    if(suspect && !options_.report_only) turn_off("alternate: parallel frames differ from serial frames more than serial frames from each other");
     if(overflow_off) turn_off("deferral queue overflowed for 100 frames");
 }
 json ParallelPasses::status() {
@@ -513,14 +518,28 @@ json ParallelPasses::status() {
         {"join_ms",c.parallel_join_ticks*1000.0/freq},{"passes_by_thread",std::move(threads)}};
     const auto rates=[](const loop::Rates& r){return json{{"compared",r.compared},{"rate",r.rate()},{"structure_rate",r.rate(2)},
         {"level1_size",r.differ[1]},{"level2_tokens",r.differ[2]},{"level3_content",r.differ[3]}};};
-    json first=nullptr;
-    if(const auto& d=alternate_.first_cross()) {
-        const auto found=keys_.find(d->key);
-        first={{"name",found!=keys_.end()?found->second.name:""},{"space",found!=keys_.end()?found->second.space:""},{"level",d->level},
-            {"frame",d->frame},{"dwords",{d->now.dwords,d->before.dwords}},{"draws",{d->now.draws,d->before.draws}},
-            {"stop_token",{d->now.stop_token,d->before.stop_token}}};
+    const auto named=[&](uint64_t key,json value) {
+        const auto found=keys_.find(key);
+        value["name"]=found!=keys_.end()?found->second.name:"";value["space"]=found!=keys_.end()?found->second.space:"";
+        return value;
+    };
+    const auto difference=[&](const std::optional<loop::Alternate::Difference>& d)->json {
+        if(!d) return nullptr;
+        return named(d->key,{{"level",d->level},{"frame",d->frame},{"dwords",{d->now.dwords,d->before.dwords}},
+            {"draws",{d->now.draws,d->before.draws}},{"stop_token",{d->now.stop_token,d->before.stop_token}}});
+    };
+    // Keys with the most structural cross differences, to tell a worker effect
+    // (baseline 0) from a scene that changes every frame (baseline alike).
+    auto key_rates=alternate_.key_rates();
+    std::sort(key_rates.begin(),key_rates.end(),[](const auto& a,const auto& b){return a.cross_structure>b.cross_structure;});
+    json structure_keys=json::array();
+    for(size_t i=0;i<key_rates.size() && i<15 && key_rates[i].cross_structure;++i) {
+        const auto& k=key_rates[i];
+        structure_keys.push_back(named(k.key,{{"cross",{k.cross_structure,k.cross}},{"baseline",{k.baseline_structure,k.baseline}}}));
     }
-    result["alternate"]={{"cross",rates(alternate_.cross())},{"baseline",rates(alternate_.baseline())},{"suspect",alternate_.suspect()},{"first_cross_difference",first}};
+    result["alternate"]={{"cross",rates(alternate_.cross())},{"baseline",rates(alternate_.baseline())},{"suspect",alternate_.suspect()},
+        {"report_only",options_.report_only},{"first_cross_difference",difference(alternate_.first_cross())},
+        {"first_structure_difference",difference(alternate_.first_structure_cross())},{"structure_keys",std::move(structure_keys)}};
     result["passes"]={{"deferred",c.deferred},{"marker_passthrough",c.marker},{"queue_overflow_or_bad_storage",c.overflow},
         {"orphaned_frames",c.orphaned},{"splice_used",c.splice_used},{"splice_fallback",c.splice_fallback},
         {"storage_records_at_deferral",{{"0",c.chunks[0]},{"1",c.chunks[1]},{"2",c.chunks[2]},{"3+",c.chunks[3]}}},

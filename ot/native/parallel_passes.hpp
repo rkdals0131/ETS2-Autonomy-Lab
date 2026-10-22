@@ -22,6 +22,7 @@ public:
         bool ticket=true;          // false: free order under one lock (M3b-2)
         unsigned executors=0;      // 0: worker count + 1, as the engine's own loops
         bool accept_foreign=false; // ticket only: run beside foreign code patches
+        bool report_only=false;    // alternate: report a suspect verdict instead of turning off
     };
     // docs/28 §5 environment gate inputs: hooks of this DLL (absolute ranges),
     // patches the user accepted (RVA, size) and the recording closure (RVAs).

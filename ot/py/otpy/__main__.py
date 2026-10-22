@@ -77,6 +77,8 @@ def main():
     passes.add_argument("--executors", type=int, default=0, help="Executors including the main thread; 0 = engine workers + 1")
     passes.add_argument("--accept-foreign-hooks", action="store_true",
                         help="order=ticket only: run although foreign code patches are in the recording path")
+    passes.add_argument("--report-only", action="store_true",
+                        help="alternate: keep running when cross differs from baseline; status lists the differing keys")
     rig = sub.add_parser("camera_rig", help="Place cameras in slots 0-8; +X right, +Y up, -Z forward")
     rig.add_argument("mode", choices=("status", "apply", "off"), default="status", nargs="?")
     rig.add_argument("--config", help="JSON containing views with slot, basis, position, quaternion_wxyz and FOVs")
@@ -311,7 +313,11 @@ def main():
                 if not args.order:
                     parser.error("parallel and alternate require --order ticket|free")
                 options.update(order=args.order, executors=args.executors, accept_foreign_hooks=args.accept_foreign_hooks)
-            elif args.order or args.executors or args.accept_foreign_hooks:
+                if args.report_only:
+                    if args.mode != "alternate":
+                        parser.error("--report-only applies to alternate")
+                    options["report_only"] = True
+            elif args.order or args.executors or args.accept_foreign_hooks or args.report_only:
                 parser.error("--order, --executors and --accept-foreign-hooks apply to parallel and alternate")
             result = client.request("parallel_passes", **options)
         elif args.command == "camera_rig":

@@ -207,37 +207,52 @@ void alternate() {
     const auto summary=[](uint64_t dwords,uint64_t draws){Summary s;s.dwords=s.parsed=dwords;s.draws=draws;s.histogram[1]=static_cast<uint32_t>(draws);return s;};
     ot::loop::Alternate same;
     for(uint64_t frame=1;frame<=200;++frame) {
-        const int mode=static_cast<int>(frame&1);
-        same.observe(1,mode,frame,summary(100,5));
-        same.observe(2,mode,frame,summary(40,2));
+        const int mode=ot::loop::Alternate::mode_of(frame);
+        same.observe(1,frame,summary(100,5));
+        same.observe(2,frame,summary(40,2));
     }
     check(same.cross().compared>0 && same.cross().rate()==0 && same.baseline().rate()==0 && !same.suspect(100),
           "identical summaries give no cross or baseline difference");
     ot::loop::Alternate planted;
     for(uint64_t frame=1;frame<=200;++frame) {
-        const int mode=static_cast<int>(frame&1);
-        planted.observe(1,mode,frame,summary(100,5));
-        planted.observe(2,mode,frame,mode?summary(40,3):summary(40,2));   // parallel frames record one more draw
+        const int mode=ot::loop::Alternate::mode_of(frame);
+        planted.observe(1,frame,summary(100,5));
+        planted.observe(2,frame,mode?summary(40,3):summary(40,2));   // parallel frames record one more draw
     }
     check(planted.cross().rate()>0.4 && planted.baseline().rate()==0 && planted.suspect(100),
           "a difference present only in parallel frames is flagged against the baseline");
     check(planted.first_cross() && planted.first_cross()->key==2,"the first cross difference names the key");
+    {
+        const auto rates=planted.key_rates();
+        const auto two=std::find_if(rates.begin(),rates.end(),[](const auto& k){return k.key==2;});
+        const auto one=std::find_if(rates.begin(),rates.end(),[](const auto& k){return k.key==1;});
+        check(two!=rates.end() && two->cross_structure==two->cross && two->cross>0 && two->baseline_structure==0
+              && one!=rates.end() && one->cross_structure==0 && planted.first_structure_cross()->key==2,
+              "per-key rates single out the key that differs only across modes");
+    }
     ot::loop::Alternate missing;
     for(uint64_t frame=1;frame<=200;++frame) {
-        const int mode=static_cast<int>(frame&1);
-        missing.observe(1,mode,frame,summary(100,5));
-        if(!mode) missing.observe(2,mode,frame,summary(40,2));                  // key 2 never recorded in parallel frames
+        const int mode=ot::loop::Alternate::mode_of(frame);
+        missing.observe(1,frame,summary(100,5));
+        if(!mode) missing.observe(2,frame,summary(40,2));                  // key 2 never recorded in parallel frames
     }
     check(missing.cross().compared<same.cross().compared,"a key absent from parallel frames lowers the cross comparisons");
     ot::loop::Alternate noisy;                                                  // scene changes every frame: both rates high, not suspect
-    for(uint64_t frame=1;frame<=300;++frame) noisy.observe(1,static_cast<int>(frame&1),frame,summary(100+frame,5));
+    for(uint64_t frame=1;frame<=300;++frame) noisy.observe(1,frame,summary(100+frame,5));
     check(noisy.baseline().rate()==1 && noisy.cross().rate()==1 && !noisy.suspect(100),"scene change alone is not suspect");
+    ot::loop::Alternate parity;                                                 // a pass that differs on odd and even frames in every mode
+    for(uint64_t frame=1;frame<=400;++frame) {
+        parity.observe(1,frame,(frame&1)?summary(1282,127):summary(432,42));
+        parity.observe(2,frame,summary(40,2));
+    }
+    check(parity.cross().compared>0 && parity.cross().rate()==0 && parity.baseline().rate()==0 && !parity.suspect(100),
+          "an odd/even frame pattern of the engine is not taken for a worker difference");
     ot::loop::Alternate hidden;                                                 // content differs every frame, as in game
     for(uint64_t frame=1;frame<=2000;++frame) {
-        const int mode=static_cast<int>(frame&1);
+        const int mode=ot::loop::Alternate::mode_of(frame);
         auto s=summary(100,5);s.masked_hash=frame;
         if(mode) s.histogram[2]=1;                                              // parallel frames count one extra token
-        hidden.observe(1,mode,frame,s);
+        hidden.observe(1,frame,s);
     }
     check(hidden.baseline().rate()==1 && hidden.cross().rate()==1 && hidden.cross().rate(2)==1 && hidden.baseline().rate(2)==0
           && hidden.suspect(100),"a token difference under per-frame content noise is still flagged");
