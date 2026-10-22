@@ -37,7 +37,7 @@ public:
     static void count_window() noexcept;
     json status() const;
     void clear_counters() noexcept;
-    static constexpr size_t hook_count=9;
+    static constexpr size_t hook_count=10;
 private:
     std::array<safetyhook::InlineHook,hook_count> hooks_;
     bool installed_=false;

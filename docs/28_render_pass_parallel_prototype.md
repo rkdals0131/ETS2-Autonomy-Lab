@@ -461,3 +461,10 @@ C를 택합니다. 합류점이 업로드 flush(2.1의 8) 앞이어야 하는 �
 - 게임 없는 시험: 실행자 5개 동시 실행 루프("concurrent loop runs items at the same time"), 아레나 다섯 가지(정렬 bump, 넘침 시 같은 태그 새 청크, 헤더가 새 태그를 보여도 기록한 태그가 다르면 새 청크, 커서가 있는 청크는 16 올림부터, 2 MB 초과는 null).
 
 남은 위험(△): §2.6 표 밖의 공유 쓰기(P4 composer는 `0x2E5040` 통째 락 안이라 덮임, 다른 타입 1 콜백·`0x2DEC80`은 미확인). 교대 비교(§4.2)와 크래시가 드러냅니다. 첫 게임 순서: 정차에서 `alternate --order concurrent --report-only` 3분 → `parallel --order concurrent` 10분(합류 시간, `lock_hold_ms`, 아레나 실패 0) → 주행 ABAB `serial`/`concurrent` 2쌍.
+
+### 11.7 M3c 첫 시도 (2026-10-22 19:07, 프록시 없음)
+
+- core 0.52.0: 켤 때 거절 "Render hook signature is ambiguous". 16바이트 서명 넷(`0x2E6B60` 198곳, `0x2AE6B0` 1,655곳, `0x2E50B0` 11곳, `0x2B9520` 2곳)이 `.text`에서 유일하지 않았습니다. 훅은 하나도 걸리지 않음. 0.52.1에서 모두 40바이트(유일 ✔).
+- core 0.52.1: `alternate --order concurrent --report-only`를 켠 지 약 2초 만에 게임 종료. game.log `array_t<render_queue_set_data_t::queue_data_t>::element_at: Index outside array boundaries: 2 >= 2`, `game.crash.txt` 스택은 worker 스레드의 `parallel_body` → `record` → `run_spliced` → `0x226C4E`(패스 실행) → 장면 콜백 `0x1475FE5`(1.61.1.1 `0x1473E60` 안) → assert. 원본 `research/live/2026-10-22-m3b/m3c-crash-1/`.
+- 원인(✔ 디컴파일 `0x1473E60`·`0x160C990`): 장면 콜백은 먼저 `0x160C990(queue_set)`을 부르고 그 큐 묶음의 `queue_data` 배열(`+0x220` 데이터, `+0x228` 개수, 0x58 간격)을 큐 번호로 읽습니다. `0x160C990`은 개수가 0일 때만 배열을 **개수를 하나씩 늘리며** 채우는 지연 초기화라, 같은 큐 묶음을 쓰는 다른 패스(메인 deferred의 `scene defattr`·`defpost`·`forward` 등, 큐 번호만 다름)가 동시에 들어오면 만드는 중인 배열을 읽습니다. 호출자는 `0x1473E60`·`0x151BB90`·`0x160EB80`·`0x33E0F0`.
+- 대책(core 0.52.2): `0x160C990`(1.61.1.9 `0x160E7C0`, rebase "same")을 풀 락에 넣었습니다. 늦게 온 스레드는 락에서 기다렸다가 개수 ≠ 0을 보고 바로 돌아갑니다. §2.6 표에 없던 공유 쓰기의 첫 사례이며, §3.5 7의 "다른 타입 1 콜백이 자기 패스 밖에 쓰는 곳"의 답 하나입니다.
