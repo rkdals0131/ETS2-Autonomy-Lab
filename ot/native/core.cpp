@@ -649,8 +649,9 @@ json Runtime::command(const json& request) {
     if(cmd=="proxy_sensor_coexistence") {
         // Hypothesis from static analysis, off by default (research/snowymoon/sensor_coexistence.md).
         // Needs render_probe observe or overlay mode; the pre-checks refuse and say why in the status.
+        // Like parallel_passes, independent of the bridge lease: the launcher's relay holds the
+        // lease while the sensors run. Tier 1 is still required; lease end and F11 turn it off.
         std::lock_guard lock(control_);
-        if(request.contains("enabled")) require_owner();
         return render_probe_->proxy_coexistence(request,tier_>=1 && gate_ok_ && allow_tier1_ && allow_render_probe_ && allow_proxy_coexistence_);
     }
     if(cmd=="parallel_passes") {
