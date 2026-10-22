@@ -20,7 +20,7 @@
       "hfov_deg": 30,
       "vfov_deg": 17.142372262265418,
       "base_resolution": [
-        1280,
+        1288,
         720
       ],
       "source_slot": 0,
@@ -45,7 +45,7 @@
       "hfov_deg": 120,
       "vfov_deg": 88.50715548032275,
       "base_resolution": [
-        1280,
+        1288,
         720
       ],
       "source_slot": 1,
@@ -70,7 +70,7 @@
       "hfov_deg": 100,
       "vfov_deg": 67.67274797076357,
       "base_resolution": [
-        960,
+        968,
         540
       ],
       "source_slot": 2,
@@ -95,7 +95,7 @@
       "hfov_deg": 100,
       "vfov_deg": 67.67274797076357,
       "base_resolution": [
-        960,
+        968,
         540
       ],
       "source_slot": 5,
