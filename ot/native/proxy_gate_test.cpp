@@ -149,8 +149,8 @@ void trace_reads_only() {
     const auto changed=image.memory;
     gate.bind(Owner::main,0,true); // frame change: a row
     gate.bind(Owner::main,0,true); // nothing changed: no row
-    image.set<int32_t>(L::ring_cursor,0);gate.bind(Owner::main,0,true); // cursor moved: a row
     CHECK(image.memory==changed);CHECK(!gate.in_sensor());
+    image.set<int32_t>(L::ring_cursor,0);gate.bind(Owner::main,0,true); // cursor moved: a row
     std::vector<Gate::TraceRow> rows(Gate::trace_capacity);
     rows.resize(gate.trace_rows(rows.data(),rows.size()));
     CHECK(rows.size()==4);
