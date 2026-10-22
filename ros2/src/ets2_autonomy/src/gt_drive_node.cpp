@@ -17,6 +17,7 @@
 #include "control/turn_signal.hpp"
 #include "control/lane_merge.hpp"
 #include "control/curve_speed.hpp"
+#include "control/disengage_log.hpp"
 #include <ets2_msgs/msg/assist_state.hpp>
 #include <ets2_msgs/msg/actuation_state.hpp>
 #include <ets2_msgs/msg/powertrain_state.hpp>
@@ -41,6 +42,9 @@ int main(int argc,char** argv) {
     const auto stopped=[&]{return stop->requested();};
     auto node=std::make_shared<rclcpp::Node>("ets2_drive_speed");
     const auto initial=declare_driving_parameters(*node);
+    // Every session end, with the reason and the last 10 s of the loop (disengage_log.hpp);
+    // empty: drive.log's summary line only.
+    DisengageLog events(node->declare_parameter<std::string>("event_log",""));
     std::atomic<std::shared_ptr<const DrivingParameters>> configuration{std::make_shared<const DrivingParameters>(initial)};
     auto parameters=node->add_on_set_parameters_callback([](const auto& values) {
         return check_driving_parameter_changes(values);
@@ -220,8 +224,11 @@ int main(int argc,char** argv) {
     // set speed if the game runs again within 3 s.
     enum class End {Stopped,Released,Toggle,Reengage,Paused};
     double resume_speed=0; // the set speed of the last session, for a resume after a pause
+    // The reason a session ended (DisengageLog's codes) and its detail.
+    std::string end_reason,end_detail;
+    const auto ending=[&](End end,const char* reason,std::string detail={}) {end_reason=reason;end_detail=std::move(detail);return end;};
     const auto session=[&](double set_speed)->End {
-        taken=0;
+        taken=0;events.start(set_speed);end_reason="error";end_detail.clear();
         if(!axes()) throw std::runtime_error("Enable ACC or LCC explicitly before starting");
         // Cruise mode: the loader also refuses to arm while the driver's LB+RT is still read as
         // throttle activity (LB freezes the throttle value at 0, so the node cannot see it);
@@ -301,25 +308,25 @@ int main(int argc,char** argv) {
         for(auto next=Clock::now();!stopped() && rclcpp::ok();) {
             rclcpp::spin_some(node);const auto now=Clock::now();
             if(!drive->armed || drive->owner!=owner || drive->epoch!=epoch) {
-                if(drive->reason=="paused") {std::cout<<"Released by a game pause"<<std::endl;epoch=0;return End::Paused;}
-                if(drive->reason!="manual") throw std::runtime_error("Driving released: "+drive->reason);
-                std::cout<<"The driver took over; control released"<<std::endl;epoch=0;return End::Released;
+                if(drive->reason=="paused") {std::cout<<"Released by a game pause"<<std::endl;epoch=0;return ending(End::Paused,"game_paused","relay");}
+                if(drive->reason!="manual") {end_reason="relay_release";throw std::runtime_error("Driving released: "+drive->reason);}
+                std::cout<<"The driver took over; control released"<<std::endl;epoch=0;return ending(End::Released,"driver_takeover");
             }
             // Loader 0.44+: the driver's brake revokes the pedals after a command that held them.
             // It ends LCC too; the cruise control button engages both again.
             if(pedal_sequence && drive->sequence>=pedal_sequence && !(drive->axes&2) && !(taken&2)) {
-                taken|=2;std::cout<<"The driver's brake: ACC and LCC off"<<std::endl;return End::Released;
+                taken|=2;std::cout<<"The driver's brake: ACC and LCC off"<<std::endl;return ending(End::Released,"driver_brake");
             }
             const auto settings=configuration.load();
             auto enabled_axes=axes();
-            if(!enabled_axes) {std::cout<<"ACC and LCC disabled; releasing control"<<std::endl;return End::Released;}
+            if(!enabled_axes) {std::cout<<"ACC and LCC disabled; releasing control"<<std::endl;return ending(End::Released,"axes_disabled");}
             const bool acc=enabled_axes&2;bool lcc=enabled_axes&1;
             if(const auto cruise=cruise_speed();cruise_engage && !std::isnan(cruise)) {
                 if(cruise<=0) {
                     cruise_seen_off=true;
-                    if(cancel_pending) {cancel_pending=false;if(toggle_off) {std::cout<<"Cruise control button: off"<<std::endl;return End::Toggle;}}
+                    if(cancel_pending) {cancel_pending=false;if(toggle_off) {std::cout<<"Cruise control button: off"<<std::endl;return ending(End::Toggle,"cruise_button_off");}}
                 } else if(!cancel_pending && cruise_seen_off) {
-                    if(!acc) {std::cout<<"Cruise control button: ACC again at "<<cruise*3.6<<" km/h"<<std::endl;return End::Reengage;}
+                    if(!acc) {std::cout<<"Cruise control button: ACC again at "<<cruise*3.6<<" km/h"<<std::endl;return ending(End::Reengage,"cruise_button_reengage");}
                     cancel_pending=toggle_off=true;cancel_until=now+3s;cruise_seen_off=false;
                 }
                 if(cancel_pending && cruise>0) {
@@ -336,7 +343,7 @@ int main(int argc,char** argv) {
                 steering_seen=now;
                 if(lcc) driver_steering_until=now+500ms;
                 if(now-steering_since>=std::chrono::duration<double>(settings->steering_takeover_s)) {
-                    std::cout<<"The driver steered for "<<settings->steering_takeover_s<<" s: ACC and LCC off"<<std::endl;return End::Released;
+                    std::cout<<"The driver steered for "<<settings->steering_takeover_s<<" s: ACC and LCC off"<<std::endl;return ending(End::Released,"driver_steering");
                 }
             }
             const bool driver_steering=lcc && now<driver_steering_until;
@@ -344,7 +351,7 @@ int main(int argc,char** argv) {
             // A game hitch stops the state for a moment: up to 1 s the last command is sent again
             // (the core's 200 ms command window stays open) and nothing is computed on old state;
             // longer is a lost game. A paused game ends the session as a pause.
-            if(vehicle->paused) {std::cout<<"The game paused"<<std::endl;return End::Paused;}
+            if(vehicle->paused) {std::cout<<"The game paused"<<std::endl;return ending(End::Paused,"game_paused");}
             if(now-drive_time>1s || now-vehicle_time>1s || !std::isfinite(vehicle->speed_mps))
                 throw std::runtime_error("Current game state is unavailable for over 1 s");
             if(now-drive_time>200ms || now-vehicle_time>200ms) {
@@ -546,7 +553,7 @@ int main(int argc,char** argv) {
             }
             if(lane) {
                 const bool lane_end_hold=mpc && acc && lead_id==lane_end_id && acc_mpc.output().mode==AccMpc::Hold;
-                if(steering && (lane_end_hold || (remaining<=1 && (!acc || (!mpc && std::abs(vehicle->speed_mps)<0.1))))) {std::cout<<"Lane reference ended; releasing control"<<std::endl;return End::Released;}
+                if(steering && (lane_end_hold || (remaining<=1 && (!acc || (!mpc && std::abs(vehicle->speed_mps)<0.1))))) {std::cout<<"Lane reference ended; releasing control"<<std::endl;return ending(End::Released,"lane_end",lane_end_hold?"stopped at the lane end":"lane end");}
             }
             const auto lead=leads.update(lead_id,lead_gap,lead_speed,std::chrono::duration<double>(now-started).count(),{});
             const auto error=speed_target-vehicle->speed_mps;
@@ -669,6 +676,19 @@ int main(int argc,char** argv) {
                 }
                 lane_path->publish(path);
             }
+            {
+                DisengageSample e;
+                e.t=std::chrono::duration<double>(now-started).count();e.speed=vehicle->speed_mps;e.set_speed=set_speed;e.target_speed=mpc?cruise_target:speed_target;
+                if(mpc) {e.accel_target=acc_mpc.output().a_des_mps2;e.acc_mode=acc_mpc.output().mode;}
+                e.throttle=command.throttle;e.brake=command.brake;e.steering=command.steering;e.steering_applied=drive->steering_applied;
+                e.driver_throttle=drive->throttle_manual;e.driver_brake=drive->brake_manual;e.driver_steering=drive->steering_manual;
+                e.lcc=int(lcc_state);e.lane_change=changing;
+                if(lane) {e.lane_offset=goal.offset;e.heading_error=goal.heading_error;e.lane_remaining=remaining;}
+                if(lead.valid) {e.lead_gap=lead.gap_m;e.lead_speed=lead.speed_mps;}
+                e.cruise=cruise_speed();e.axes=drive->axes;
+                e.state_age_ms=std::chrono::duration<double,std::milli>(now-std::min(drive_time,vehicle_time)).count();
+                events.sample(e);
+            }
             if(now>=report) {
                 std::cout<<"speed="<<vehicle->speed_mps<<" target="<<speed_target<<" path_error="<<path_error<<" path_offset="<<path_offset<<" remaining="<<remaining<<" lead_gap="<<lead_gap<<" lead_accel="<<lead.accel_mps2
                     <<" steering_target="<<steering_target<<" steering_applied="<<drive->steering_applied<<" steering_input="<<command.steering<<" throttle="<<command.throttle<<" brake="<<command.brake
@@ -688,7 +708,20 @@ int main(int argc,char** argv) {
             if(next<Clock::now()) next=Clock::now(); // overrun: restart the schedule
             std::this_thread::sleep_until(next);
         }
-        return End::Stopped;
+        return ending(End::Stopped,"node_stopped");
+    };
+    // A session that ended (or failed to arm): the event file and drive.log. At the end: the
+    // relay's last drive state and the ages of the game state and GT.
+    const auto log_end=[&](const char* failure) {
+        nlohmann::json at_end;
+        if(drive) at_end["drive"]={{"armed",drive->armed},{"reason",drive->reason},{"axes",drive->axes},{"throttle_manual",drive->throttle_manual},
+                                   {"brake_manual",drive->brake_manual},{"steering_manual",drive->steering_manual},{"available",drive->available}};
+        if(vehicle) at_end["paused"]=bool(vehicle->paused);
+        const auto now=Clock::now();
+        const auto age=[&](Clock::time_point t) {return std::round(std::chrono::duration<double,std::milli>(now-t).count());};
+        at_end["drive_age_ms"]=age(drive_time);at_end["vehicle_age_ms"]=age(vehicle_time);
+        at_end["pose_age_ms"]=age(pose_time);at_end["traffic_age_ms"]=age(traffic_time);
+        std::cout<<events.write(end_reason,failure?std::string(failure):end_detail,at_end)<<std::endl;
     };
     // Outside a session the assistance is off: AssistState says so at once and every 0.5 s
     // after (Foxglove's indicators and the hud node read the latest message; without it the
@@ -723,7 +756,7 @@ int main(int argc,char** argv) {
         if(!cruise_engage) {
             // The loader refuses to arm an axis the driver is using (its reason then reads only "disabled").
             if(driver_input()) throw std::runtime_error("Driver input on a requested axis; let go of the pedals and stick, then start again");
-            session(0);
+            try {session(0);log_end(nullptr);} catch(const std::exception& error) {log_end(error.what());throw;}
         } else {
             if(!(axes()&2)) throw std::runtime_error("Cruise engage needs ACC enabled");
             std::cout<<"Standby: the game's cruise control button engages"<<std::endl;
@@ -742,7 +775,7 @@ int main(int argc,char** argv) {
                     std::cout<<"The game runs again: engaging at "<<resume_speed*3.6<<" km/h"<<std::endl;
                     taken=0;std::tie(lane,lane_side)=find_lane();
                     End end=End::Released;
-                    try {end=session(resume_speed);} catch(const std::exception& error) {std::cerr<<error.what()<<std::endl;}
+                    try {end=session(resume_speed);log_end(nullptr);} catch(const std::exception& error) {std::cerr<<error.what()<<std::endl;log_end(error.what());}
                     release();taken=0;
                     if(end==End::Stopped) break;
                     if(end==End::Paused) {resume_until=Clock::now()+3s;continue;}
@@ -766,7 +799,7 @@ int main(int argc,char** argv) {
                 if(vehicle->paused) {wait_off=true;continue;}
                 taken=0;std::tie(lane,lane_side)=find_lane();
                 End end=End::Released;
-                try {end=session(cruise_speed());} catch(const std::exception& error) {std::cerr<<error.what()<<std::endl;}
+                try {end=session(cruise_speed());log_end(nullptr);} catch(const std::exception& error) {std::cerr<<error.what()<<std::endl;log_end(error.what());}
                 release();taken=0;
                 if(end==End::Stopped) break;
                 if(end==End::Paused) {resume_until=Clock::now()+3s;continue;}

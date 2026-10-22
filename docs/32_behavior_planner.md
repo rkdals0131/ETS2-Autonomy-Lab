@@ -68,6 +68,7 @@ Control: drive_speed (50 Hz) ACC·LCC MPC
 - control node는 끝난 자식을 tick이 끝나기 전에 idle로 되돌립니다. 그래서 planner는 상태 변화 콜백(`StatusChangeLogger`)으로 tick 중의 값을 잡습니다.
 - Foxglove 패널은 [apps/foxglove/behavior-board](../apps/foxglove/behavior-board/README.md)입니다. 활성 경로를 녹색으로 그립니다.
 - 런처가 주행 보조와 함께 planner를 띄웁니다(로그 `planner.log`, 판단이 바뀔 때마다 한 줄).
+- `AssistEngaged`가 꺼진 이유는 `drive_speed`가 실행 로그 폴더의 `disengage.jsonl`에 직전 10초와 함께 남깁니다([apps/launcher/README.md](../apps/launcher/README.md) "실행 로그").
 
 ## 검증
 

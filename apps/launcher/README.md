@@ -21,6 +21,10 @@ ACC·LCC 선택 체크는 없앴습니다. 시험용으로 LCC만 끄려면 `ros
 
 시작할 때마다 `bridge/recordings/logs/<YYYYMMDD-HHMMSS>/`를 만들고 자식 출력을 `<source>.log`(`relay`, `foxglove`, `follow`, `drive`, `hud`, `planner`, `occupancy`, `param`)에 줄마다 시각(ms)을 붙여 남깁니다. `drive.log`에는 `drive_speed`의 1 Hz 상태 줄이 모두 남고, `relay.log`의 1 Hz 상태 JSON은 5초에 한 줄만 남깁니다. 런처 자체의 알림과 오류는 `launcher.log`에 남습니다. 창의 로그 칸은 사건만 보여 주며 1 Hz 상태 줄과 provider 진행 줄은 파일에만 있습니다. 기록기 출력은 bag 폴더의 `recorder.log`에 따로 남습니다.
 
+어시스트가 꺼질 때마다(운전자 브레이크·조향·인계, 크루즈 버튼, 차로 끝, 게임 일시정지, 상태·GT 끊김 같은 오류, 켜지다 실패한 경우 포함) `drive_speed`가 같은 폴더의 `disengage.jsonl`에 한 줄을 씁니다. bag을 따지 않아도 남습니다.
+- 내용: 이유 코드(`reason`: `driver_takeover`, `driver_brake`, `driver_steering`, `cruise_button_off`, `cruise_button_reengage`, `axes_disabled`, `lane_end`, `game_paused`, `relay_release`, `node_stopped`, `error`)와 `detail`(오류 문구 등), 켜져 있던 시간, 설정 속도, 끝난 순간의 릴레이 drive 상태와 게임 상태·GT 나이(`at_end`), 직전 10초의 0.1초 표본(`history`: 속도·목표, 가감속 목표, 명령과 적용 조향, 운전자 페달·조향, LCC 상태, 차로 오프셋, 앞차 거리, 게임 크루즈 속도, 축, 상태 나이)입니다.
+- 같은 때 `drive.log`와 창의 로그 칸에 `Disengaged: <이유> after N s at V km/h; last 2 s: driver throttle/brake/steering …` 요약 한 줄이 나옵니다.
+
 ## 종료
 
 자식 종료는 모두 정상 경로를 먼저 씁니다. 릴레이와 GT 노드는 이름 있는 stop event(`--stop-event`)를 기다리고, 기록기는 숨긴 자기 콘솔에서 실행돼 CTRL_C로 MCAP을 마무리합니다. Foxglove 서버와 provider는 Job 종료로 끝납니다. 창을 닫으면 이번 실행의 프로세스를 모두 종료합니다.

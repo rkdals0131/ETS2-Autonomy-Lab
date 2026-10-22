@@ -309,7 +309,9 @@ class Controller:
         self.drive_stop_event = StopEvent("drive")
         self.drive = self.spawn(["ros2", "run", "ets2_autonomy", "drive_speed", "--stop-event", self.drive_stop_event.name,
                                  "--ros-args", "-p", "arm:=true", "-p", "engage:=cruise", "-p", "path_file:=" + str(output),
-                                 "-p", "acc_enabled:=true", "-p", "lcc_enabled:=true"], "drive")
+                                 "-p", "acc_enabled:=true", "-p", "lcc_enabled:=true",
+                                 # Why each engagement ended, with the last 10 s, without a recording.
+                                 "-p", "event_log:=" + str(self.session_log.directory / "disengage.jsonl")], "drive")
         # HUD marks from the assistance state, apart from the control loop (ends with the job).
         self.hud = self.spawn(["ros2", "run", "ets2_autonomy", "hud", "--ros-args", "-p", "path_file:=" + str(output)], "hud")
         # Behavior tree and lane change state machine in shadow mode: it shows what it would do
