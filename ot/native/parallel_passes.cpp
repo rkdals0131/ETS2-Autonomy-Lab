@@ -101,7 +101,8 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate,const Options& opti
         uintptr_t entry{};
         if(!read_memory(vtable+slot,entry) || entry!=base_+rva) throw std::runtime_error("DX11 device vtable differs from docs/28 §2.4");
     }
-    if(std::memcmp(reinterpret_cast<const void*>(base_+allocate_rva),allocate_prologue.data(),allocate_prologue.size()))
+    // The pool guard hooks 0x28CEC0 itself (§11.18); its original bytes were checked when it was installed.
+    if(!guard_.installed() && std::memcmp(reinterpret_cast<const void*>(base_+allocate_rva),allocate_prologue.data(),allocate_prologue.size()))
         throw std::runtime_error("r_cmd_storage_t::allocate differs from the inspected build");
     const bool workers=mode==Mode::parallel || mode==Mode::alternate;
     if(workers) {
@@ -194,6 +195,7 @@ void ParallelPasses::enable(Mode mode,const GateInputs& gate,const Options& opti
         if(!guard_.enable()) {(void)guard_.disable();throw std::runtime_error("Cannot enable the M3c pool guard hooks");}
         // The proxy hooks stay like the guard: they only act in logged passes.
         if(proxy_.installed() && !proxy_.enable()) {(void)proxy_.disable();throw std::runtime_error("Cannot enable the snowymoon proxy hooks");}
+        PoolGuard::set_split(options.split,proxy_.installed()?ProxyPasses::split_observer():nullptr);
     }
     // Otherwise the guard stays as it is: its hooks only act on executor threads
     // of concurrent frames, and patching code while a frame may be recording
@@ -235,8 +237,10 @@ void ParallelPasses::disable() noexcept {
         bool changed=false;
         if(execute_hook_.enabled()) {changed=true;if(!execute_hook_.disable()) error_="Pass execution detour disable failed";}
         if(join_hook_.enabled()) {changed=true;if(!join_hook_.disable()) error_="Join hook disable failed";}
-        if(guard_.enabled()) {changed=true;if(!guard_.disable()) error_="Pool guard disable failed";}
-        if(proxy_.enabled()) {changed=true;if(!proxy_.disable()) error_="Proxy hook disable failed";}
+        // The pool guard and proxy hooks stay: they act only on executors and
+        // logged passes, and patching them out while the main thread records
+        // passes in place crashed at the first off frame (2026-10-23 18:55,
+        // 0x2E530A, docs/28 §11.18). close() removes them.
         while(callbacks.load() && GetTickCount64()<deadline+2000) Sleep(1);
         if(changed) log("parallel_passes disabled"+(error_.empty()?std::string{}:": "+error_));
     } catch(...) {requested_.store(0);}
@@ -255,6 +259,8 @@ bool ParallelPasses::quiescent() noexcept {
 bool ParallelPasses::close() noexcept {
     disable();
     if(!execute_hook_ && !join_hook_) return true;
+    if(guard_.enabled() && !guard_.disable()) return false;
+    if(proxy_.enabled() && !proxy_.disable()) return false;
     if(execute_hook_.enabled() || join_hook_.enabled() || guard_.enabled() || proxy_.enabled()) return false;
     const auto deadline=GetTickCount64()+2000;
     do {
@@ -448,6 +454,7 @@ void ParallelPasses::record(const Deferred& item,uint64_t& frame_dwords,uint64_t
     const auto before=passes::total_dwords(*storage);
     const auto start=qpc_now();
     bool observed=false;
+    PoolGuard::tally_begin();
     const bool spliced=passes::run_spliced(*storage,item.splice,tail,
         [&]{original(item.builder,item.value,item.pass,nullptr);},
         [&](passes::CmdStorage* target,uint64_t size){return allocate_(target,size);},
@@ -456,6 +463,7 @@ void ParallelPasses::record(const Deferred& item,uint64_t& frame_dwords,uint64_t
             passes::gather(recorded,0,item.splice.k,body);observed=true;
         });
     const auto ticks=qpc_now()-start;
+    const auto batches=PoolGuard::tally_end();
     const auto dwords=passes::total_dwords(*storage)-before;
     frame_dwords+=dwords;largest=std::max(largest,ticks);
     const auto summary=observed?passes::summarize(body.data(),body.size()):passes::Summary{};
@@ -467,6 +475,8 @@ void ParallelPasses::record(const Deferred& item,uint64_t& frame_dwords,uint64_t
     else if(entry.last_raw!=item.raw) ++entry.raw_changes;
     entry.last_raw=item.raw;
     ++entry.passes;entry.ticks+=ticks;entry.max_ticks=std::max(entry.max_ticks,ticks);entry.dwords+=dwords;
+    entry.batch_calls+=batches.calls;entry.batch_ticks+=batches.ticks;entry.batch_items+=batches.items;
+    entry.batch_sorts+=batches.sorts;entry.batch_arrays+=batches.arrays;
     ++thread_passes_[GetCurrentThreadId()];
     if(observed) alternate_.observe(item.key,frame,summary);
 }
@@ -478,6 +488,7 @@ struct ParallelPasses::ParallelFrame {
     std::atomic<uint64_t> dwords{0},largest{0};
     DWORD main_thread=0;
     const uint32_t* order=nullptr; // dispatch order (queue indices), concurrent only
+    std::atomic<size_t> finished{0};
 };
 void ParallelPasses::parallel_body(void* capture,void*) {
     auto& frame=*static_cast<ParallelFrame*>(capture);
@@ -491,9 +502,19 @@ void ParallelPasses::parallel_body(void* capture,void*) {
         ProxyPasses::pass_begin(i);
         frame.self->record(frame.self->queue_[i],dwords,largest,frame.summary_mode,frame.frame);
         ProxyPasses::pass_end();
+        frame.finished.fetch_add(1,std::memory_order_release);
+        // Parts of a running batch are on the join's critical path: take them
+        // before the next (shorter, longest-first order) pass (§11.18).
+        if(concurrent) while(PoolGuard::help_once()) {}
         frame.dwords+=dwords;
         for(auto seen=frame.largest.load();largest>seen && !frame.largest.compare_exchange_weak(seen,largest););
     });
+    // §11.18: with no pass left, record parts of the passes still running.
+    if(concurrent)
+        for(unsigned idle=0;frame.finished.load(std::memory_order_acquire)<frame.loop.count;)
+            if(PoolGuard::help_once()) idle=0;
+            else if(++idle<64) YieldProcessor();
+            else SwitchToThread();
     if(concurrent) PoolGuard::executor_end();
 }
 void ParallelPasses::join() noexcept {
@@ -630,7 +651,8 @@ json ParallelPasses::status() {
     for(size_t i=0;i<sorted.size() && i<60;++i) {
         const auto& k=*sorted[i];
         keys.push_back({{"name",k.name},{"space",k.space},{"passes",k.passes},{"ticks",k.ticks},{"max_ticks",k.max_ticks},
-            {"dwords",k.dwords},{"raw_name_changes",k.raw_changes}});
+            {"dwords",k.dwords},{"raw_name_changes",k.raw_changes},
+            {"batches",{{"calls",k.batch_calls},{"ticks",k.batch_ticks},{"items",k.batch_items},{"sorts",k.batch_sorts},{"arrays",k.batch_arrays}}}});
     }
     result["keys"]=std::move(keys);result["key_count"]=keys_.size();
     result["gate"]=gate_;

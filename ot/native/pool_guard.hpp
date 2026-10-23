@@ -46,6 +46,11 @@ public:
     // Main thread, once per concurrent frame (counter only).
     static void count_window() noexcept;
     static bool executor_thread() noexcept;
+    // Per pass, any thread (docs/28 §11.18): the draw batches (0x2E6060) a pass
+    // body runs, to size splitting a pass into batches.
+    struct BatchTally {uint64_t calls=0,ticks=0,items=0,sorts=0,arrays=0;};
+    static void tally_begin() noexcept;
+    static BatchTally tally_end() noexcept;
     static bool holds_pool_lock() noexcept;
     // Executors: the pool lock for the scope's lifetime unless this thread
     // holds it already (the proxy's device slots, multicore.md §5.3.1).
@@ -62,7 +67,22 @@ public:
     };
     json status() const;
     void clear_counters() noexcept;
-    static constexpr size_t hook_count=13;
+    // docs/28 §11.18 (M4): an executor's draw batch of at least split_items
+    // items is cut into item ranges that executors with no pass left record at
+    // the same time. Each range's commands go to a buffer of its own (through
+    // the hooked 0x28CEC0) and are appended to the pass storage in order; the
+    // observer keeps per-part state (the proxy's camera logs).
+    struct SplitObserver {
+        void (*owner_begin)(size_t slot,size_t parts) noexcept;
+        void (*part_begin)(size_t slot,size_t part) noexcept;
+        void (*part_end)(size_t slot,size_t part) noexcept;
+        void (*owner_end)(size_t slot,size_t parts) noexcept;
+    };
+    static void set_split(bool enabled,const SplitObserver* observer) noexcept;
+    // An executor with no pass left: records one waiting part; false when none.
+    static bool help_once() noexcept;
+    static constexpr size_t split_slots=16,split_parts=8,split_items=192,part_items=96;
+    static constexpr size_t hook_count=14;
 private:
     std::array<safetyhook::InlineHook,hook_count> hooks_;
     std::array<safetyhook::MidHook,3> ring_;

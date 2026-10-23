@@ -2,6 +2,8 @@
 #include "frame_arena.hpp"
 #include "uniform_slice.hpp"
 #include <intrin.h>
+#include <memory>
+#include <vector>
 #include <stdexcept>
 
 namespace ot {
@@ -41,7 +43,13 @@ constexpr std::array<Site,PoolGuard::hook_count> sites={{
     // drawn by several passes, so concurrent batches on one array read items
     // half swapped (2026-10-22 21:16: material id 0xFFFF in 0x2E50B0, §11.11).
     {"draw_batch 0x2E5FF0",0x2E6060,{0x48,0x89,0x54,0x24,0x10,0x48,0x89,0x4C,0x24,0x08,0x55,0x53,0x56,0x57,0x41,0x56,0x41,0x57,0x48,0x8D,0x6C,0x24,0xE1,0x48,0x81,0xEC,0xF8,0x00,0x00,0x00,0x48,0x8B,0x5D,0x7F,0x45,0x8B,0xF9,0x4C,0x8B,0x35}},
+    // r_cmd_storage_t::allocate(storage, dwords): a part of a split batch
+    // allocates in its own buffer instead of the pass storage (§11.18).
+    {"cmd_storage_allocate 0x28CEC0",0x28CEC0,{0x48,0x89,0x5C,0x24,0x08,0x57,0x48,0x83,0xEC,0x20,0x48,0x8B,0xD9,0x48,0x8B,0xFA,0x48,0x8B,0x89,0x20,0x03,0x00,0x00,0x48,0x85,0xC9,0x74,0x27,0x4C,0x8B,0x41,0x08,0x4D,0x8D,0x0C,0x10,0x49,0x81,0xF9,0x00}},
 }};
+// The sort in 0x2E6060 (sort == 1): 0x2E60E9 lea rdx,[0x144A80] (compare),
+// 0x2E60FE call 0x2E65E0(items + first, count, {&flag, compare}).
+constexpr uintptr_t sort_rva=0x2E65E0,compare_rva=0x144A80,sort_lea_rva=0x2E60E9,sort_call_rva=0x2E60FE;
 
 // The instructions right after the three loads of [device+0xF1490] in 0x2E50B0
 // (docs/28 §11.10): 0x2E52BA mov rcx (range size at [rax+0x10]), 0x2E52FF
@@ -73,6 +81,9 @@ thread_local bool in_bundle=false,in_batch=false,in_prepare=false,in_material=fa
 thread_local uniform::Segment slice{};
 thread_local bool slice_valid=false,slice_now=false;
 thread_local arena::State arena_state;
+thread_local bool tallying=false;
+thread_local PoolGuard::BatchTally tally{};
+thread_local std::array<uintptr_t,64> tally_arrays{};
 
 // Short sections (draw_items holds ~4 us a call): spin a little before
 // sleeping, so a waiter does not pay a kernel wake for every hand-over.
@@ -146,7 +157,140 @@ uintptr_t bundle(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uin
 // the rest of the batch reads it, so batches that do not sort share the lock
 // (2026-10-23, docs/28 §11.17). Lock order: array lock, set lock (prepare), object lock
 // (bundle) or material lock (draw_items), pool lock.
+// §11.18: one part's commands, in chunks so returned pointers stay valid.
+struct Output {
+    struct Chunk {std::unique_ptr<uint32_t[]> data;size_t capacity=0,used=0;};
+    std::vector<Chunk> chunks;
+    size_t active=0;
+    void reset() noexcept {for(auto& chunk:chunks) chunk.used=0;active=0;}
+    uint32_t* take(size_t dwords) {
+        while(active<chunks.size() && chunks[active].used+dwords>chunks[active].capacity) ++active;
+        if(active==chunks.size()) {
+            const auto capacity=std::max<size_t>(dwords,size_t{1}<<15);
+            chunks.push_back({std::make_unique<uint32_t[]>(capacity),capacity,0});
+        }
+        auto& chunk=chunks[active];
+        auto* p=chunk.data.get()+chunk.used;chunk.used+=dwords;
+        return p;
+    }
+};
+struct Job {
+    std::atomic<int> state{0};               // 0 free, 1 building, 2 open, 3 closing
+    std::atomic<uint64_t> next{uint64_t{1}<<30},done{0};
+    uintptr_t a=0,b=0,c=0,g=0,h=0,storage=0;
+    uint64_t first=0,count=0,parts=0;
+    std::array<Output,PoolGuard::split_parts> outputs;
+};
+std::array<Job,PoolGuard::split_slots> jobs;
+std::atomic<bool> split_enabled{false},split_available{false};
+std::atomic<const PoolGuard::SplitObserver*> split_observer{nullptr};
+std::atomic<uint64_t> split_batches{0},split_owner_parts{0},split_helper_parts{0},split_no_slot{0},split_dwords{0},split_wait_ticks{0};
+thread_local uintptr_t redirect_storage=0;
+thread_local Output* redirect_output=nullptr;
+thread_local bool in_part=false;
+
+// 0x28CEC0(storage, dwords): the pass storage of a part being recorded goes
+// to the part's buffer.
+uintptr_t cmd_allocate(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
+    if(a==redirect_storage && redirect_output) return reinterpret_cast<uintptr_t>(redirect_output->take(b));
+    return reinterpret_cast<Pooled>(originals[13].load(std::memory_order_relaxed))(a,b,c,d,e,f,g,h);
+}
+// Records items [first + count*p/parts, first + count*(p+1)/parts) of the job
+// with the original batch (no sort, no lock: the owner holds the array lock).
+void run_part(Job& job,size_t slot,uint64_t part,bool owner) {
+    const auto from=job.first+job.count*part/job.parts,to=job.first+job.count*(part+1)/job.parts;
+    auto& output=job.outputs[part];
+    output.reset();
+    const auto saved_storage=redirect_storage;
+    auto* const saved_output=redirect_output;
+    const bool saved_batch=in_batch,saved_part=in_part;
+    redirect_storage=job.storage;redirect_output=&output;in_batch=true;in_part=true;
+    const auto* observer=split_observer.load(std::memory_order_acquire);
+    if(observer) observer->part_begin(slot,part);
+    reinterpret_cast<Pooled>(originals[12].load(std::memory_order_relaxed))(job.a,job.b,job.c,0,from,to-from,job.g,job.h);
+    if(observer) observer->part_end(slot,part);
+    redirect_storage=saved_storage;redirect_output=saved_output;in_batch=saved_batch;in_part=saved_part;
+    (owner?split_owner_parts:split_helper_parts).fetch_add(1,std::memory_order_relaxed);
+    job.done.fetch_add(1,std::memory_order_release);
+}
+bool help_one() noexcept {
+    for(size_t i=0;i<jobs.size();++i) {
+        auto& job=jobs[i];
+        if(job.state.load(std::memory_order_acquire)!=2) continue;
+        const auto part=job.next.fetch_add(1,std::memory_order_acq_rel);
+        if(part<job.parts) {run_part(job,i,part,false);return true;}
+    }
+    return false;
+}
+// The owner's draw batch (array lock held, executor of a concurrent frame):
+// sorts as 0x2E6060 would, opens a job, records parts with any idle executor,
+// then appends the parts' commands to the pass storage in item order.
+uintptr_t split_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
+    const auto image=base.load(std::memory_order_relaxed);
+    const auto original=reinterpret_cast<Pooled>(originals[12].load(std::memory_order_relaxed));
+    if(e>=*reinterpret_cast<const uint64_t*>(c+0x10)) return original(a,b,c,d,e,f,g,h); // the engine's own bounds assert
+    if(static_cast<int>(d)==1) {
+        uint64_t flag=a&~uint64_t{0xFF};
+        struct {uint64_t* flag;uintptr_t compare;} context{&flag,image+compare_rva};
+        reinterpret_cast<void(*)(uintptr_t,uint64_t,void*)>(image+sort_rva)(*reinterpret_cast<const uintptr_t*>(c+8)+e*0x18,f,&context);
+    }
+    size_t slot=jobs.size();
+    for(size_t i=0;i<jobs.size();++i) {
+        int free=0;
+        if(jobs[i].state.compare_exchange_strong(free,1,std::memory_order_acq_rel)) {slot=i;break;}
+    }
+    if(slot==jobs.size()) {split_no_slot.fetch_add(1,std::memory_order_relaxed);return original(a,b,c,0,e,f,g,h);}
+    auto& job=jobs[slot];
+    job.a=a;job.b=b;job.c=c;job.g=g;job.h=h;job.first=e;job.count=f;
+    job.parts=std::min<uint64_t>(PoolGuard::split_parts,f/PoolGuard::part_items);
+    job.storage=*reinterpret_cast<const uintptr_t*>(b+0xF0);
+    job.done.store(0,std::memory_order_relaxed);
+    const auto* observer=split_observer.load(std::memory_order_acquire);
+    if(observer) observer->owner_begin(slot,job.parts);
+    job.next.store(0,std::memory_order_release);
+    job.state.store(2,std::memory_order_release);
+    for(;;) {
+        const auto part=job.next.fetch_add(1,std::memory_order_acq_rel);
+        if(part>=job.parts) break;
+        run_part(job,slot,part,true);
+    }
+    const auto waited=qpc_now();
+    while(job.done.load(std::memory_order_acquire)<job.parts) if(!help_one()) YieldProcessor();
+    split_wait_ticks.fetch_add(qpc_now()-waited,std::memory_order_relaxed);
+    job.state.store(3,std::memory_order_release);
+    job.next.store(uint64_t{1}<<30,std::memory_order_release);
+    const auto allocate=reinterpret_cast<Pooled>(originals[13].load(std::memory_order_relaxed));
+    uint64_t dwords=0;
+    for(uint64_t part=0;part<job.parts;++part) {
+        const auto& output=job.outputs[part];
+        for(size_t i=0;i<=output.active && i<output.chunks.size();++i) {
+            const auto& chunk=output.chunks[i];
+            if(!chunk.used) continue;
+            auto* destination=reinterpret_cast<uint32_t*>(allocate(job.storage,chunk.used,0,0,0,0,0,0));
+            std::memcpy(destination,chunk.data.get(),chunk.used*sizeof(uint32_t));
+            dwords+=chunk.used;
+        }
+    }
+    if(observer) observer->owner_end(slot,job.parts);
+    job.state.store(0,std::memory_order_release);
+    split_batches.fetch_add(1,std::memory_order_relaxed);
+    split_dwords.fetch_add(dwords,std::memory_order_relaxed);
+    return 0;
+}
+uintptr_t locked_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h);
 uintptr_t draw_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
+    if(!tallying || in_batch) return locked_batch(a,b,c,d,e,f,g,h);
+    const auto start=qpc_now();
+    tallying=false;
+    const auto result=locked_batch(a,b,c,d,e,f,g,h);
+    tallying=true;
+    ++tally.calls;tally.ticks+=qpc_now()-start;tally.items+=f;tally.sorts+=static_cast<int>(d)==1;
+    bool seen=false;
+    for(uint64_t i=0;i<tally.arrays && i<tally_arrays.size();++i) seen|=tally_arrays[i]==c;
+    if(!seen) {if(tally.arrays<tally_arrays.size()) tally_arrays[tally.arrays]=c;++tally.arrays;}
+    return result;
+}
+uintptr_t locked_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
     const auto original=reinterpret_cast<Pooled>(originals[12].load(std::memory_order_relaxed));
     if(!executor || depth) return original(a,b,c,d,e,f,g,h);
     if(in_batch) {counters[12].nested.fetch_add(1,std::memory_order_relaxed);return original(a,b,c,d,e,f,g,h);}
@@ -157,7 +301,9 @@ uintptr_t draw_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e
     if(sorts) AcquireSRWLockExclusive(&lock); else AcquireSRWLockShared(&lock);
     const auto entered=qpc_now();
     in_batch=true;
-    const auto result=original(a,b,c,d,e,f,g,h);
+    const bool split=f>=PoolGuard::split_items && !in_part && split_enabled.load(std::memory_order_relaxed) &&
+        split_available.load(std::memory_order_relaxed);
+    const auto result=split?split_batch(a,b,c,d,e,f,g,h):original(a,b,c,d,e,f,g,h);
     in_batch=false;
     const auto left=qpc_now();
     if(sorts) ReleaseSRWLockExclusive(&lock); else ReleaseSRWLockShared(&lock);
@@ -290,7 +436,8 @@ void PoolGuard::install(uintptr_t image) {
         void* detour=i==0?reinterpret_cast<void*>(&frame_allocate):i==1?reinterpret_cast<void*>(&bundle):
                      i==6?reinterpret_cast<void*>(&srv_cache):i==7?reinterpret_cast<void*>(&sampler_cache):
                      i==9?reinterpret_cast<void*>(&queue_prepare):i==10?reinterpret_cast<void*>(&material<10>):
-                     i==11?reinterpret_cast<void*>(&material<11>):i==12?reinterpret_cast<void*>(&draw_batch):detours[i];
+                     i==11?reinterpret_cast<void*>(&material<11>):i==12?reinterpret_cast<void*>(&draw_batch):
+                     i==13?reinterpret_cast<void*>(&cmd_allocate):detours[i];
         auto hook=safetyhook::InlineHook::create(target,detour,safetyhook::InlineHook::StartDisabled);
         if(!hook) throw std::runtime_error(std::string("SafetyHook could not hook ")+sites[i].name);
         hooks[i]=std::move(*hook);
@@ -305,6 +452,11 @@ void PoolGuard::install(uintptr_t image) {
     }
     ring_=std::move(ring);
     hooks_=std::move(hooks);
+    // Splitting re-does the batch's sort; only when the sort call is the inspected one.
+    int32_t lea{},call{};
+    std::memcpy(&lea,reinterpret_cast<const void*>(image+sort_lea_rva+3),4);
+    std::memcpy(&call,reinterpret_cast<const void*>(image+sort_call_rva+1),4);
+    split_available.store(image+sort_lea_rva+7+lea==image+compare_rva && image+sort_call_rva+5+call==image+sort_rva);
     installed_=true;
 }
 bool PoolGuard::enable() noexcept {
@@ -349,6 +501,13 @@ CodeRanges PoolGuard::code() const {
 }
 void PoolGuard::count_window() noexcept {windows.fetch_add(1,std::memory_order_relaxed);}
 bool PoolGuard::executor_thread() noexcept {return executor;}
+void PoolGuard::set_split(bool enabled,const SplitObserver* observer) noexcept {
+    split_observer.store(observer,std::memory_order_release);
+    split_enabled.store(enabled,std::memory_order_release);
+}
+bool PoolGuard::help_once() noexcept {return executor && help_one();}
+void PoolGuard::tally_begin() noexcept {tally={};tallying=true;}
+PoolGuard::BatchTally PoolGuard::tally_end() noexcept {tallying=false;return tally;}
 bool PoolGuard::holds_pool_lock() noexcept {return depth>0;}
 PoolGuard::Scope::Scope() noexcept {
     if(!executor || depth) {if(executor) scope_counters.nested.fetch_add(1,std::memory_order_relaxed);return;}
@@ -394,7 +553,10 @@ json PoolGuard::status() const {
     functions.push_back(entry("uniform_ring_slices 0x2E52BA",ring_counters,"pool"));
     wait+=scope_counters.wait_ticks.load();hold+=scope_counters.hold_ticks.load();
     functions.push_back(entry("proxy_device_slots 7/9/10",scope_counters,"pool"));
-    return {{"installed",installed_},{"enabled",enabled()},{"windows",windows.load()},
+    json split={{"available",split_available.load()},{"enabled",split_enabled.load()},{"batches",split_batches.load()},
+        {"owner_parts",split_owner_parts.load()},{"helper_parts",split_helper_parts.load()},{"no_slot",split_no_slot.load()},
+        {"dwords",split_dwords.load()},{"owner_wait_ms",split_wait_ticks.load()*1000.0/freq}};
+    return {{"installed",installed_},{"enabled",enabled()},{"windows",windows.load()},{"split",std::move(split)},
         {"lock_wait_ms",wait*1000.0/freq},{"lock_hold_ms",hold*1000.0/freq},{"functions",std::move(functions)},
         {"arena",{{"chunks",arena_chunks.load()},{"allocations",arena_allocations.load()},{"failures",arena_failures.load()}}}};
 }
@@ -402,5 +564,6 @@ void PoolGuard::clear_counters() noexcept {
     for(auto& c:counters) {c.locked=0;c.nested=0;c.wait_ticks=0;c.hold_ticks=0;c.shared=0;}
     for(auto* c:{&ring_counters,&scope_counters}) {c->locked=0;c->nested=0;c->wait_ticks=0;c->hold_ticks=0;}
     arena_chunks=0;arena_allocations=0;arena_failures=0;windows=0;
+    for(auto* c:{&split_batches,&split_owner_parts,&split_helper_parts,&split_no_slot,&split_dwords,&split_wait_ticks}) c->store(0);
 }
 }

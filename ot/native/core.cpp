@@ -677,6 +677,7 @@ json Runtime::command(const json& request) {
                     options.executors=request.value("executors",0u);
                     options.accept_foreign=request.value("accept_foreign_hooks",false);
                     options.report_only=request.value("report_only",false);
+                    options.split=request.value("split",true);
                 }
                 parallel_passes_->enable(mode=="serial"?ParallelPasses::Mode::serial:mode=="parallel"?ParallelPasses::Mode::parallel:
                     ParallelPasses::Mode::alternate,gate,options);

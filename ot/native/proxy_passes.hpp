@@ -2,6 +2,7 @@
 #include "ot.hpp"
 #include "hook_support.hpp"
 #include "proxy_gate.hpp"
+#include "pool_guard.hpp"
 #include <array>
 #include <string>
 #include <safetyhook.hpp>
@@ -55,6 +56,10 @@ public:
     static void pass_end() noexcept;
     json status() const;
     void clear_counters() noexcept;
+    // docs/28 §11.18: a draw batch cut into parts logs each part apart (with the
+    // scene key the owner held) and appends the parts to the pass log in order;
+    // only the first part that consumed the key keeps its push.
+    static const PoolGuard::SplitObserver* split_observer() noexcept;
     // A gate.foreign site the proxy patches into the game (11 sites, docs/28 §11).
     static bool known_patch(uintptr_t rva,size_t size) noexcept;
 private:

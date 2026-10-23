@@ -72,8 +72,9 @@ struct PassLog {
     bool first_candidate=false,has_internal=false,changed_after_first=false;
     Camera first,internal;
     uint32_t pushes=0,dropped=0;
+    bool consumed=false;              // a leaf call ran while a scene key was set
     std::array<Camera,push_capacity> push{};
-    void clear() noexcept {calls=0;first_candidate=has_internal=changed_after_first=false;pushes=dropped=0;}
+    void clear() noexcept {calls=0;first_candidate=has_internal=changed_after_first=consumed=false;pushes=dropped=0;}
     // Block 1 for a call whose object is not 0. make(camera) fills the camera
     // when this call may write the frame record.
     template<class Make> void note(uintptr_t object,float m11,Make&& make) {
@@ -90,6 +91,28 @@ struct PassLog {
     void add_push(const Camera& camera) noexcept {
         if(pushes<push_capacity) push[pushes++]=camera;
         else ++dropped;
+    }
+    // The calls of next as if they had come right after this log's calls
+    // (docs/28 §11.18: a draw batch cut into parts logs each part apart).
+    void append(const PassLog& next) noexcept {
+        if(next.calls) {
+            if(!calls) {
+                first_object=next.first_object;first_m11=next.first_m11;first_candidate=next.first_candidate;first=next.first;
+                has_internal=next.has_internal;internal=next.internal;
+                last_object=next.last_object;last_m11=next.last_m11;changed_after_first=next.changed_after_first;
+            } else {
+                const bool differs_first=differs(last_object,last_m11,next.first_object,next.first_m11);
+                if(!has_internal) {
+                    if(differs_first && next.first_candidate) {internal=next.first;has_internal=true;}
+                    else if(next.has_internal) {internal=next.internal;has_internal=true;}
+                }
+                if(differs_first) {last_object=next.first_object;last_m11=next.first_m11;changed_after_first=true;}
+                if(next.changed_after_first) {last_object=next.last_object;last_m11=next.last_m11;changed_after_first=true;}
+            }
+            calls+=next.calls;
+        }
+        for(uint32_t p=0;p<next.pushes;++p) add_push(next.push[p]);
+        dropped+=next.dropped;consumed|=next.consumed;
     }
 };
 // Hands the passes' logs over in queue order: record(camera) where the handler

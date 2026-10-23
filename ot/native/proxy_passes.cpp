@@ -80,8 +80,18 @@ std::array<std::atomic<uintptr_t>,4> trampolines{};
 std::array<std::atomic<uintptr_t>,slots.size()> slot_originals{};
 std::atomic<LogMode> frame_mode{LogMode::none};
 thread_local LogMode log_mode=LogMode::none;
-thread_local size_t log_index=0;
+thread_local rr::PassLog* log_target=nullptr;
 thread_local uintptr_t thread_key=0;
+// Parts of split batches (docs/28 §11.18), one set per pool guard job slot.
+struct SplitLogs {
+    bool active=false;
+    uintptr_t key=0;
+    std::array<rr::PassLog,PoolGuard::split_parts> parts;
+};
+std::array<SplitLogs,PoolGuard::split_slots> split_logs;
+struct Saved {LogMode mode;rr::PassLog* target;uintptr_t key;};
+thread_local std::array<Saved,4> saved_logs;
+thread_local size_t saved_depth=0;
 std::array<rr::PassLog,log_capacity> logs;
 size_t frame_passes=0;
 rr::State shadow_start{};
@@ -146,10 +156,11 @@ uintptr_t leaf(uintptr_t target,uintptr_t argument) {
     if(mode==LogMode::none) return reinterpret_cast<Leaf>(trampolines[leaf_hook].load(std::memory_order_relaxed))(target,argument);
     ++local.leaf;
     if(mode==LogMode::shadow) {
-        observe(logs[log_index],argument,load<uintptr_t>(scene_key));
+        observe(*log_target,argument,load<uintptr_t>(scene_key));
         return reinterpret_cast<Leaf>(trampolines[leaf_hook].load(std::memory_order_relaxed))(target,argument);
     }
-    observe(logs[log_index],argument,thread_key);
+    if(thread_key) log_target->consumed=true;
+    observe(*log_target,argument,thread_key);
     thread_key=0;                                         // 0x1A853
     return reinterpret_cast<Leaf>(load<uintptr_t>(leaf_original))(target,argument);
 }
@@ -363,15 +374,53 @@ void ProxyPasses::frame_begin(size_t passes,bool concurrent) noexcept {
 void ProxyPasses::pass_begin(size_t index) noexcept {
     const auto mode=frame_mode.load();
     if(mode==LogMode::none || index>=log_capacity) return;
-    log_mode=mode;log_index=index;thread_key=0;
+    log_mode=mode;log_target=&logs[index];thread_key=0;
 }
 void ProxyPasses::pass_end() noexcept {
     if(log_mode==LogMode::none) return;
     (log_mode==LogMode::executor?counters.leaf_executor:counters.leaf_shadow).fetch_add(local.leaf,std::memory_order_relaxed);
     counters.scene.fetch_add(local.scene,std::memory_order_relaxed);
     counters.keyed.fetch_add(local.keyed,std::memory_order_relaxed);
-    local={};log_mode=LogMode::none;thread_key=0;
+    local={};log_mode=LogMode::none;log_target=nullptr;thread_key=0;
 }
+namespace {
+void split_owner_begin(size_t slot,size_t parts) noexcept {
+    auto& split=split_logs[slot];
+    split.active=log_mode==LogMode::executor && log_target;
+    if(!split.active) return;
+    split.key=thread_key;
+    for(size_t p=0;p<parts && p<split.parts.size();++p) split.parts[p].clear();
+}
+void split_part_begin(size_t slot,size_t part) noexcept {
+    auto& split=split_logs[slot];
+    if(!split.active || saved_depth==saved_logs.size()) return;
+    saved_logs[saved_depth++]={log_mode,log_target,thread_key};
+    log_mode=LogMode::executor;log_target=&split.parts[part];thread_key=split.key;
+}
+void split_part_end(size_t slot,size_t) noexcept {
+    if(!split_logs[slot].active || !saved_depth) return;
+    const auto& previous=saved_logs[--saved_depth];
+    log_mode=previous.mode;log_target=previous.target;thread_key=previous.key;
+}
+// Serially the scene key goes to the first leaf call after it is set: every
+// part ran with the owner's key, so a part after the first consumer drops the
+// push and the record key it would not have seen.
+void split_owner_end(size_t slot,size_t parts) noexcept {
+    auto& split=split_logs[slot];
+    if(!split.active) return;
+    bool consumed=false;
+    for(size_t p=0;p<parts && p<split.parts.size();++p) {
+        auto& part=split.parts[p];
+        if(consumed && part.consumed) {part.pushes=0;part.first.key=0;part.consumed=false;}
+        consumed|=part.consumed;
+        log_target->append(part);
+    }
+    if(consumed) thread_key=0;
+    split.active=false;
+}
+constexpr PoolGuard::SplitObserver split_hooks{&split_owner_begin,&split_part_begin,&split_part_end,&split_owner_end};
+}
+const PoolGuard::SplitObserver* ProxyPasses::split_observer() noexcept {return &split_hooks;}
 void ProxyPasses::frame_end() noexcept {
     const auto mode=frame_mode.exchange(LogMode::none);
     if(mode==LogMode::none) return;

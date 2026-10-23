@@ -378,6 +378,28 @@ void camera_replay() {
     }
     check(mismatched==0 && records>1000 && pushes>1000,"replayed logs match the serial handler in 20000 random frames ("+
           std::to_string(records)+" records, "+std::to_string(pushes)+" pushes)");
+    // A pass cut into parts: logs appended in order equal one log of all calls.
+    int split_mismatched=0;
+    for(int trial=0;trial<20000;++trial) {
+        std::vector<Call> calls;
+        for(uint32_t n=pick(9);n--;) calls.push_back({pick(3),values[pick(6)],values[pick(6)],0u});
+        const auto make=[&](r::PassLog& log,size_t from,size_t to) {
+            for(size_t c=from;c<to;++c) if(calls[c].object) log.note(calls[c].object,calls[c].m11,[&](r::Camera& camera) {camera.key=c+1;});
+        };
+        r::PassLog whole;make(whole,0,calls.size());
+        r::PassLog parts;
+        for(size_t from=0;from<calls.size();) {
+            const size_t to=std::min(calls.size(),from+1+pick(3));
+            r::PassLog part;make(part,from,to);parts.append(part);from=to;
+        }
+        const r::State start{pick(3),values[pick(6)],pick(4)==0};
+        std::array<std::vector<uintptr_t>,2> a,b;
+        const auto end_a=r::replay(&whole,1,start,[&](const r::Camera& c) {a[0].push_back(c.key);},[&](const r::Camera& c) {a[1].push_back(c.key);});
+        const auto end_b=r::replay(&parts,1,start,[&](const r::Camera& c) {b[0].push_back(c.key);},[&](const r::Camera& c) {b[1].push_back(c.key);});
+        if(a!=b || whole.calls!=parts.calls || end_a.object!=end_b.object || std::memcmp(&end_a.m11,&end_b.m11,sizeof end_a.m11) || end_a.won!=end_b.won)
+            ++split_mismatched;
+    }
+    check(split_mismatched==0,"logs of a pass cut into parts, appended in order, replay like one log");
     r::PassLog full;
     for(int i=0;i<6;++i) full.add_push({});
     check(full.pushes==r::PassLog::push_capacity && full.dropped==2,"pushes beyond the log capacity are counted as dropped");

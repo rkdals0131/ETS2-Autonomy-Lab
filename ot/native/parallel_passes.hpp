@@ -27,6 +27,7 @@ public:
         bool accept_foreign=false; // ticket only: run beside foreign code patches
         bool report_only=false;    // alternate: report a suspect verdict instead of turning off
         bool proxy_check=false;    // serial: hook the snowymoon proxy and compare its hand-over (multicore.md §8 S2)
+        bool split=true;           // concurrent: cut large draw batches into parts for idle executors (§11.18)
     };
     // docs/28 §5 environment gate inputs: hooks of this DLL (absolute ranges),
     // patches the user accepted (RVA, size) and the recording closure (RVAs).
@@ -57,6 +58,7 @@ private:
     struct KeyStats {
         std::string name,space,last_raw;
         uint64_t passes=0,ticks=0,max_ticks=0,dwords=0,raw_changes=0;
+        uint64_t batch_calls=0,batch_ticks=0,batch_items=0,batch_sorts=0,batch_arrays=0;
     };
     struct Counters {
         uint64_t frames_off=0,frames_serial=0,frames_parallel=0,duplicate_frames=0,deferred=0,marker=0,overflow=0;
