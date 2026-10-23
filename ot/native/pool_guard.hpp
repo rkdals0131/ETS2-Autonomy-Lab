@@ -20,7 +20,8 @@ namespace ot {
 // [device+0xF1490]; only carving a slice takes the pool lock. Lock order is
 // always object lock, then pool lock: nothing that holds the pool lock calls
 // 0x2E50B0 or its only caller 0x2E6060. The queue set prepare 0x160E7C0 runs
-// under a lock picked by its set (set lock, then pool lock in draw_items).
+// under a lock picked by its set; draw_items and resource_ready under one
+// material lock (set lock, material lock, pool lock).
 class PoolGuard {
 public:
     PoolGuard()=default;

@@ -61,14 +61,14 @@ HookCounters ring_counters,scope_counters;
 std::array<SRWLOCK,64> object_locks{},array_locks{},set_locks{}; // zero is SRWLOCK_INIT
 std::array<std::atomic<uintptr_t>,PoolGuard::hook_count> originals{};
 std::atomic<uintptr_t> base{0};
-SRWLOCK pool_lock=SRWLOCK_INIT;
+SRWLOCK pool_lock=SRWLOCK_INIT,material_lock=SRWLOCK_INIT;
 std::atomic<uint64_t> arena_chunks{0},arena_allocations{0},arena_failures{0},windows{0};
 thread_local int depth=0;
 thread_local bool executor=false,arena_thread=false;
 // Set while this thread holds an object or array lock: a nested entry calls
 // through instead of taking a second SRW lock it may already hold (2026-10-22
 // 21:45 hang: one executor waited on its own object lock, §11.12).
-thread_local bool in_bundle=false,in_batch=false,in_prepare=false;
+thread_local bool in_bundle=false,in_batch=false,in_prepare=false,in_material=false;
 thread_local uniform::Segment slice{};
 thread_local bool slice_valid=false,slice_now=false;
 thread_local arena::State arena_state;
@@ -132,7 +132,8 @@ uintptr_t bundle(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uin
 // does not fit, so the engine never switches segments for an executor.
 // 0x2E6060(.., .., items, sort, first, count): one batch of a render item
 // array. Serialized per array (locks picked by its address); different arrays
-// run at the same time. Lock order: array lock, set lock (prepare), object lock (bundle), pool lock.
+// run at the same time. Lock order: array lock, set lock (prepare), object lock
+// (bundle) or material lock (draw_items), pool lock.
 uintptr_t draw_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
     const auto original=reinterpret_cast<Pooled>(originals[12].load(std::memory_order_relaxed));
     if(!executor || depth) return original(a,b,c,d,e,f,g,h);
@@ -173,6 +174,32 @@ uintptr_t queue_prepare(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_
     in_prepare=false;
     const auto left=qpc_now();
     ReleaseSRWLockExclusive(&lock);
+    count.locked.fetch_add(1,std::memory_order_relaxed);
+    count.wait_ticks.fetch_add(entered-start,std::memory_order_relaxed);
+    count.hold_ticks.fetch_add(left-entered,std::memory_order_relaxed);
+    return result;
+}
+// draw_items 0x2DECF0 and resource_ready 0x32E540 (only called from it in
+// practice) change material resource refcounts (+0x68/+0x6C), the resource
+// manager lists (+0x87A8, release 0x23BAE0) and the material registry
+// (0x235980/0x2DBD20). None of the other pool functions touch those, so they
+// run under a lock of their own: draw_items held the pool lock 1.1 ms a frame
+// while [0x120], the ring slices and the device slots waited behind it
+// (2026-10-23, docs/28 §11.16). Order: set lock, material lock, pool lock.
+template<size_t I> uintptr_t material(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
+    const auto original=reinterpret_cast<Pooled>(originals[I].load(std::memory_order_relaxed));
+    if(!executor) return original(a,b,c,d,e,f,g,h);
+    auto& count=counters[I];
+    // Under the pool lock (not seen) the order would invert: call through.
+    if(depth || in_material) {count.nested.fetch_add(1,std::memory_order_relaxed);return original(a,b,c,d,e,f,g,h);}
+    const auto start=qpc_now();
+    AcquireSRWLockExclusive(&material_lock);
+    const auto entered=qpc_now();
+    in_material=true;
+    const auto result=original(a,b,c,d,e,f,g,h);
+    in_material=false;
+    const auto left=qpc_now();
+    ReleaseSRWLockExclusive(&material_lock);
     count.locked.fetch_add(1,std::memory_order_relaxed);
     count.wait_ticks.fetch_add(entered-start,std::memory_order_relaxed);
     count.hold_ticks.fetch_add(left-entered,std::memory_order_relaxed);
@@ -248,7 +275,8 @@ void PoolGuard::install(uintptr_t image) {
         const auto target=find_target(sites[i].signature,0,sites[i].rva);
         void* detour=i==0?reinterpret_cast<void*>(&frame_allocate):i==1?reinterpret_cast<void*>(&bundle):
                      i==6?reinterpret_cast<void*>(&srv_cache):i==7?reinterpret_cast<void*>(&sampler_cache):
-                     i==9?reinterpret_cast<void*>(&queue_prepare):i==12?reinterpret_cast<void*>(&draw_batch):detours[i];
+                     i==9?reinterpret_cast<void*>(&queue_prepare):i==10?reinterpret_cast<void*>(&material<10>):
+                     i==11?reinterpret_cast<void*>(&material<11>):i==12?reinterpret_cast<void*>(&draw_batch):detours[i];
         auto hook=safetyhook::InlineHook::create(target,detour,safetyhook::InlineHook::StartDisabled);
         if(!hook) throw std::runtime_error(std::string("SafetyHook could not hook ")+sites[i].name);
         hooks[i]=std::move(*hook);
@@ -327,7 +355,7 @@ PoolGuard::Scope::~Scope() {
 // A slice lives one frame: the segment it came from may be retired after it.
 void PoolGuard::executor_begin(bool arena) noexcept {executor=true;arena_thread=arena;slice_valid=false;slice_now=false;}
 void PoolGuard::executor_end() noexcept {
-    executor=false;arena_thread=false;in_bundle=in_batch=in_prepare=false;
+    executor=false;arena_thread=false;in_bundle=in_batch=in_prepare=in_material=false;
     arena_chunks.fetch_add(arena_state.chunks,std::memory_order_relaxed);
     arena_allocations.fetch_add(arena_state.allocations,std::memory_order_relaxed);
     arena_failures.fetch_add(arena_state.failures,std::memory_order_relaxed);
@@ -341,11 +369,11 @@ json PoolGuard::status() const {
         return json{{"name",name},{"lock",lock},{"locked",c.locked.load()},{"nested",c.nested.load()},
             {"wait_ms",c.wait_ticks.load()*1000.0/freq},{"hold_ms",c.hold_ticks.load()*1000.0/freq}};
     };
-    // lock_wait_ms/lock_hold_ms are the pool lock only; 0x2E50B0 reports its object locks.
+    // lock_wait_ms/lock_hold_ms are the pool lock only; 0x2E50B0 and 9-12 report their own locks.
     for(size_t i=1;i<hook_count;++i) {
         const auto& c=counters[i];
-        if(i!=1 && i!=9 && i!=12) {wait+=c.wait_ticks.load();hold+=c.hold_ticks.load();}
-        functions.push_back(entry(sites[i].name,c,i==1?"object":i==9?"set":i==12?"array":"pool"));
+        if(i!=1 && i<9) {wait+=c.wait_ticks.load();hold+=c.hold_ticks.load();}
+        functions.push_back(entry(sites[i].name,c,i==1?"object":i==9?"set":i==10 || i==11?"material":i==12?"array":"pool"));
     }
     wait+=ring_counters.wait_ticks.load();hold+=ring_counters.hold_ticks.load();
     // locked = slices carved under the pool lock, nested = uniform ranges served from slices.
