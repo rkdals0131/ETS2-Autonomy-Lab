@@ -8,7 +8,9 @@ namespace ot {
 namespace proxy {
 bool accessible(const void* address,size_t size,bool write) {
     constexpr DWORD readable=PAGE_READONLY|PAGE_READWRITE|PAGE_WRITECOPY|PAGE_EXECUTE_READ|PAGE_EXECUTE_READWRITE|PAGE_EXECUTE_WRITECOPY;
-    constexpr DWORD writable=PAGE_READWRITE|PAGE_EXECUTE_READWRITE;
+    // Image data pages nobody has written yet are copy-on-write (2026-10-23: the
+    // proxy ring's later pages); writing them is what the proxy itself does.
+    constexpr DWORD writable=PAGE_READWRITE|PAGE_EXECUTE_READWRITE|PAGE_WRITECOPY|PAGE_EXECUTE_WRITECOPY;
     auto p=static_cast<const uint8_t*>(address);const auto end=p+size;
     while(p<end) {
         MEMORY_BASIC_INFORMATION info{};

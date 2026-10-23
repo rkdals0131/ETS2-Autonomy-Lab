@@ -7,18 +7,31 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 
 namespace ot::proxy::replay {
 // One camera as 0x84670 (frame record) and 0x84460 (ring push) copy it: the
 // scene key at the call (dxgi+0xC780E8), the position (object+0x98, 16
 // bytes), the view (object+0x18), view times the translation by -position,
-// and the matrix from transform_p.
+// and the matrix from transform_p. The proxy reads the last two with movaps
+// (16-byte aligned; 2026-10-23 a replay from offset 0x58 crashed at 0x845C8).
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable:4324) // padding after key is the point
+#endif
 struct Camera {
     uintptr_t key=0;
-    std::array<float,4> position{};
-    std::array<float,16> view{},relative{},projection{};
+    alignas(16) std::array<float,4> position{};
+    alignas(16) std::array<float,16> view{};
+    alignas(16) std::array<float,16> relative{};
+    alignas(16) std::array<float,16> projection{};
 };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+static_assert(alignof(Camera)==16 && offsetof(Camera,position)%16==0 && offsetof(Camera,view)%16==0 &&
+              offsetof(Camera,relative)%16==0 && offsetof(Camera,projection)%16==0,"0x84460/0x84670 read with movaps");
 // The handler's 4x4 loops (0x1A4B3 and 0x1A6F0 on): out = view * T(-position),
 // T row-major with the translation in the last column, each element summed
 // from 0 in the handler's order so the floats match bit for bit.
