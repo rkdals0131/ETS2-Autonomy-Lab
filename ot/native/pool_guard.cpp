@@ -25,6 +25,7 @@ constexpr std::array<Site,PoolGuard::hook_count> sites={{
     // one) the first time a pass of the frame asks; scene/other pass callbacks
     // 0x1473E60, 0x151BB90, 0x160EB80 then index it. Unlocked, a second pass read
     // the array while the first built it (2026-10-22 assert "2 >= 2", docs/28 §11.7).
+    // Serialized per set: it only writes the set and calls draw_items (pool lock).
     {"render_queue_set_prepare 0x160C990",0x160E7C0,{0x40,0x55,0x41,0x55,0x48,0x8D,0xAC,0x24,0x38,0xF0,0xFF,0xFF,0xB8,0xC8,0x10,0x00,0x00,0xE8,0x5A,0x26,0x77,0x00,0x48,0x2B,0xE0,0x48,0x83,0xB9,0x28,0x02,0x00,0x00,0x00,0x4C,0x8B,0xE9,0x0F,0x85,0xB3,0x04}},
     // Draw item emission shared by pass callbacks 0x1465260 and 0x166D2F0 (and
     // 0x160C990): fills per-item caches (+0x120 mask, +0x14 shader id) on first
@@ -57,7 +58,7 @@ constexpr uint64_t slice_bytes=0x10000;
 struct HookCounters {std::atomic<uint64_t> locked{0},nested{0},wait_ticks{0},hold_ticks{0};};
 std::array<HookCounters,PoolGuard::hook_count> counters;
 HookCounters ring_counters,scope_counters;
-std::array<SRWLOCK,64> object_locks{},array_locks{}; // zero is SRWLOCK_INIT
+std::array<SRWLOCK,64> object_locks{},array_locks{},set_locks{}; // zero is SRWLOCK_INIT
 std::array<std::atomic<uintptr_t>,PoolGuard::hook_count> originals{};
 std::atomic<uintptr_t> base{0};
 SRWLOCK pool_lock=SRWLOCK_INIT;
@@ -67,7 +68,7 @@ thread_local bool executor=false,arena_thread=false;
 // Set while this thread holds an object or array lock: a nested entry calls
 // through instead of taking a second SRW lock it may already hold (2026-10-22
 // 21:45 hang: one executor waited on its own object lock, §11.12).
-thread_local bool in_bundle=false,in_batch=false;
+thread_local bool in_bundle=false,in_batch=false,in_prepare=false;
 thread_local uniform::Segment slice{};
 thread_local bool slice_valid=false,slice_now=false;
 thread_local arena::State arena_state;
@@ -131,7 +132,7 @@ uintptr_t bundle(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uin
 // does not fit, so the engine never switches segments for an executor.
 // 0x2E6060(.., .., items, sort, first, count): one batch of a render item
 // array. Serialized per array (locks picked by its address); different arrays
-// run at the same time. Lock order: array lock, object lock (bundle), pool lock.
+// run at the same time. Lock order: array lock, set lock (prepare), object lock (bundle), pool lock.
 uintptr_t draw_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
     const auto original=reinterpret_cast<Pooled>(originals[12].load(std::memory_order_relaxed));
     if(!executor || depth) return original(a,b,c,d,e,f,g,h);
@@ -144,6 +145,32 @@ uintptr_t draw_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e
     in_batch=true;
     const auto result=original(a,b,c,d,e,f,g,h);
     in_batch=false;
+    const auto left=qpc_now();
+    ReleaseSRWLockExclusive(&lock);
+    count.locked.fetch_add(1,std::memory_order_relaxed);
+    count.wait_ticks.fetch_add(entered-start,std::memory_order_relaxed);
+    count.hold_ticks.fetch_add(left-entered,std::memory_order_relaxed);
+    return result;
+}
+// 0x160E7C0(set): builds the set's queue_data array once a frame. Serialized
+// per set (locks picked by its address) instead of under the pool lock, which
+// it held 1.3 ms a frame while [0x120] and the ring slices waited 4+ ms
+// (2026-10-23, docs/28 §11.16). Inside it only draw_items (0x2DECF0) touches
+// shared state, and that takes the pool lock: set lock, then pool lock.
+// It was never called under the pool lock (nested 0); if it is, it calls
+// through rather than take a set lock after the pool lock.
+uintptr_t queue_prepare(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
+    const auto original=reinterpret_cast<Pooled>(originals[9].load(std::memory_order_relaxed));
+    if(!executor) return original(a,b,c,d,e,f,g,h);
+    if(depth || in_prepare) {counters[9].nested.fetch_add(1,std::memory_order_relaxed);return original(a,b,c,d,e,f,g,h);}
+    auto& lock=set_locks[((a>>4)^(a>>12))&(set_locks.size()-1)];
+    auto& count=counters[9];
+    const auto start=qpc_now();
+    AcquireSRWLockExclusive(&lock);
+    const auto entered=qpc_now();
+    in_prepare=true;
+    const auto result=original(a,b,c,d,e,f,g,h);
+    in_prepare=false;
     const auto left=qpc_now();
     ReleaseSRWLockExclusive(&lock);
     count.locked.fetch_add(1,std::memory_order_relaxed);
@@ -221,7 +248,7 @@ void PoolGuard::install(uintptr_t image) {
         const auto target=find_target(sites[i].signature,0,sites[i].rva);
         void* detour=i==0?reinterpret_cast<void*>(&frame_allocate):i==1?reinterpret_cast<void*>(&bundle):
                      i==6?reinterpret_cast<void*>(&srv_cache):i==7?reinterpret_cast<void*>(&sampler_cache):
-                     i==12?reinterpret_cast<void*>(&draw_batch):detours[i];
+                     i==9?reinterpret_cast<void*>(&queue_prepare):i==12?reinterpret_cast<void*>(&draw_batch):detours[i];
         auto hook=safetyhook::InlineHook::create(target,detour,safetyhook::InlineHook::StartDisabled);
         if(!hook) throw std::runtime_error(std::string("SafetyHook could not hook ")+sites[i].name);
         hooks[i]=std::move(*hook);
@@ -300,7 +327,7 @@ PoolGuard::Scope::~Scope() {
 // A slice lives one frame: the segment it came from may be retired after it.
 void PoolGuard::executor_begin(bool arena) noexcept {executor=true;arena_thread=arena;slice_valid=false;slice_now=false;}
 void PoolGuard::executor_end() noexcept {
-    executor=false;arena_thread=false;in_bundle=in_batch=false;
+    executor=false;arena_thread=false;in_bundle=in_batch=in_prepare=false;
     arena_chunks.fetch_add(arena_state.chunks,std::memory_order_relaxed);
     arena_allocations.fetch_add(arena_state.allocations,std::memory_order_relaxed);
     arena_failures.fetch_add(arena_state.failures,std::memory_order_relaxed);
@@ -317,8 +344,8 @@ json PoolGuard::status() const {
     // lock_wait_ms/lock_hold_ms are the pool lock only; 0x2E50B0 reports its object locks.
     for(size_t i=1;i<hook_count;++i) {
         const auto& c=counters[i];
-        if(i!=1 && i!=12) {wait+=c.wait_ticks.load();hold+=c.hold_ticks.load();}
-        functions.push_back(entry(sites[i].name,c,i==1?"object":i==12?"array":"pool"));
+        if(i!=1 && i!=9 && i!=12) {wait+=c.wait_ticks.load();hold+=c.hold_ticks.load();}
+        functions.push_back(entry(sites[i].name,c,i==1?"object":i==9?"set":i==12?"array":"pool"));
     }
     wait+=ring_counters.wait_ticks.load();hold+=ring_counters.hold_ticks.load();
     // locked = slices carved under the pool lock, nested = uniform ranges served from slices.
