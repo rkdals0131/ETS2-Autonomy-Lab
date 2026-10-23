@@ -115,6 +115,8 @@ private:
     size_t queued_=0;
     std::unordered_map<uint64_t,uint32_t> occurrences_;
     std::vector<uintptr_t> pointers_;
+    std::vector<uint64_t> expected_;
+    std::vector<uint32_t> dispatch_;
     // Shared with status().
     std::mutex stats_mutex_;
     Counters counters_;

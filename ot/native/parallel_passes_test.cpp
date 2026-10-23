@@ -382,6 +382,12 @@ void camera_replay() {
     for(int i=0;i<6;++i) full.add_push({});
     check(full.pushes==r::PassLog::push_capacity && full.dropped==2,"pushes beyond the log capacity are counted as dropped");
 }
+void longest_first() {
+    const uint64_t expected[]={5,90,0,90,30};
+    uint32_t order[5]{};
+    ot::loop::longest_first(expected,5,order);
+    check(order[0]==1 && order[1]==3 && order[2]==4 && order[3]==0 && order[4]==2,"items go out longest first, ties in queue order");
+}
 int main() {
     splice_order();
     splice_across_chunks();
@@ -393,6 +399,7 @@ int main() {
     frame_arena();
     uniform_slice();
     camera_replay();
+    longest_first();
     alternate();
     names();
     std::printf(failures?"FAILED %d\n":"ALL PASSED\n",failures);

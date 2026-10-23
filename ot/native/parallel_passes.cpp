@@ -477,6 +477,7 @@ struct ParallelPasses::ParallelFrame {
     uint64_t frame;
     std::atomic<uint64_t> dwords{0},largest{0};
     DWORD main_thread=0;
+    const uint32_t* order=nullptr; // dispatch order (queue indices), concurrent only
 };
 void ParallelPasses::parallel_body(void* capture,void*) {
     auto& frame=*static_cast<ParallelFrame*>(capture);
@@ -484,7 +485,8 @@ void ParallelPasses::parallel_body(void* capture,void*) {
     // own arena while the main thread keeps the engine's chunk.
     const bool concurrent=frame.loop.order==loop::Order::concurrent;
     if(concurrent) PoolGuard::executor_begin(GetCurrentThreadId()!=frame.main_thread);
-    loop::run_items(frame.loop,[&](size_t i) {
+    loop::run_items(frame.loop,[&](size_t n) {
+        const size_t i=frame.order?frame.order[n]:n;
         uint64_t dwords=0,largest=0;
         ProxyPasses::pass_begin(i);
         frame.self->record(frame.self->queue_[i],dwords,largest,frame.summary_mode,frame.frame);
@@ -522,6 +524,18 @@ void ParallelPasses::join() noexcept {
         ParallelFrame frame{this,{},summary_mode_,frame_index_};
         frame.loop.count=queued_;frame.loop.order=frame_options_.order;frame.main_thread=GetCurrentThreadId();
         const auto executors=std::clamp<unsigned>(frame_options_.executors?frame_options_.executors:workers_+1,1,std::min(workers_+1,255u));
+        if(frame.loop.order==loop::Order::concurrent) {
+            expected_.resize(queued_);dispatch_.resize(queued_);
+            {
+                std::lock_guard stats(stats_mutex_);
+                for(size_t i=0;i<queued_;++i) {
+                    const auto found=keys_.find(queue_[i].key);
+                    expected_[i]=found==keys_.end() || !found->second.passes?0:found->second.ticks/found->second.passes;
+                }
+            }
+            loop::longest_first(expected_.data(),queued_,dispatch_.data());
+            frame.order=dispatch_.data();
+        }
         const bool proxy_frame=frame.loop.order==loop::Order::concurrent && proxy_.enabled();
         if(frame.loop.order==loop::Order::concurrent) PoolGuard::count_window();
         if(proxy_frame) proxy_.frame_begin(queued_,true);

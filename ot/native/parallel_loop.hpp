@@ -4,6 +4,7 @@
 // in the original order on any thread, and the alternate-mode comparator (§4.2).
 #include "pass_stream.hpp"
 #include <windows.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -67,6 +68,14 @@ struct Loop {
     SRWLOCK lock=SRWLOCK_INIT;
     std::atomic<uint64_t> wait_ticks{0},hold_ticks{0};
 };
+// Concurrent order hands items out longest first (expected = the key's mean
+// recording time so far): the join waits for the last item to finish, and the
+// main scene pass alone took 2.2 of 3.6 ms when it started in queue order
+// (2026-10-23, docs/28 §11.17). Ties keep queue order.
+inline void longest_first(const uint64_t* expected,size_t count,uint32_t* order) {
+    for(size_t i=0;i<count;++i) order[i]=static_cast<uint32_t>(i);
+    std::stable_sort(order,order+count,[&](uint32_t a,uint32_t b) {return expected[a]>expected[b];});
+}
 inline uint64_t ticks() noexcept {LARGE_INTEGER value{};QueryPerformanceCounter(&value);return static_cast<uint64_t>(value.QuadPart);}
 template<class Run> void run_items(Loop& loop,Run&& run) {
     for(size_t i;(i=loop.next.fetch_add(1))<loop.count;) {
