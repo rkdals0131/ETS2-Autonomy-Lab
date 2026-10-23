@@ -1,6 +1,7 @@
 #include "pool_guard.hpp"
 #include "frame_arena.hpp"
 #include "uniform_slice.hpp"
+#include <intrin.h>
 #include <stdexcept>
 
 namespace ot {
@@ -55,7 +56,7 @@ constexpr std::array<std::array<uint8_t,40>,3> slice_signatures={{
 constexpr uintptr_t segment_offset=0xF1490;
 constexpr uint64_t slice_bytes=0x10000;
 
-struct HookCounters {std::atomic<uint64_t> locked{0},nested{0},wait_ticks{0},hold_ticks{0};};
+struct HookCounters {std::atomic<uint64_t> locked{0},nested{0},wait_ticks{0},hold_ticks{0},shared{0};};
 std::array<HookCounters,PoolGuard::hook_count> counters;
 HookCounters ring_counters,scope_counters;
 std::array<SRWLOCK,64> object_locks{},array_locks{},set_locks{}; // zero is SRWLOCK_INIT
@@ -73,6 +74,15 @@ thread_local uniform::Segment slice{};
 thread_local bool slice_valid=false,slice_now=false;
 thread_local arena::State arena_state;
 
+// Short sections (draw_items holds ~4 us a call): spin a little before
+// sleeping, so a waiter does not pay a kernel wake for every hand-over.
+void acquire_spinning(SRWLOCK& lock) noexcept {
+    for(int i=0;i<4000;++i) {
+        if(TryAcquireSRWLockExclusive(&lock)) return;
+        _mm_pause();
+    }
+    AcquireSRWLockExclusive(&lock);
+}
 using Allocate=uintptr_t(*)(uint64_t,uint64_t);
 using ChunkGet=void*(*)(uint64_t);
 uintptr_t frame_allocate(uint64_t size,uint64_t align) {
@@ -131,8 +141,10 @@ uintptr_t bundle(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uin
 // (size [rax+0x10] dwords), carving a new slice under the pool lock when it
 // does not fit, so the engine never switches segments for an executor.
 // 0x2E6060(.., .., items, sort, first, count): one batch of a render item
-// array. Serialized per array (locks picked by its address); different arrays
-// run at the same time. Lock order: array lock, set lock (prepare), object lock
+// array. Locked per array (locks picked by its address); different arrays
+// run at the same time. Only sort == 1 writes the array (0x2E65E0 in place);
+// the rest of the batch reads it, so batches that do not sort share the lock
+// (2026-10-23, docs/28 §11.17). Lock order: array lock, set lock (prepare), object lock
 // (bundle) or material lock (draw_items), pool lock.
 uintptr_t draw_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h) {
     const auto original=reinterpret_cast<Pooled>(originals[12].load(std::memory_order_relaxed));
@@ -140,15 +152,17 @@ uintptr_t draw_batch(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e
     if(in_batch) {counters[12].nested.fetch_add(1,std::memory_order_relaxed);return original(a,b,c,d,e,f,g,h);}
     auto& lock=array_locks[((c>>4)^(c>>12))&(array_locks.size()-1)];
     auto& count=counters[12];
+    const bool sorts=static_cast<int>(d)==1;
     const auto start=qpc_now();
-    AcquireSRWLockExclusive(&lock);
+    if(sorts) AcquireSRWLockExclusive(&lock); else AcquireSRWLockShared(&lock);
     const auto entered=qpc_now();
     in_batch=true;
     const auto result=original(a,b,c,d,e,f,g,h);
     in_batch=false;
     const auto left=qpc_now();
-    ReleaseSRWLockExclusive(&lock);
+    if(sorts) ReleaseSRWLockExclusive(&lock); else ReleaseSRWLockShared(&lock);
     count.locked.fetch_add(1,std::memory_order_relaxed);
+    if(!sorts) count.shared.fetch_add(1,std::memory_order_relaxed);
     count.wait_ticks.fetch_add(entered-start,std::memory_order_relaxed);
     count.hold_ticks.fetch_add(left-entered,std::memory_order_relaxed);
     return result;
@@ -193,7 +207,7 @@ template<size_t I> uintptr_t material(uintptr_t a,uintptr_t b,uintptr_t c,uintpt
     // Under the pool lock (not seen) the order would invert: call through.
     if(depth || in_material) {count.nested.fetch_add(1,std::memory_order_relaxed);return original(a,b,c,d,e,f,g,h);}
     const auto start=qpc_now();
-    AcquireSRWLockExclusive(&material_lock);
+    acquire_spinning(material_lock);
     const auto entered=qpc_now();
     in_material=true;
     const auto result=original(a,b,c,d,e,f,g,h);
@@ -366,7 +380,7 @@ json PoolGuard::status() const {
     json functions=json::array();
     uint64_t wait=0,hold=0;
     const auto entry=[&](const char* name,const HookCounters& c,const char* lock) {
-        return json{{"name",name},{"lock",lock},{"locked",c.locked.load()},{"nested",c.nested.load()},
+        return json{{"name",name},{"lock",lock},{"locked",c.locked.load()},{"nested",c.nested.load()},{"shared",c.shared.load()},
             {"wait_ms",c.wait_ticks.load()*1000.0/freq},{"hold_ms",c.hold_ticks.load()*1000.0/freq}};
     };
     // lock_wait_ms/lock_hold_ms are the pool lock only; 0x2E50B0 and 9-12 report their own locks.
@@ -385,7 +399,7 @@ json PoolGuard::status() const {
         {"arena",{{"chunks",arena_chunks.load()},{"allocations",arena_allocations.load()},{"failures",arena_failures.load()}}}};
 }
 void PoolGuard::clear_counters() noexcept {
-    for(auto& c:counters) {c.locked=0;c.nested=0;c.wait_ticks=0;c.hold_ticks=0;}
+    for(auto& c:counters) {c.locked=0;c.nested=0;c.wait_ticks=0;c.hold_ticks=0;c.shared=0;}
     for(auto* c:{&ring_counters,&scope_counters}) {c->locked=0;c->nested=0;c->wait_ticks=0;c->hold_ticks=0;}
     arena_chunks=0;arena_allocations=0;arena_failures=0;windows=0;
 }
