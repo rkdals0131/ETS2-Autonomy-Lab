@@ -730,6 +730,11 @@ json Runtime::command(const json& request) {
         }
         return render_probe_->status();
     }
+    if(cmd=="gpu_profile") {
+        // Read-only measurement (timestamp queries), so no lease; needs the render probe's bind hook.
+        std::lock_guard lock(control_);
+        return render_probe_->gpu_profile(request);
+    }
     if(cmd=="proxy_sensor_coexistence") {
         // Hypothesis from static analysis, off by default (research/snowymoon/sensor_coexistence.md).
         // Needs render_probe observe or overlay mode; the pre-checks refuse and say why in the status.

@@ -6,6 +6,7 @@
 #include "camera_rig.hpp"
 #include "overlay_decal.hpp"
 #include "proxy_gate.hpp"
+#include "gpu_segments.hpp"
 #include <array>
 #include <safetyhook.hpp>
 
@@ -31,6 +32,8 @@ public:
     // Map the block before enable(..., overlay=true); keeps the current options.
     void overlay_mapping(OverlayBlock* block) {std::lock_guard lock(control_);overlay_block_=block;}
     json overlay_status();
+    // docs/28 §11.23: GPU time per render-target segment (start/stop/clear/status).
+    json gpu_profile(const json& request) {return gpu_segments_.control(request);}
     json overlay_capture(const json& request) {return decal_.capture(request);}
     bool overlay_enabled() const noexcept {return overlay_.load();}
     json status();
@@ -138,6 +141,7 @@ private:
     OverlayBlock* overlay_block_=nullptr;
     OverlayOptions overlay_options_;
     OverlayDecal decal_;
+    GpuSegments gpu_segments_;
     Timing overlay_timing_;
     // Render thread only; released after the hooks drained.
     template<class T> using Com=Microsoft::WRL::ComPtr<T>;

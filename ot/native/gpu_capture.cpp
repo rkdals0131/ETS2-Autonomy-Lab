@@ -423,6 +423,7 @@ void GpuCapture::append_bundle(json& views,std::vector<BundleBlob>& blobs) {
     std::lock_guard lock(mutex_);
     if(phase_!=Phase::ready) throw std::runtime_error("Camera CPU sample is not complete");
     describe_metadata();
+    metadata_["render_frame_id"]=geometry_frame_; // docs/28 §11.22: a bundle's groups capture in different frames
     views.push_back({{"camera",camera_},{"metadata",metadata_}});
     for(size_t i=0;i<images_.size();++i) if(!images_[i].pixels.empty())
         blobs.push_back({camera_,metadata_.at("images")[i].at("file").get<std::string>(),images_[i].pixels.data(),images_[i].pixels.size()});

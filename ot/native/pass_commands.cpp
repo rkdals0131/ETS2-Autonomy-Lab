@@ -383,7 +383,7 @@ std::vector<PassCommands::Block> PassCommands::blocks(uintptr_t output) {
             throw std::runtime_error("Compiled command block changed or is invalid");
     return result;
 }
-RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const std::shared_ptr<const json>& sdk,uint32_t camera_mask,bool diagnostic,bool main,bool all_sensor) {
+RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const std::shared_ptr<const json>& sdk,uint32_t camera_mask,bool diagnostic,bool main,bool all_sensor,const std::array<uint8_t,9>* slots) {
     DrawBatch draw_batch;
     {
         std::lock_guard lock(draws_mutex_);
@@ -430,10 +430,10 @@ RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const
                         else if(in_back && is(names.backbuffer_image)) kind=MainPass::blit;
                     }
                 }
-                if(labelled &&
-                   std::memcmp(prefix.data(),"mirror",6)==0 && prefix[6]>='0' && prefix[6]<='8' &&
-                   prefix[7]=='\0' && (camera_mask&(1u<<(prefix[6]-'0')))) {
-                    if(all_sensor) sensor_slot=prefix[6]-'0';
+                const unsigned view=labelled && std::memcmp(prefix.data(),"mirror",6)==0 && prefix[6]>='0' && prefix[6]<='8' && prefix[7]=='\0'?
+                    (slots?(*slots)[prefix[6]-'0']:static_cast<unsigned>(prefix[6]-'0')):9;
+                if(view<9 && (camera_mask&(1u<<view))) {
+                    if(all_sensor) sensor_slot=view;
                     // Streaming consumes the geometry and final-color targets.
                     // Lighting/blur intermediates need no JSON or command labels;
                     // their binds still end the outgoing capture normally.
@@ -446,7 +446,7 @@ RenderPassPtr PassCommands::describe(uintptr_t input,uint32_t vehicle_mask,const
                         else if(std::memcmp(name.data(),"composition_raw",sizeof("composition_raw"))==0) target=RenderTarget::color;
                     }
                     if(j<targets.size()) targets[j]=target;
-                    if(target!=RenderTarget::other) camera_slot=prefix[6]-'0';
+                    if(target!=RenderTarget::other) camera_slot=view;
                     geometry_output|=target==RenderTarget::attributes0;
                     mirror_output|=all_sensor || camera_mask==UINT32_MAX || target==RenderTarget::attributes0 || target==RenderTarget::color;
                 }
@@ -521,9 +521,9 @@ void PassCommands::retire_main(uint16_t id) {
     std::erase_if(main_spans_,[id](const MainSpan& s){return s.id==id;});
     ReleaseSRWLockExclusive(&main_lock_);
 }
-void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,uint32_t vehicle_mask,std::shared_ptr<const json> sdk,uint32_t camera_mask,bool diagnostic,bool main,bool all_sensor) noexcept {
+void PassCommands::begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,uint32_t vehicle_mask,std::shared_ptr<const json> sdk,uint32_t camera_mask,bool diagnostic,bool main,bool all_sensor,const std::array<uint8_t,9>* slots) noexcept {
     try {
-        auto pass=describe(input,vehicle_mask,sdk,camera_mask,diagnostic,main,all_sensor);
+        auto pass=describe(input,vehicle_mask,sdk,camera_mask,diagnostic,main,all_sensor,slots);
         if(!pass) {
             // Unlabelled appends cannot overlap an earlier labelled span. Pool
             // reuse does: retire the old spans at the engine's empty boundary,

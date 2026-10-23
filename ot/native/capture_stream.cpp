@@ -2,9 +2,13 @@
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
 
 namespace ot {
-namespace {constexpr uint8_t rider_products=16|32;} // GT metadata and pose
+namespace {
+constexpr uint8_t rider_products=16|32; // GT metadata and pose
+constexpr uint64_t stall_ms=1500;
+}
 CaptureStream::CaptureStream(uint32_t mask,const CaptureOptions& options,double hz,double duration,
         const std::atomic<uint64_t>& presents,uint64_t session,Transport& publisher):
     options_(options),hz_(hz),duration_(duration),presents_(presents),session_(session),publisher_(publisher),
@@ -37,27 +41,37 @@ uint32_t CaptureStream::compiling_mask(bool vehicles_only) const noexcept {
     uint32_t mask=0;
     for(const auto& slot:slots_) if(slot.active.load() && slot.selected.load())
         for(size_t i=0;i<slot.cameras.size();++i)
-            if(((vehicles_only?slot.vehicle_mask.load():slot.mask.load())&(1u<<camera_indices_[i])) && slot.cameras[i]->phase()==GpuCapture::Phase::armed)
+            if(((vehicles_only?slot.vehicle_mask.load():slot.mask.load())&slot.chosen.load()&(1u<<camera_indices_[i])) &&
+               slot.cameras[i]->phase()==GpuCapture::Phase::armed)
                 mask|=1u<<camera_indices_[i];
     return mask;
 }
+const CaptureStream::Slot* CaptureStream::oldest_unselected() const noexcept {
+    const Slot* oldest=nullptr;
+    for(const auto& slot:slots_) if(slot.active.load() && (slot.mask.load()&~slot.chosen.load()) &&
+                                    (!oldest || slot.sequence.load()<oldest->sequence.load())) oldest=&slot;
+    return oldest;
+}
+CaptureStream::Slot* CaptureStream::oldest_unselected() noexcept {
+    return const_cast<Slot*>(std::as_const(*this).oldest_unselected());
+}
 uint32_t CaptureStream::unselected_mask() const noexcept {
-    uint32_t mask=0;
-    for(const auto& slot:slots_) if(slot.active.load() && !slot.selected.load()) mask|=slot.mask.load();
-    return mask;
+    const auto* slot=oldest_unselected();
+    return slot?slot->mask.load()&~slot->chosen.load():0;
 }
 uint32_t CaptureStream::select_pending(uint32_t ready_mask) noexcept {
     if(selecting_.test_and_set()) return 0;
     struct Unlock {std::atomic_flag& flag;~Unlock(){flag.clear();}} unlock{selecting_};
-    // Only one selected bundle may still be waiting for its render commands.
+    // Only one selected group may still be waiting for its render commands.
     // GPU readback of older bundles can overlap the next submission.
     if(compiling()) return 0;
-    for(auto& slot:slots_) if(slot.active.load() && !slot.selected.load() &&
-            !(slot.mask.load()&~ready_mask) && !slot.selected.exchange(true)) {
-        ++selected_;
-        return slot.mask.load();
-    }
-    return 0;
+    auto* slot=oldest_unselected();
+    if(!slot) return 0;
+    const auto pick=slot->mask.load()&~slot->chosen.load()&ready_mask;
+    if(!pick) return 0;
+    slot->chosen.fetch_or(pick);
+    if(!slot->selected.exchange(true)) ++selected_;
+    return pick;
 }
 bool CaptureStream::pending() const noexcept {
     for(const auto& slot:slots_) if(slot.active.load()) return true;
@@ -67,7 +81,7 @@ void CaptureStream::observe(ID3D11DeviceContext* context,uint32_t count,const ui
         uint64_t sequence,uint64_t sdk_frame,uint64_t render_frame,const RenderPassPtr& pass) noexcept {
     for(auto& slot:slots_) if(slot.active.load() && slot.selected.load())
         for(size_t i=0;i<slot.cameras.size();++i)
-            if(slot.mask.load()&(1u<<camera_indices_[i]))
+            if(slot.mask.load()&slot.chosen.load()&(1u<<camera_indices_[i]))
                 slot.cameras[i]->observe(context,count,targets,sequence,sdk_frame,render_frame,session_,pass);
 }
 void CaptureStream::finish_slot(Slot& slot) {
@@ -79,19 +93,29 @@ void CaptureStream::finish_slot(Slot& slot) {
         pending|=phase==GpuCapture::Phase::armed || phase==GpuCapture::Phase::waiting_gpu;
         failed|=phase==GpuCapture::Phase::error;
     }
+    // docs/28 §11.21: sensor views ride on the engine's mirror pass, which it
+    // skips while no mirror is on screen; a request that waits for that frame
+    // would hold its slot until the 30 s capture timeout. Free it instead.
+    if(pending && GetTickCount64()-slot.armed_at.load()>stall_ms) {
+        for(auto& camera:slot.cameras) camera->cancel();
+        slot.active=false;++stalled_;
+        return;
+    }
     if(pending) return;
-    uint64_t frame=0;bool mixed_frames=false;
+    // Groups of views capture in different frames; each view's metadata
+    // names its own frame and the bundle the earliest.
+    uint64_t frame=0;bool spans=false;
     if(!failed) for(size_t i=0;i<slot.cameras.size();++i) if(slot.mask.load()&(1u<<camera_indices_[i])) {
         const auto captured=slot.cameras[i]->captured_frame();
-        if(frame && frame!=captured) mixed_frames=true;
-        frame=captured;
+        if(frame && frame!=captured) spans=true;
+        if(!frame || captured<frame) frame=captured;
     }
-    failed|=mixed_frames;
+    spanned_+=spans;
     slot.frame=frame;slot.active=false;
     if(failed) {
         ++failed_;
         for(auto& camera:slot.cameras) camera->abandon_shared();
-        std::string errors=mixed_frames?"Sensor views crossed a Present boundary":"";
+        std::string errors;
         for(auto& camera:slot.cameras) if(camera->phase()==GpuCapture::Phase::error) {
             const auto state=camera->status();
             if(!errors.empty()) errors+="; ";
@@ -174,7 +198,11 @@ void CaptureStream::run() noexcept {
                         available->mask=mask;
                         available->vehicle_mask=vehicle_mask;
                         available->diagnostic=options_.format!="ros";
-                        if(mask) {available->frame=0;available->selected=false;available->active=true;previous_frame=frame;++armed_;}
+                        if(mask) {
+                            available->frame=0;available->selected=false;available->chosen=0;available->sequence=++sequence_;
+                            available->armed_at=GetTickCount64();
+                            available->active=true;previous_frame=frame;++armed_;
+                        }
                     }
                 }
             }
@@ -202,7 +230,7 @@ json CaptureStream::status() {
         {"format",options_.format},{"color_gain",options_.color_gain},{"requested_cameras",names_},
         {"lidar_hz",options_.lidar_hz>0?std::min(options_.lidar_hz,hz_):hz_},
         {"armed",armed_.load()},{"selected",selected_.load()},{"completed",completed_.load()},{"published",published_.load()},
-        {"failed",failed_.load()},{"canceled",canceled_.load()},{"gpu_ring_busy",ring_busy_.load()},
+        {"failed",failed_.load()},{"canceled",canceled_.load()},{"gpu_ring_busy",ring_busy_.load()},{"stalled",stalled_.load()},{"spanned_frames",spanned_.load()},
         {"same_frame_skipped",same_frame_.load()},{"queue_dropped",queue_dropped_.load()},
         {"ended_qpc",ended_.load()},{"reason",reason_},{"last_error",error_},{"slots",slots}};
 }

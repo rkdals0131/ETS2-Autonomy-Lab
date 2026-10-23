@@ -22,6 +22,7 @@ struct Layout {
     static constexpr uint32_t aa_copy=0xC7382C;      // u32, copy of aa_source (0 = effects off; 1 TAA, 2 TAA Clarity, 3 DLAA, 4..6 DLSS Q/B/P, settings UI 0x25A40)
     static constexpr uint32_t frame_copy=0xC73830;   // u32, frame number of the last re-copy
     static constexpr uint32_t frame_source=0xC288D8; // u32, frame number, incremented by the frame bracket
+    static constexpr uint32_t record_frame=0xCCCCD0; // u32, frame_source when the frame's camera record was last written
     static constexpr uint32_t aa_source=0xA3D840;    // u32, configuration value (restore value, 3.3 item 2)
     static constexpr uint32_t flag_a_source=0xC7307F, flag_a=0xC7367D; // u8, copied with the re-copy
     static constexpr uint32_t flag_b_source=0xC730B6, flag_b=0xC7367E; // u8, copied with the re-copy

@@ -92,25 +92,34 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
     if(first.at("paused").get<bool>()) return {};
     const auto us=first.at("paused_simulation_time_us").get<uint64_t>();
     json cameras=json::array();std::vector<float> gains;std::vector<bool> automatic;
-    struct Transform {std::string parent,frame;V position;Q rotation;};std::vector<Transform> transforms;
-    const auto& reference=manifest.at("views").at(0);
-    const auto& pass=reference.at("metadata").at("geometry_pass");
-    const auto& camera=pass.at("camera_at_compile");
-    const auto& body=pass.at("ego_at_compile").at("pose_physics");
-    const auto reference_name=reference.at("camera").get<std::string>();
-    const auto mount=std::find_if(rig.at("views").begin(),rig.at("views").end(),[&](const auto& v){return "mirror"+std::to_string(v.at("slot").template get<int>())==reference_name;});
-    if(mount==rig.at("views").end()) throw std::runtime_error("Unconfigured render camera");
-    // Derive the moving cabin parent from the actual rendered view and its fixed
-    // mount. This includes render interpolation/suspension and excludes head pose.
-    const M cabin_rotation=mul(transpose(matrix(camera.at("camera_rotation_row_major"))),transpose(from_quat(mount->at("quaternion_wxyz").get<Q>())));
-    const V cabin_position=sub(camera.at("camera_world_xyz").get<V>(),mul(cabin_rotation,mount->at("position").get<V>()));
-    const M body_rotation=from_quat(body.at("quaternion_wxyz").get<Q>());
-    const auto ego=world_base_pose(body.at("position_m").get<V>(),body_rotation,rig.at("base_origin").get<V>());
-    const V base_world=ego.position;
-    const M world_from_base=ego.rotation;
-    // world->base_link comes from the state path (SDK rate, gt_localization_tf).
-    transforms.push_back({"base_link","cabin",mul(transpose(world_from_base),sub(mul(enu,cabin_position),base_world)),
-        quaternion(mul(mul(transpose(world_from_base),enu),mul(cabin_rotation,base_to_model)))});
+    struct Transform {std::string parent,frame;V position;Q rotation;uint64_t us;};std::vector<Transform> transforms;
+    // docs/28 §11.22: rig groups take turns on the free engine slots, so the
+    // views of one bundle can come from different frames. Each view keeps its
+    // own SDK time, and each frame publishes its own cabin transform.
+    std::vector<uint64_t> cabin_frames;
+    const auto cabin_transform=[&](const json& view) {
+        const auto& pass=view.at("metadata").at("geometry_pass");
+        const auto frame_id=pass.at("sdk_at_compile").at("frame_id").get<uint64_t>();
+        if(std::find(cabin_frames.begin(),cabin_frames.end(),frame_id)!=cabin_frames.end()) return;
+        cabin_frames.push_back(frame_id);
+        const auto& camera=pass.at("camera_at_compile");
+        const auto& body=pass.at("ego_at_compile").at("pose_physics");
+        const auto view_name=view.at("camera").get<std::string>();
+        const auto mount=std::find_if(rig.at("views").begin(),rig.at("views").end(),[&](const auto& v){return "mirror"+std::to_string(v.at("slot").template get<int>())==view_name;});
+        if(mount==rig.at("views").end()) throw std::runtime_error("Unconfigured render camera");
+        // Derive the moving cabin parent from the actual rendered view and its fixed
+        // mount. This includes render interpolation/suspension and excludes head pose.
+        const M cabin_rotation=mul(transpose(matrix(camera.at("camera_rotation_row_major"))),transpose(from_quat(mount->at("quaternion_wxyz").get<Q>())));
+        const V cabin_position=sub(camera.at("camera_world_xyz").get<V>(),mul(cabin_rotation,mount->at("position").get<V>()));
+        const M body_rotation=from_quat(body.at("quaternion_wxyz").get<Q>());
+        const auto ego=world_base_pose(body.at("position_m").get<V>(),body_rotation,rig.at("base_origin").get<V>());
+        const V base_world=ego.position;
+        const M world_from_base=ego.rotation;
+        // world->base_link comes from the state path (SDK rate, gt_localization_tf).
+        transforms.push_back({"base_link","cabin",mul(transpose(world_from_base),sub(mul(enu,cabin_position),base_world)),
+            quaternion(mul(mul(transpose(world_from_base),enu),mul(cabin_rotation,base_to_model))),
+            pass.at("sdk_at_compile").at("paused_simulation_time_us").get<uint64_t>()});
+    };
     struct RayErrors {
         std::array<double,16> projection{};std::array<double,4> viewport{};M rotation{};
         std::vector<uint32_t> pixels;std::vector<float> degrees;
@@ -127,7 +136,9 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         if(mount==rig.at("views").end()) throw std::runtime_error("Bundle camera is not in the configured rig");
         const auto name=mount->at("camera_id").get<std::string>(),base="/ets2/camera/"+name,frame=name+"_optical";
         const auto& meta=view.at("metadata");const auto& pass=meta.at("geometry_pass");const auto& camera=pass.at("camera_at_compile");
-        if(pass.at("sdk_at_compile").at("frame_id")!=first.at("frame_id")) throw std::runtime_error("Different SDK associations within one sensor bundle");
+        if(pass.at("sdk_at_compile").at("paused").get<bool>()) continue;
+        const auto view_us=pass.at("sdk_at_compile").at("paused_simulation_time_us").get<uint64_t>();
+        cabin_transform(view);
         if(camera.at("projection_modifier_flag").get<unsigned>()!=0) throw std::runtime_error("Unsupported modified camera projection");
         cameras.push_back(name);
         float gain=std::numeric_limits<float>::quiet_NaN();
@@ -148,16 +159,16 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
                     boxes.push_back({mul(optical,mul(rotation,sub(world,origin))),size,quaternion(mul(mul(optical,rotation),model)),session+":"+std::to_string(v.at("actor_address").get<uint64_t>())});
             }
             if(demand.contains(gt_topic)) append_cdr(packet,gt_topic,1024+boxes.size()*512,[&](Cdr& c){
-                header(c,us,frame);c<<uint32_t(boxes.size());
+                header(c,view_us,frame);c<<uint32_t(boxes.size());
                 for(const auto& b:boxes) {
-                    header(c,us,frame);c<<uint32_t{0}; // No invented semantic class/confidence.
+                    header(c,view_us,frame);c<<uint32_t{0}; // No invented semantic class/confidence.
                     pose(c,b.p,b.q);c.serialize_array(b.size.data(),3);c<<b.id;
                 }
             });
             if(demand.contains(marker_topic)) append_cdr(packet,marker_topic,1024+boxes.size()*512,[&](Cdr& c){
                 c<<uint32_t(boxes.size()+1);
                 auto marker=[&](int32_t id,int32_t action,const Box& b) {
-                    header(c,us,frame);c<<name<<id<<int32_t{1}<<action;pose(c,b.p,b.q);c.serialize_array(b.size.data(),3);
+                    header(c,view_us,frame);c<<name<<id<<int32_t{1}<<action;pose(c,b.p,b.q);c.serialize_array(b.size.data(),3);
                     c<<.2f<<1.f<<.3f<<.35f<<int32_t{0}<<uint32_t{300000000}<<false; // 300 ms lifetime
                     c<<uint32_t{0}<<uint32_t{0}<<std::string{}; // points, colors, texture_resource
                     header(c,0,"");c<<std::string{}<<uint32_t{0}; // empty CompressedImage texture
@@ -187,7 +198,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
             if(demand.contains(topic)) {
                 const size_t size=static_cast<size_t>(width)*height*(rgb?3:4);
                 append_cdr(packet,topic,size+512,[&](Cdr& c){
-                    header(c,us,frame);c<<height<<width<<std::string(rgb?"rgb8":"32FC1")<<uint8_t{0}<<uint32_t(width*(rgb?3:4))<<uint32_t(size);
+                    header(c,view_us,frame);c<<height<<width<<std::string(rgb?"rgb8":"32FC1")<<uint8_t{0}<<uint32_t(width*(rgb?3:4))<<uint32_t(size);
                     if(rgb) {
                         auto* rgb=c.get_current_position();
                         if(!c.jump(size)) throw std::runtime_error("Image exceeds CDR buffer");
@@ -197,16 +208,16 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
             }
             if(preview && meta.value("display_due",true) && demand.contains(base+"/preview/image/compressed")) {
                 auto bytes=jpeg(imaging,data,width,height);
-                append_cdr(packet,base+"/preview/image/compressed",bytes.size()+512,[&](Cdr& c){header(c,us,frame);c<<std::string("rgb8; jpeg compressed bgr8")<<uint32_t(bytes.size());c.serialize_array(bytes.data(),bytes.size());});
-                append_camera_info(packet,base+"/preview/camera_info",us,frame,width,height,camera.at("projection_row_major"),vp,.5);
+                append_cdr(packet,base+"/preview/image/compressed",bytes.size()+512,[&](Cdr& c){header(c,view_us,frame);c<<std::string("rgb8; jpeg compressed bgr8")<<uint32_t(bytes.size());c.serialize_array(bytes.data(),bytes.size());});
+                append_camera_info(packet,base+"/preview/camera_info",view_us,frame,width,height,camera.at("projection_row_major"),vp,.5);
             }
         }
         if(demand.contains(base+"/preview/camera_info") && !demand.contains(base+"/preview/image/compressed"))
-            append_camera_info(packet,base+"/preview/camera_info",us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5);
+            append_camera_info(packet,base+"/preview/camera_info",view_us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5);
         if(demand.contains(base+"/perception/image_raw") || demand.contains(base+"/perception/camera_info"))
-            append_camera_info(packet,base+"/perception/camera_info",us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5);
+            append_camera_info(packet,base+"/perception/camera_info",view_us,frame,width/2,height/2,camera.at("projection_row_major"),vp,.5);
         if(width && (demand.contains(base+"/camera_info") || demand.contains(base+"/image_raw") || demand.contains(base+"/depth/image_raw")))
-            append_camera_info(packet,base+"/camera_info",us,frame,width,height,camera.at("projection_row_major"),vp,1);
+            append_camera_info(packet,base+"/camera_info",view_us,frame,width,height,camera.at("projection_row_major"),vp,1);
     }
     for(auto& [name,sources]:lidars) {
         const auto topic="/ets2/lidar/"+name+"/points",preview_topic="/ets2/lidar/"+name+"/preview/points";
@@ -218,6 +229,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         const auto a=std::find_if(sources.begin(),sources.end(),[&](const auto& s){return s.camera==axis;});
         if(a==sources.end()) throw std::runtime_error("LiDAR axis camera missing");
         const auto& axis_camera=a->meta->at("geometry_pass").at("camera_at_compile");
+        const auto lidar_us=a->meta->at("geometry_pass").at("sdk_at_compile").at("paused_simulation_time_us").get<uint64_t>();
         const auto origin=axis_camera.at("camera_world_xyz").get<V>();
         for(auto& source:sources) {
             const auto& camera=source.meta->at("geometry_pass").at("camera_at_compile");
@@ -259,7 +271,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         const uint32_t stride=preview?std::min(lidar_preview_stride,columns):1;
         const uint32_t out_columns=1+(columns-1)/stride,out_count=out_columns*static_cast<uint32_t>(elevations.size()),step=preview?16:36;
         append_cdr(packet,preview?preview_topic:topic,size_t(out_count)*step+2048,[&](Cdr& c){
-        header(c,us,name);c<<uint32_t(elevations.size())<<out_columns<<uint32_t(preview?4:10);
+        header(c,lidar_us,name);c<<uint32_t(elevations.size())<<out_columns<<uint32_t(preview?4:10);
         auto field=[&](const char* label,uint32_t offset,uint8_t datatype){c<<std::string(label)<<offset<<datatype<<uint32_t{1};};
         field("x",0,7);field("y",4,7);field("z",8,7);field("range",12,7);
         if(!preview) {field("beam_index",16,6);field("status",20,2);
@@ -303,7 +315,7 @@ Packet sensor_messages(const SensorBundle& bundle,const std::string& session,con
         });
         }
     }
-    append_cdr(packet,"/tf",512+transforms.size()*256,[&](Cdr& c){c<<uint32_t(transforms.size());for(const auto& t:transforms) {header(c,us,t.parent);c<<t.frame;pose(c,t.position,t.rotation);}});
+    append_cdr(packet,"/tf",512+transforms.size()*256,[&](Cdr& c){c<<uint32_t(transforms.size());for(const auto& t:transforms) {header(c,t.us,t.parent);c<<t.frame;pose(c,t.position,t.rotation);}});
     append_cdr(packet,"/ets2/frame_info/exposure",1024,[&](Cdr& c){
         header(c,us,"world");c<<manifest.at("render_frame_id").get<uint64_t>();
         c<<uint32_t(cameras.size());for(const auto& name:cameras) c<<name.get<std::string>();

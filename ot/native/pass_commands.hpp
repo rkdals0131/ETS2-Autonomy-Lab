@@ -14,7 +14,10 @@ public:
     // (camera only; docs/24 §3). camera_mask 0 skips every mirror.
     // all_sensor: name every pass that writes a mirrorN image of camera_mask (lighting and
     // blur included) and record its slot in sensor_slot (proxy interval setting).
-    void begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,uint32_t vehicle_mask=0,std::shared_ptr<const json> sdk={},uint32_t camera_mask=UINT32_MAX,bool diagnostic=true,bool main=false,bool all_sensor=false) noexcept;
+    // slots: the rig view each engine slot (the N of mirrorN) shows in this
+    // frame, 9 for none (CameraRig::slot_map); the masks and the recorded slots
+    // are rig views. Null keeps engine slots.
+    void begin(uintptr_t frame,uintptr_t input,uintptr_t output,uint16_t id,uint32_t vehicle_mask=0,std::shared_ptr<const json> sdk={},uint32_t camera_mask=UINT32_MAX,bool diagnostic=true,bool main=false,bool all_sensor=false,const std::array<uint8_t,9>* slots=nullptr) noexcept;
     void end(uintptr_t frame) noexcept;
     RenderPassPtr lookup(uint16_t id,uintptr_t token) noexcept;
     // lookup() without the match counters, for the proxy interval gate (render thread).
@@ -37,7 +40,7 @@ private:
         RenderPassPtr pass;
     };
     static std::vector<Block> blocks(uintptr_t output);
-    RenderPassPtr describe(uintptr_t input,uint32_t vehicle_mask,const std::shared_ptr<const json>& sdk,uint32_t camera_mask,bool diagnostic,bool main,bool all_sensor);
+    RenderPassPtr describe(uintptr_t input,uint32_t vehicle_mask,const std::shared_ptr<const json>& sdk,uint32_t camera_mask,bool diagnostic,bool main,bool all_sensor,const std::array<uint8_t,9>* slots);
     void retire_main(uint16_t id);
     struct MainSpan {uint16_t id;uintptr_t begin,end;RenderPassPtr pass;};
     SRWLOCK main_lock_=SRWLOCK_INIT;

@@ -305,11 +305,13 @@ void RenderProbe::compile_begin_callback(safetyhook::Context& context) noexcept 
         if(!mask && !main) {callbacks.fetch_sub(1);return;}
         const auto start=qpc_now();
         uintptr_t input{},output{};uint16_t id{};
+        // Rig views take turns on the free engine slots (docs/28 §11.22).
+        const auto slots=self->rig_.slot_map();
         if(read_memory(context.r10,input) && read_memory(context.rsp+0x58,output) &&
            read_memory(context.rbp+0x240,id))
             self->pass_commands_.begin(context.rbp,input,output,id,
                 mask && self->vehicle_metadata_.load()?(stream && stream->running()?stream->compiling_mask(true):UINT32_MAX):0,
-                mask?self->sdk_state_.load():nullptr,mask,mask && (!stream || !stream->running() || stream->compiling_diagnostics()),main,gate_slots!=0);
+                mask?self->sdk_state_.load():nullptr,mask,mask && (!stream || !stream->running() || stream->compiling_diagnostics()),main,gate_slots!=0,&slots);
         self->compile_begin_timing_.add(qpc_now()-start);
     }
     callbacks.fetch_sub(1);
@@ -441,6 +443,14 @@ bool RenderProbe::compile_frame() const noexcept {
         stream->compiling();
 }
 void RenderProbe::observe(const safetyhook::Context& context) noexcept {
+    if(gpu_segments_.enabled()) {
+        uintptr_t immediate{},depth{};std::array<uintptr_t,8> targets{};
+        const auto count=static_cast<uint32_t>(context.rdx);
+        if(count<=targets.size() && read_memory(context.rax+0x363FCF0,immediate) && read_memory(context.rbp+0xA8,depth) &&
+           (!count || copy_memory(context.r8,targets.data(),count*sizeof(uintptr_t))))
+            gpu_segments_.bind(reinterpret_cast<ID3D11DeviceContext*>(immediate),frame_boundary_seen_.load()?presents_.load()+1:0,
+                               count,targets.data(),depth,nullptr);
+    }
     if(gate_.armed()) gate_observe(context);
     if(overlay_.load(std::memory_order_relaxed)) overlay_observe(context);
     if(overlay_only_.load(std::memory_order_relaxed)) return;

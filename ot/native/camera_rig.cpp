@@ -1,4 +1,5 @@
 #include "camera_rig.hpp"
+#include "proxy_passes.hpp"
 #include "../include/geometry.hpp"
 #include <bit>
 #include <cmath>
@@ -54,6 +55,16 @@ json CameraRig::configure(const json& request) {
     config->private_outputs=request.value("private_outputs",false);
     config->capture_warmup=request.value("capture_warmup",false);
     config->native_mirrors=request.value("native_mirrors",true);
+    // docs/28 §11.23: with snowymoon AA on, sensor views in a frame where the
+    // proxy records no frame camera cost ~0.5 s in its final pass. Its AA
+    // setting and frame counters are read only for the pinned build (proxy_gate.hpp).
+    const auto proxy=proxy::current_environment();
+    if(proxy.base && proxy.in_game_directory && proxy.sha256==proxy::Layout::sha256) {
+        config->proxy_aa=reinterpret_cast<const uint32_t*>(proxy.base+proxy::Layout::aa_copy);
+        config->proxy_frame=reinterpret_cast<const uint32_t*>(proxy.base+proxy::Layout::frame_source);
+        config->proxy_record=reinterpret_cast<const uint32_t*>(proxy.base+proxy::Layout::record_frame);
+    }
+    config->pause_without_mirrors=request.value("pause_without_mirrors",config->proxy_aa!=nullptr);
     last_render_mask_=0;
     for(const auto& item:request.at("views")) {
         const int slot=item.at("slot").get<int>();
@@ -106,49 +117,118 @@ json CameraRig::status() {
         {"private_outputs",config && config->private_outputs},{"private_ready",private_ready_.load()},
         {"capture_warmup",config && config->capture_warmup},
         {"native_mirrors",!config || config->native_mirrors},{"native_suppressed",native_suppressed_.load()},
+        {"pause_without_mirrors",config && config->pause_without_mirrors},{"mirrorless_skips",mirrorless_skips_.load()},{"recordless_skips",recordless_skips_.load()},
+        {"free_engine_slots",free_slots_.load()},{"slot_map",slot_map()},
         {"in_flight",in_flight()},{"pending_graphs",graphs_.load()},{"unavailable",unavailable_.load()},{"views",views},
         {"source","private submission copy; persistent mirror fields unchanged"}};
 }
+namespace {
+constexpr uint64_t no_views=0xFFFFFFFFFULL;
+uint64_t pack(const std::array<uint8_t,9>& map) noexcept {
+    uint64_t packed=0;
+    for(unsigned slot=0;slot<9;++slot) packed|=uint64_t(map[slot]&0xF)<<(4*slot);
+    return packed;
+}
+}
+std::array<uint8_t,9> CameraRig::slot_map() const noexcept {
+    std::array<uint8_t,9> map{};
+    for(unsigned slot=0;slot<9;++slot) map[slot]=static_cast<uint8_t>(view_of(slot));
+    return map;
+}
 void CameraRig::select(safetyhook::Context& context,uint32_t capture_mask,uint32_t warmup_mask,uint64_t present_id) noexcept {
-    if(auto config=configuration_.load()) {
-        // Native mirrors cost a full scene render each, every frame they are
-        // on screen. Clearing their bits matches the engine's own off-screen
-        // skip; their textures keep the last image.
+    auto config=configuration_.load();
+    if(!config) return;
+    if(!config->private_outputs) {
+        // Native outputs: the views are engine slots. Clearing a game mirror
+        // bit matches the engine's own off-screen skip; its texture keeps the
+        // last image.
         const auto native=uint64_t(0x1FF&~config->mask);
         if(!config->native_mirrors && (context.r12&native)) {++native_suppressed_;context.r12&=~native;}
         for(auto bits=context.r12&native;bits;bits&=bits-1) ++native_applied_[std::countr_zero(bits)];
-        // This hook runs after native camera updates. Register-only array
-        // redirection leaves the engine's owning arrays and HUD aliases intact.
-        if(config->private_outputs) {
-            if(in_flight()) {context.r12&=~uint64_t(config->mask);last_render_mask_=0;return;}
-            if(config->capture_warmup && !(capture_mask|warmup_mask)) {
-                context.r12&=~uint64_t(config->mask);last_render_mask_=0;return;
-            }
-            if(!prepare_private(context.r14,*config)) {++unavailable_;return;}
-            prepared_configuration_.store(config);
-            context.r14=reinterpret_cast<uintptr_t>(&camera_array_);
-            // After an idle interval the engine needs one complete preparation
-            // render. Only a following consecutive frame is eligible to capture.
-            capture_mask=config->capture_warmup?capture_mask|warmup_mask:config->mask;
-            selection_mask=config->mask&capture_mask;
-            last_render_frame_=present_id;last_render_mask_=selection_mask;
-            if(selection_mask) {selection_owner=this;selection_config=config;++selections_;}
-        }
-        // Unowned mirrors retain the engine's choice.
         context.r12=(context.r12&~uint64_t(config->mask))|(config->mask&capture_mask);
+        std::array<uint8_t,9> identity{};
+        for(unsigned slot=0;slot<9;++slot) identity[slot]=static_cast<uint8_t>(slot);
+        current_map_.store(pack(identity));
+        return;
     }
+    current_map_.store(no_views);
+    EngineSlots engine;
+    if(!engine_slots(context.r14,engine)) {++unavailable_;last_render_mask_=0;return;}
+    // Game mirrors keep the engine's choice; free slots render rig views only.
+    const auto free=uint64_t(engine.free);
+    free_slots_.store(engine.free);
+    const auto native=context.r12&~free;
+    context.r12&=~free;
+    if(config->pause_without_mirrors && (!config->proxy_aa || *config->proxy_aa)) {
+        if(!native) {++mirrorless_skips_;last_render_mask_=0;return;}
+        // docs/28 §11.23: with the driver's head out of the cab the proxy
+        // records no frame camera (no camera passes its |m[11]| > 2 test);
+        // frames that still carry sensor views then cost ~0.5 s in its final
+        // pass. Sensor views rest until 30 frames after the last such frame.
+        if(config->proxy_record && *config->proxy_record+1<*config->proxy_frame) recordless_at_=present_id;
+        if(present_id<recordless_at_.load()+30) {++recordless_skips_;last_render_mask_=0;return;}
+    }
+    if(!config->native_mirrors && native) {++native_suppressed_;context.r12&=~native;}
+    for(auto bits=context.r12;bits;bits&=bits-1) ++native_applied_[std::countr_zero(bits)];
+    if(!free) {++unavailable_;last_render_mask_=0;return;}
+    if(in_flight()) {last_render_mask_=0;return;}
+    // After an idle interval the engine needs one complete preparation render
+    // of a view; only a following consecutive frame is eligible to capture.
+    // A capture is the group rendered in the previous frame, on the same slots.
+    // Groups: the views in slot order, as many at a time as there are free
+    // slots. Taking turns needs the warm-up order even when it is off.
+    std::array<unsigned,9> free_list{};unsigned free_count=0;
+    for(auto bits=engine.free;bits;bits&=bits-1) free_list[free_count++]=std::countr_zero(bits);
+    const auto views=config->mask;
+    const auto capture=capture_mask&views;
+    const bool warm=config->capture_warmup || static_cast<unsigned>(std::popcount(views))>free_count;
+    const auto wanted=capture?capture:warm?warmup_mask&views:views;
+    if(!wanted) {last_render_mask_=0;return;}
+    // A stream capture or warm-up names one group (the lowest waiting); the
+    // rig without a stream renders every view, so its groups rotate.
+    uint32_t groups=0;unsigned index=0;
+    for(auto bits=views;bits;bits&=bits-1,++index) if(wanted>>std::countr_zero(bits)&1) groups|=1u<<(index/free_count);
+    unsigned group=std::countr_zero(groups);
+    if(capture_mask==UINT32_MAX) for(auto turn=present_id%std::popcount(groups);turn--;) group=std::countr_zero(groups&=groups-1);
+    std::array<uint8_t,9> map;map.fill(9);
+    uint32_t render=0,physical=0;index=0;
+    for(auto bits=views;bits;bits&=bits-1,++index) {
+        const auto view=std::countr_zero(bits);
+        if(index/free_count!=group || !(wanted>>view&1)) continue;
+        const auto slot=free_list[index%free_count];
+        map[slot]=static_cast<uint8_t>(view);render|=1u<<view;physical|=1u<<slot;
+    }
+    if(!prepare_private(engine,*config,map)) {++unavailable_;last_render_mask_=0;return;}
+    prepared_configuration_.store(config);
+    interior_=context.r14-0x13A8;
+    // Register-only array redirection leaves the engine's owning arrays and
+    // HUD aliases intact.
+    context.r14=reinterpret_cast<uintptr_t>(&camera_array_);
+    context.r12|=physical;
+    selection_mask=physical;
+    last_render_frame_=present_id;last_render_mask_=render;
+    selection_owner=this;selection_config=config;++selections_;
+    current_map_.store(pack(map));
 }
-bool CameraRig::prepare_private(uintptr_t cameras,const Configuration& config) noexcept {
-    uintptr_t controller{};Array camera_array{},drawable_array{};
+bool CameraRig::engine_slots(uintptr_t cameras,EngineSlots& slots) noexcept {
+    uintptr_t controller{};
     const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    if(!read_memory(cameras,camera_array) || camera_array.size!=9 ||
+    if(!read_memory(cameras,slots.cameras) || slots.cameras.size!=9 ||
        !read_memory(base+0x36AF7C8,controller) || !controller ||
-       !read_memory(controller+0xA8,drawable_array) || drawable_array.size!=9) return false;
-    std::array<uintptr_t,9> sources{},drawables{};
-    if(!copy_memory(camera_array.data,sources.data(),sizeof(sources)) ||
-       !copy_memory(drawable_array.data,drawables.data(),sizeof(drawables))) return false;
-    const auto original_sources=sources,original_drawables=drawables;
-    for(unsigned i=0;i<9;++i) if(config.views[i].enabled) {
+       !read_memory(controller+0xA8,slots.drawables) || slots.drawables.size!=9 ||
+       !copy_memory(slots.cameras.data,slots.camera.data(),sizeof(slots.camera)) ||
+       !copy_memory(slots.drawables.data,slots.drawable.data(),sizeof(slots.drawable))) return false;
+    // A game mirror of the current truck has a drawable (2026-10-23 Scania S:
+    // slots 0-6, six mirrors and the UI mirror).
+    slots.free=0;
+    for(unsigned slot=0;slot<9;++slot) if(!slots.drawable[slot]) slots.free|=1u<<slot;
+    return true;
+}
+bool CameraRig::prepare_private(const EngineSlots& engine,const Configuration& config,const std::array<uint8_t,9>& map) noexcept {
+    auto sources=engine.camera,drawables=engine.drawable;
+    const auto& original_sources=engine.camera;const auto& original_drawables=engine.drawable;
+    for(unsigned slot=0;slot<9;++slot) if(map[slot]<9) {
+        const unsigned i=map[slot];
         const auto source=config.views[i].source_slot;auto& view=private_views_[i];
         if(!original_sources[source] || !original_drawables[source] ||
            !copy_memory(original_sources[source],view.camera.data(),view.camera.size()) ||
@@ -165,13 +245,13 @@ bool CameraRig::prepare_private(uintptr_t cameras,const Configuration& config) n
         std::memcpy(view.drawable.data()+0x148,&invalid,2);
         std::memcpy(view.drawable.data()+0x160,&invalid,2);
         std::memcpy(view.camera.data()+0x518,&mode,4);
-        sources[i]=reinterpret_cast<uintptr_t>(view.camera.data());
-        drawables[i]=reinterpret_cast<uintptr_t>(view.drawable.data());
+        sources[slot]=reinterpret_cast<uintptr_t>(view.camera.data());
+        drawables[slot]=reinterpret_cast<uintptr_t>(view.drawable.data());
     }
     camera_pointers_=sources;drawable_pointers_=drawables;
-    camera_array_=camera_array;camera_array_.data=reinterpret_cast<uintptr_t>(camera_pointers_.data());
-    drawable_array_=drawable_array;drawable_array_.data=reinterpret_cast<uintptr_t>(drawable_pointers_.data());
-    interior_=cameras-0x13A8;private_ready_=true;
+    camera_array_=engine.cameras;camera_array_.data=reinterpret_cast<uintptr_t>(camera_pointers_.data());
+    drawable_array_=engine.drawables;drawable_array_.data=reinterpret_cast<uintptr_t>(drawable_pointers_.data());
+    private_ready_=true;
     return true;
 }
 void CameraRig::submission_drawables(safetyhook::Context& context) noexcept {
@@ -198,9 +278,12 @@ void CameraRig::graph_end() noexcept {
 }
 void CameraRig::begin(safetyhook::Context& context) noexcept {
     auto config=selection_owner==this?std::static_pointer_cast<const Configuration>(selection_config):configuration_.load();
-    const auto slot=static_cast<uint32_t>(context.rbp);
-    if(!config || slot>=9 || !config->views[slot].enabled) return;
+    // rbp is the engine slot; private views map it to the rig view.
+    const auto engine_slot=static_cast<uint32_t>(context.rbp);
+    if(!config || engine_slot>=9) return;
     if(config->private_outputs && selection_owner!=this) return;
+    const auto slot=config->private_outputs?view_of(engine_slot):engine_slot;
+    if(slot>=9 || !config->views[slot].enabled) return;
     if(submission.owner) {++unavailable_;return;}
     const auto& view=config->views[slot];V position=view.position;Q rotation=view.rotation;
     if(view.basis!=Basis::world) {
@@ -244,9 +327,11 @@ void CameraRig::dimensions(safetyhook::Context& context) noexcept {
     uintptr_t caller{};
     if(!read_memory(context.rsp,caller) ||
        caller!=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))+0x4d47d8) return;
-    const auto slot=static_cast<uint32_t>(context.rdi);
     const auto config=configuration_.load();
-    if(!config || slot>=9 || !config->views[slot].enabled) return;
+    if(!config) return;
+    const auto engine_slot=static_cast<uint32_t>(context.rdi);
+    const auto slot=config->private_outputs?view_of(engine_slot):engine_slot;
+    if(slot>=9 || !config->views[slot].enabled) return;
     const auto& size=config->views[slot].resolution;
     if(size[0]) {context.rdx=size[0];context.r8=size[1];}
 }
@@ -258,7 +343,9 @@ void CameraRig::ego_parts(safetyhook::Context& context) noexcept {
     if(!config || !config->ego_full_model) return;
     uintptr_t mask{},controller{},actor{},vehicle{};
     constexpr std::array<uint64_t,9> masks={0x400,0x800,0x1000,0x2000,0x4000,0x8000,0x10000,0x0800000000000000,0x1000000000000000};
-    uint64_t sensor_mask=0;for(unsigned i=0;i<9;++i) if(config->mask&(1u<<i)) sensor_mask|=masks[i];
+    // Model part masks are per engine slot: the free slots private views use.
+    const auto slots=config->private_outputs?free_slots_.load():config->mask;
+    uint64_t sensor_mask=0;for(unsigned i=0;i<9;++i) if(slots&(1u<<i)) sensor_mask|=masks[i];
     // A3CADE follows the cached-model "all parts" test. Limit the override to
     // the two body model calls made by the player's 646C00 submission, and to
     // camera slots owned by this rig. Other models and normal mirrors keep

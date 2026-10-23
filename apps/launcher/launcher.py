@@ -170,6 +170,7 @@ class Controller:
         self.recording = self.session_log = None
         self.readers = []
         self.desired = self.assist_started = False
+        self.passes_requested = False  # parallel_passes for the current relay (its lease release turns it off)
         # Rendered sensors the relay may run (its camera_enabled / lidar_enabled), and the last
         # try to set them: the relay's 1 Hz line reports what it applies.
         self.sensors = {"camera": False, "lidar": False}
@@ -275,6 +276,18 @@ class Controller:
         self.relay = self.spawn(command, "relay")
         self.last_relay = time.monotonic()
         self.relay_restart = False
+        self.passes_requested = False
+
+    def _parallel_passes(self):
+        """Render passes recorded on several cores (docs/28 §11.21). The core turns them off whenever a
+        relay releases its lease, so each relay turns them back on once it reports."""
+        try:
+            if not json.loads(self.config.read_text(encoding="utf-8")).get("parallel_passes", True):
+                return
+            Client(timeout=2).request("parallel_passes", mode="parallel", order="concurrent")
+            self.log("렌더 패스 동시 기록 켬")
+        except Exception as error:
+            self.log(f"렌더 패스 동시 기록을 켜지 못했습니다: {error}")
 
     def _release_drive(self, timeout=3):
         """Disarm through the GT node's stop event; kill only if it does not exit."""
@@ -499,6 +512,9 @@ class Controller:
             if not self.assist_started:
                 self.assist_started = True  # Once per start: an exited standby is not respawned.
                 self._drive_cruise()
+            if not self.passes_requested:
+                self.passes_requested = True
+                self._parallel_passes()
         else:
             if now - self.started > 35:
                 raise TimeoutError("게임 릴레이의 상태 보고가 없습니다. 게임과 relay.log를 확인해 주세요.")
