@@ -61,7 +61,7 @@ private:
         uint64_t batch_calls=0,batch_ticks=0,batch_items=0,batch_sorts=0,batch_arrays=0;
     };
     struct Counters {
-        uint64_t frames_off=0,frames_serial=0,frames_parallel=0,duplicate_frames=0,deferred=0,marker=0,overflow=0;
+        uint64_t frames_off=0,frames_serial=0,frames_parallel=0,duplicate_frames=0,long_joins=0,deferred=0,marker=0,overflow=0;
         uint64_t wait_ticks=0,hold_ticks=0,parallel_join_ticks=0,parallel_pass_ticks=0;
         uint64_t splice_used=0,splice_fallback=0,orphaned=0;
         std::array<uint64_t,4> chunks{};      // storage records at deferral: 0,1,2,3+
@@ -109,7 +109,7 @@ private:
     unsigned workers_=0;
     bool latched_=false,joining_=false;
     uint64_t latch_qpc_=0;
-    uint32_t overflow_frames_=0;
+    uint32_t overflow_frames_=0,long_frames_=0;
     std::atomic<uint64_t> watch_qpc_{0};
     // First 32 bytes of the closure functions and of our hook sites at enable.
     std::vector<std::pair<uintptr_t,std::array<uint8_t,32>>> watched_;

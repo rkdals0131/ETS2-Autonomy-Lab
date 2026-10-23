@@ -226,6 +226,10 @@ bool Runtime::shutdown() noexcept {
         channel.registration=SCS_RESULT_not_found;
     }
     if(transport_) transport_->stop();
+    // The sensor stream and overlay decal workers run inside this module; the
+    // parallel_passes drain below checks the whole module, so they stop first
+    // (2026-10-23: with the sensors on, unload retained the DLL every retry).
+    if(render_probe_) render_probe_->disable();
     if(parallel_passes_) {
         if(parallel_passes_->close()) parallel_passes_.reset();
         else {

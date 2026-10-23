@@ -28,7 +28,9 @@ constexpr std::array<uint8_t,21> join_signature={0x4C,0x89,0xBD,0x98,0x08,0x00,0
     0x48,0x89,0x85,0x90,0x08,0x00,0x00};
 constexpr std::array<uint8_t,16> allocate_prologue={0x48,0x89,0x5C,0x24,0x08,0x57,0x48,0x83,0xEC,0x20,0x48,0x8B,0xD9,0x48,0x8B,0xFA};
 constexpr std::array<std::pair<uintptr_t,uintptr_t>,3> device_slots={{{0x108,0x2B1AA0},{0x120,0x2E9050},{0x278,0x2B6B90}}};
-constexpr uint64_t join_limit_ms=50,overflow_limit_frames=100;
+// A single long join is a hitch (2026-10-23: 58.7 ms once when the sensor
+// renders started); only a run of them turns the mode off.
+constexpr uint64_t join_limit_ms=50,long_limit_frames=30,overflow_limit_frames=100;
 
 uint64_t fnv(std::string_view text,uint64_t hash=1469598103934665603ull) noexcept {
     for(const auto c:text) {hash^=static_cast<uint8_t>(c);hash*=1099511628211ull;}
@@ -591,10 +593,13 @@ void ParallelPasses::join() noexcept {
         counters_.frame_dwords+=frame_dwords;counters_.frame_ticks+=ticks;counters_.largest_ticks+=largest;++counters_.frames_measured;
         suspect=alternate_.suspect();
         overflow_frames_=overflowed?overflow_frames_+1:0;
-        too_long=ticks>ms_ticks(join_limit_ms);
+        const bool long_join=ticks>ms_ticks(join_limit_ms);
+        counters_.long_joins+=long_join;
+        long_frames_=long_join?long_frames_+1:0;
+        too_long=long_frames_>=long_limit_frames;
         overflow_off=overflow_frames_>=overflow_limit_frames;
     }
-    if(too_long) turn_off("join exceeded 50 ms");
+    if(too_long) {long_frames_=0;turn_off("join exceeded 50 ms for 30 frames in a row");}
     if(suspect && !options_.report_only) turn_off("alternate: parallel frames differ from serial frames more than serial frames from each other");
     if(overflow_off) turn_off("deferral queue overflowed for 100 frames");
 }
@@ -604,7 +609,7 @@ json ParallelPasses::status() {
         {"game_folder_dxgi",game_folder_dxgi()},{"qpc_frequency",qpc_frequency()},{"non_main_calls",non_main_calls.load()}};
     std::lock_guard stats(stats_mutex_);
     const auto& c=counters_;
-    result["frames"]={{"off",c.frames_off},{"serial",c.frames_serial},{"parallel",c.frames_parallel},{"duplicate_pointer_frames",c.duplicate_frames}};
+    result["frames"]={{"off",c.frames_off},{"serial",c.frames_serial},{"parallel",c.frames_parallel},{"duplicate_pointer_frames",c.duplicate_frames},{"long_joins",c.long_joins}};
     const auto freq=static_cast<double>(qpc_frequency());
     json threads=json::object();
     for(const auto& [thread,count]:thread_passes_) threads[std::to_string(thread)]=count;
