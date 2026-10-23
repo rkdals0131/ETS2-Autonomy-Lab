@@ -89,6 +89,7 @@ private:
     std::array<std::atomic<uint64_t>,9> native_applied_{};
     std::atomic<uint64_t> native_suppressed_{0},mirrorless_skips_{0},recordless_skips_{0};
     std::atomic<uint64_t> recordless_at_{0}; // present id of the last frame without a proxy camera record
+    uint32_t seen_record_=0,seen_frame_=0;   // proxy counters at the previous selection (main thread)
     std::atomic<uint64_t> unavailable_{0};
     std::atomic<uint64_t> ego_parts_applied_{0};
 };

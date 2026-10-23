@@ -165,7 +165,15 @@ void CameraRig::select(safetyhook::Context& context,uint32_t capture_mask,uint32
         // records no frame camera (no camera passes its |m[11]| > 2 test);
         // frames that still carry sensor views then cost ~0.5 s in its final
         // pass. Sensor views rest until 30 frames after the last such frame.
-        if(config->proxy_record && *config->proxy_record+1<*config->proxy_frame) recordless_at_=present_id;
+        // The proxy's frame number moves at Present on the render thread, so
+        // compare with the previous selection: the frame moved on and the
+        // record did not (2026-10-24: comparing the two values directly
+        // misread most driving frames as record-less).
+        if(config->proxy_record) {
+            const auto record=*config->proxy_record,frame=*config->proxy_frame;
+            if(record==seen_record_ && frame!=seen_frame_) recordless_at_=present_id;
+            seen_record_=record;seen_frame_=frame;
+        }
         if(present_id<recordless_at_.load()+30) {++recordless_skips_;last_render_mask_=0;return;}
     }
     if(!config->native_mirrors && native) {++native_suppressed_;context.r12&=~native;}
