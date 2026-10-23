@@ -26,35 +26,48 @@ bool decode(const PxPose& p,Quat& q,Vec& position) {
 }
 }
 
-json read_world_traffic(const json& schema) {
+void capture_world_traffic(const json& schema,TrafficCapture& capture) {
     struct Array {uintptr_t vtable,data;uint64_t size,capacity;};
     const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     const auto& layout=schema.at("render_vehicle");const auto& physics=schema.at("traffic_physics");
-    json result={{"available",false},{"phase","sdk_frame_end"},{"vehicles",json::array()}};
+    capture.vehicles.clear();capture.error.clear();capture.captured=true;
     uintptr_t manager{};
     if(!read_memory(base+layout.at("traffic_pointer_rva").get<uintptr_t>(),manager) || !manager) {
-        result["error"]="Traffic manager unavailable";return result;
+        capture.error="Traffic manager unavailable";return;
     }
-    std::set<uintptr_t> actors;
+    std::vector<uintptr_t> actors;
     for(const auto* name:{"spawned_array_1_offset","spawned_array_2_offset"}) {
         Array list{};
         if(!read_memory(manager+layout.at(name).get<uintptr_t>(),list) || list.size>list.capacity || list.size>4096 || (list.size && !list.data)) {
-            result["error"]="Traffic actor array unavailable";return result;
+            capture.error="Traffic actor array unavailable";return;
         }
         for(uint64_t i=0;i<list.size;++i) {
             uintptr_t actor{};
-            if(!read_memory(list.data+i*16,actor)) {result["error"]="Traffic actor entry unavailable";return result;}
-            if(actor) actors.insert(actor);
+            if(!read_memory(list.data+i*16,actor)) {capture.error="Traffic actor entry unavailable";return;}
+            if(actor) actors.push_back(actor);
         }
     }
+    std::sort(actors.begin(),actors.end());
+    actors.erase(std::unique(actors.begin(),actors.end()),actors.end());
+    const auto placement_offset=layout.at("actor_placement_offset").get<uintptr_t>(),aabb_offset=layout.at("actor_aabb_offset").get<uintptr_t>();
+    const auto physics_offset=physics.at("actor_physics_offset").get<uintptr_t>(),speed_offset=physics.at("speed_offset").get<uintptr_t>();
+    capture.vehicles.reserve(actors.size());
     for(const auto actor:actors) {
         Placement p{};std::array<float,6> bounds{};uintptr_t body{};float speed{};
-        if(!read_memory(actor+layout.at("actor_placement_offset").get<uintptr_t>(),p) ||
-           !read_memory(actor+layout.at("actor_aabb_offset").get<uintptr_t>(),bounds) ||
-           !read_memory(actor+physics.at("actor_physics_offset").get<uintptr_t>(),body) || !body ||
-           !read_memory(body+physics.at("speed_offset").get<uintptr_t>(),speed)) {
-            result["error"]="Traffic actor changed during observation";return result;
+        if(!read_memory(actor+placement_offset,p) || !read_memory(actor+aabb_offset,bounds) ||
+           !read_memory(actor+physics_offset,body) || !body || !read_memory(body+speed_offset,speed)) {
+            capture.error="Traffic actor changed during observation";return;
         }
+        TrafficCapture::Vehicle v{actor,p.x,p.y,p.z,p.cx,p.cz,p.w,p.qx,p.qy,p.qz,{},speed};
+        std::copy(bounds.begin(),bounds.end(),v.bounds);
+        capture.vehicles.push_back(v);
+    }
+}
+json traffic_json(const TrafficCapture& capture) {
+    json result={{"available",false},{"phase","sdk_frame_end"},{"vehicles",json::array()}};
+    for(const auto& vehicle:capture.vehicles) {
+        const Placement p{vehicle.x,vehicle.y,vehicle.z,vehicle.cx,vehicle.cz,vehicle.w,vehicle.qx,vehicle.qy,vehicle.qz};
+        const auto& bounds=vehicle.bounds;const auto actor=vehicle.id;const auto speed=vehicle.speed;
         Quat q{p.w,p.qx,p.qy,p.qz};double norm=0;
         for(auto v:q) {if(!std::isfinite(v)) {result["error"]="Invalid traffic pose";return result;}norm+=v*v;}
         for(auto v:bounds) if(!std::isfinite(v)) {result["error"]="Invalid traffic bounds";return result;}
@@ -70,7 +83,13 @@ json read_world_traffic(const json& schema) {
             {"speed_mps",speed},{"length_m",bounds[5]-bounds[2]},{"width_m",bounds[3]-bounds[0]},
             {"z",position[1]+center[1]},{"height_m",bounds[4]-bounds[1]}});
     }
+    if(!capture.error.empty()) {result["error"]=capture.error;return result;}
     result["available"]=true;return result;
+}
+json read_world_traffic(const json& schema) {
+    TrafficCapture capture;
+    capture_world_traffic(schema,capture);
+    return traffic_json(capture);
 }
 
 // Driveline and brake values a truck's CAN bus carries (J1939 EEC1 engine speed and actual

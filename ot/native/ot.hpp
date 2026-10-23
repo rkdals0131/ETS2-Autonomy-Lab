@@ -38,6 +38,16 @@ bool copy_memory(uintptr_t address, void* data, size_t size) noexcept;
 json read_vehicle_physics(uintptr_t actor, const json& schema);
 json read_vehicle_drivetrain(uintptr_t actor, const json& schema, uint32_t wheels, uint32_t trailer_wheels);
 json read_world_traffic(const json& schema);
+// read_world_traffic in two halves: the main thread copies the actors' memory
+// (cheap) and another thread builds the JSON (most of the cost, docs/28 §11.20).
+struct TrafficCapture {
+    struct Vehicle {uintptr_t id;float x,y,z;int16_t cx,cz;float w,qx,qy,qz;float bounds[6];float speed;};
+    std::vector<Vehicle> vehicles;
+    std::string error;  // a read failed after the vehicles before it
+    bool captured=false;
+};
+void capture_world_traffic(const json& schema,TrafficCapture& capture);
+json traffic_json(const TrafficCapture& capture);
 template<class T> bool read_memory(uintptr_t address, T& value) noexcept {
     return address && copy_memory(address, &value, sizeof(value));
 }

@@ -20,10 +20,11 @@ public:
     // On failure the caller must retain this object and its module reference.
     // Code may still be returning through the hook; destruction would be unsafe.
     bool close() noexcept;
-    void sdk_frame(std::shared_ptr<const json> state) noexcept {
+    // Returns the state it replaces, so the caller can free it off this thread.
+    std::shared_ptr<const json> sdk_frame(std::shared_ptr<const json> state) noexcept {
         sdk_frame_.store(state->at("frame_id").get<uint64_t>());
         sdk_time_us_.store(state->at("paused_simulation_time_us").get<uint64_t>(),std::memory_order_relaxed);
-        sdk_state_.store(std::move(state));
+        return sdk_state_.exchange(std::move(state));
     }
     // HUD decal (docs/24): the block must stay mapped while the probe exists.
     json overlay(bool enabled,OverlayBlock* block,const OverlayOptions& options);

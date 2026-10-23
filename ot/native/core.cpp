@@ -11,6 +11,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <cstring>
+#include <condition_variable>
 #include <deque>
 #include <map>
 #include <cmath>
@@ -119,11 +120,29 @@ public:
         }
         json snapshot() const {return {{"samples",count.load()},{"total_ticks",total.load()},{"max_ticks",maximum.load()}};}
     };
-    CallbackTiming channel_timing_,frame_start_timing_,frame_end_timing_,other_event_timing_;
+    CallbackTiming channel_timing_,frame_start_timing_,frame_end_timing_,other_event_timing_,publish_timing_;
     std::atomic<DWORD> main_thread_{0}; // The game thread that runs SDK frames, render and present.
 private:
-    json engine_snapshot();
+    json engine_snapshot(TrafficCapture* traffic);
     json snapshot() const;
+    // docs/28 §11.20: the SDK frame end runs on the game's main thread, so the
+    // traffic JSON, the ring text and freeing the last state happen here.
+    struct Published {
+        std::shared_ptr<const json> state,retired;
+        std::unique_ptr<TrafficCapture> traffic;
+        uint64_t frame=0;
+    };
+    void publish_start();
+    void publish_stop() noexcept;
+    void publish_run() noexcept;
+    void publish(Published item) noexcept;
+    std::thread publisher_;
+    std::mutex publish_mutex_;
+    std::condition_variable publish_ready_;
+    std::deque<Published> publish_queue_;
+    bool publish_stopping_=false;
+    std::atomic<bool> publish_running_{false};
+    std::atomic<uint64_t> publish_dropped_{0};
     scs_telemetry_init_params_v100_t api_;
     json schema_,config_=json::object(),values_=json::object(),registration_=json::object();
     std::atomic<std::shared_ptr<const json>> truck_config_;
@@ -191,6 +210,7 @@ void Runtime::initialize() {
     }
     transport_=std::make_unique<Transport>([this](const json& r){return command(r);},[this]{panic();},key,L"\\\\.\\pipe\\ot",[this]{poll_lease();});
     transport_->start(config_.value("publish_shared_state",true));
+    publish_start();
     log("ot_core initialized: SDK callbacks registered, pipe ready, tier="+std::to_string(tier_.load()));
     if(api_.common.log) api_.common.log(SCS_LOG_TYPE_message,"[ot_core] SDK plugin ready; local pipe \\\\.\\pipe\\ot");
 }
@@ -225,6 +245,8 @@ bool Runtime::shutdown() noexcept {
         if(channel.registration==SCS_RESULT_ok) api_.unregister_from_channel(channel.name.c_str(),channel.index,channel.type);
         channel.registration=SCS_RESULT_not_found;
     }
+    // No SDK event can queue a frame any more; the publisher writes to the transport ring.
+    publish_stop();
     if(transport_) transport_->stop();
     // The sensor stream and overlay decal workers run inside this module; the
     // parallel_passes drain below checks the whole module, so they stop first
@@ -343,12 +365,17 @@ void Runtime::event(scs_event_t event,const void* data) {
             {"render_time_us",clock_.render_time},{"simulation_time_us",clock_.simulation_time},
             {"paused_simulation_time_us",clock_.paused_simulation_time},{"timer_flags",clock_.flags},
             {"tier",tier_.load()},{"sdk",values_},{"drive",current_drive()}};
-        if(tier_>=1 && !paused_) state["engine"]=engine_snapshot();
+        Published item;item.frame=frame_;
+        if(tier_>=1 && !paused_) {
+            if(observe_traffic_) item.traffic=std::make_unique<TrafficCapture>();
+            state["engine"]=engine_snapshot(item.traffic.get());
+        }
         if(tier_==0) state.erase("engine");
-        auto stored=std::make_shared<const json>(std::move(state));
-        latest_.store(stored);
-        if(render_probe_) render_probe_->sdk_frame(stored);
-        if(transport_) transport_->publish(stored->dump(),frame_);
+        // The render probe needs this state before the frame's passes compile
+        // (sensor metadata: timing, SDK values, ego pose); traffic is not part of it.
+        item.state=std::make_shared<const json>(std::move(state));
+        if(render_probe_) item.retired=render_probe_->sdk_frame(item.state);
+        publish(std::move(item));
     }
     // SDK events run on the game's main thread, which also records render passes.
     if(parallel_passes_) parallel_passes_->sdk_frame(GetCurrentThreadId(),paused_);
@@ -383,7 +410,7 @@ void Runtime::read_accepted_patches(const json& settings) {
         accepted_text_patches_.push_back({static_cast<uintptr_t>(value),item.value("size",size_t(1))});
     }
 }
-json Runtime::engine_snapshot() {
+json Runtime::engine_snapshot(TrafficCapture* traffic) {
     const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     uintptr_t controller{},actor{},interior{};
     if(!read_memory(base+schema_.at("controller_pointer_rva").get<uintptr_t>(),controller) || !controller ||
@@ -392,7 +419,7 @@ json Runtime::engine_snapshot() {
     json engine={{"available",true},{"phase","sdk_frame_end_before_render_preparation"},
         {"vehicle",read_vehicle_physics(actor,schema_)},{"drivetrain",read_vehicle_drivetrain(actor,schema_,wheel_count_,trailer_wheel_count_)},
         {"mirrors",json::array()}};
-    if(observe_traffic_) engine["traffic"]=read_world_traffic(schema_);
+    if(traffic) capture_world_traffic(schema_,*traffic);
     ArrayHeader array{};
     if(!read_memory(actor+schema_.at("interior_offset").get<uintptr_t>(),interior) || !interior ||
        !read_memory(interior+schema_.at("mirror_array_offset").get<uintptr_t>(),array) ||
@@ -416,6 +443,58 @@ json Runtime::engine_snapshot() {
     }
     engine["mirrors"]=std::move(mirrors);
     return engine;
+}
+void Runtime::publish_start() {
+    publish_stopping_=false;
+    publisher_=std::thread([this]{publish_run();});
+    publish_running_.store(true);
+}
+void Runtime::publish_stop() noexcept {
+    if(!publish_running_.exchange(false)) return;
+    {std::lock_guard lock(publish_mutex_);publish_stopping_=true;}
+    publish_ready_.notify_one();
+    if(publisher_.joinable()) publisher_.join();
+}
+void Runtime::publish(Published item) noexcept {
+    try {
+        Published dropped;
+        {
+            std::lock_guard lock(publish_mutex_);
+            if(!publish_running_.load() || publish_stopping_) return;
+            // The publisher takes ~1.5 ms a frame; a backlog means it is starved, not slow.
+            if(publish_queue_.size()>=8) {dropped=std::move(publish_queue_.front());publish_queue_.pop_front();++publish_dropped_;}
+            publish_queue_.push_back(std::move(item));
+        }
+        publish_ready_.notify_one();
+    } catch(...) {}
+}
+void Runtime::publish_run() noexcept {
+    for(;;) {
+        Published item;
+        {
+            std::unique_lock lock(publish_mutex_);
+            publish_ready_.wait(lock,[&]{return publish_stopping_ || !publish_queue_.empty();});
+            if(publish_stopping_) {
+                auto rest=std::move(publish_queue_);publish_queue_.clear();
+                lock.unlock();
+                return;
+            }
+            item=std::move(publish_queue_.front());publish_queue_.pop_front();
+        }
+        const auto start=qpc_now();
+        try {
+            auto state=item.state;
+            if(item.traffic && item.traffic->captured) {
+                auto full=std::make_shared<json>(*state);
+                (*full)["engine"]["traffic"]=traffic_json(*item.traffic);
+                state=std::move(full);
+            }
+            auto previous=latest_.exchange(state);
+            if(transport_) transport_->publish(state->dump(),item.frame);
+        } catch(const std::exception& e) {log(std::string("SDK state publish failed: ")+e.what());}
+        catch(...) {}
+        publish_timing_.add(qpc_now()-start);
+    }
 }
 json Runtime::snapshot() const {
     auto state=latest_.load();
@@ -565,7 +644,8 @@ json Runtime::command(const json& request) {
         return sampler_.status();
     }
     if(cmd=="sdk_timing") return {{"qpc_frequency",qpc_frequency()},{"channel",channel_timing_.snapshot()},
-        {"frame_start",frame_start_timing_.snapshot()},{"frame_end",frame_end_timing_.snapshot()},{"other_events",other_event_timing_.snapshot()}};
+        {"frame_start",frame_start_timing_.snapshot()},{"frame_end",frame_end_timing_.snapshot()},{"other_events",other_event_timing_.snapshot()},
+        {"publish",publish_timing_.snapshot()},{"publish_dropped",publish_dropped_.load()}};
     if(cmd=="frames") return render_probe_->frames(request.value("after_id",uint64_t(0)));
     if(cmd=="camera_rig") {
         std::lock_guard lock(control_);
